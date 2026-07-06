@@ -14,23 +14,58 @@ const newBtn     = document.getElementById('new-session');
 const layoutBtn  = document.getElementById('layout-toggle');
 const cmdBtn     = document.getElementById('cmd-menu-btn');
 const cmdMenu    = document.getElementById('cmd-menu');
-const statusbarEl = document.getElementById('statusbar');
 
-// Quick commands sent into the ACTIVE session on click. Flags (all optional):
+// Built-in commands sent into the ACTIVE session on click, grouped by purpose.
+// Item flags (all optional):
 //   confirm — show a modal first (destructive commands like /clear)
 //   arg     — command needs an argument: we type "cmd " (no Enter) and focus the
 //             terminal so you finish typing it yourself (keeps Claude's own
 //             argument autocomplete). Without arg, we send "cmd\r" to run now.
-// Extend freely.
-const QUICK_COMMANDS = [
-  { name: '/compact', hint: 'сжать историю' },
-  { name: '/clear', hint: 'очистить контекст', confirm: 'Очистить весь контекст активного агента? История разговора будет стёрта безвозвратно.' },
-  { name: '/context', hint: 'показать контекст' },
-  { name: '/cost', hint: 'расход токенов' },
-  { name: '/model', hint: 'сменить модель' },
-  { name: '/resume', hint: 'вернуться к диалогу' },
-  { name: '/groom', hint: 'дописать номер задачи', arg: true },
+// Project/global custom commands are auto-discovered separately (see openCmdMenu).
+const BUILTIN_GROUPS = [
+  {
+    title: 'контекст',
+    items: [
+      { name: '/compact', hint: 'сжать историю' },
+      { name: '/context', hint: 'показать контекст' },
+      { name: '/clear', hint: 'очистить контекст', confirm: 'Очистить весь контекст активного агента? История разговора будет стёрта безвозвратно.' },
+    ],
+  },
+  {
+    title: 'расход',
+    items: [
+      { name: '/cost', hint: 'расход токенов' },
+      { name: '/usage', hint: 'лимиты плана' },
+    ],
+  },
+  {
+    title: 'сессия',
+    items: [
+      { name: '/model', hint: 'сменить модель' },
+      { name: '/resume', hint: 'вернуться к диалогу' },
+    ],
+  },
 ];
+
+// Inline Lucide icons (MIT) — no dependency/bundler needed. currentColor-styled.
+const SVG = (body) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+const ICONS = {
+  plus: SVG('<path d="M5 12h14"/><path d="M12 5v14"/>'),
+  folderPlus: SVG('<path d="M12 10v6"/><path d="M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>'),
+  command: SVG('<path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/>'),
+  bell: SVG('<path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/>'),
+  bellOff: SVG('<path d="M8.7 3A6 6 0 0 1 18 8c0 2.1.4 3.8 1 5"/><path d="M20.7 17H4a1 1 0 0 1-.74-1.673C4.59 13.956 6 12.499 6 8a6.03 6.03 0 0 1 .2-1.5"/><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="m2 2 20 20"/>'),
+  layout: SVG('<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>'),
+  folder: SVG('<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>'),
+  chevron: SVG('<path d="m6 9 6 6 6-6"/>'),
+};
+
+// Put an icon + a folder name into an element (name via text node, never markup).
+function setFolderLabel(el, name) {
+  el.innerHTML = ICONS.folder;
+  el.appendChild(document.createTextNode(' ' + name));
+}
 
 /** id -> { term, fit, holder, tab, alive, status, idleTimer } */
 const sessions = new Map();
@@ -38,6 +73,11 @@ let activeId = null;
 let renaming = false;       // true while a card title is being edited (don't steal focus)
 let notifyEnabled = true;   // system notifications when a background agent needs attention
 let lastFolder = null;      // last folder picked, so the dialog reopens there
+const collapsedFolders = new Set(); // folders whose group is collapsed in the sidebar
+const folderOrder = [];             // cwd keys in display order (folders + loners)
+const withinOrder = new Map();      // cwd -> [session id, …] in display order
+let drag = null;                    // active drag: { kind: 'card'|'unit', id?, cwd }
+let dropped = false;                // whether the current drag committed a drop
 
 // --- status ------------------------------------------------------------------
 // Status is inferred from the pty stream in main.js (see the detector there)
@@ -50,6 +90,7 @@ function setStatus(id, status, detail) {
     s.status = status;
     s.tab.classList.remove('status-ready', 'status-running', 'status-waiting', 'status-dead');
     s.tab.classList.add('status-' + status);
+    if (s.sumDot) s.sumDot.className = 'sum-dot status-' + status; // collapsed-group dot
   }
   if (detail != null) {
     const sub = s.tab.querySelector('.sub');
@@ -69,15 +110,22 @@ window.swarm.onStatus(({ id, status, detail, statusline }) => {
   if (!s || !s.alive) return;
   const prev = s.status;
   setStatus(id, status, detail);
-  if (statusline != null) s.statusline = statusline;
-  if (id === activeId) renderStatusbar();
+  if (statusline != null) { s.statusline = statusline; updateCtx(s); }
   maybeNotify(id, prev, status);
 });
 
-// Bottom bar shows the ACTIVE session's Claude statusline (model · dir · ctx · task).
-function renderStatusbar() {
-  const s = sessions.get(activeId);
-  statusbarEl.textContent = s && s.statusline ? s.statusline : '';
+// Show the session's context fill on its card, parsed from the Claude statusline
+// (which contains "… ████░░ 65% …"). Colored green/amber/red by how full it is.
+function updateCtx(s) {
+  const ctx = s.tab.querySelector('.ctx');
+  const m = (s.statusline || '').match(/(\d+)\s*%/);
+  if (!m) { ctx.hidden = true; return; }
+  const pct = Math.max(0, Math.min(100, parseInt(m[1], 10)));
+  ctx.hidden = false;
+  ctx.querySelector('.ctx-fill').style.width = pct + '%';
+  ctx.querySelector('.ctx-num').textContent = pct + '%';
+  ctx.classList.remove('ctx-lo', 'ctx-mid', 'ctx-hi');
+  ctx.classList.add(pct < 50 ? 'ctx-lo' : pct < 80 ? 'ctx-mid' : 'ctx-hi');
 }
 
 window.swarm.onExit(({ id }) => {
@@ -126,8 +174,14 @@ async function createSession(opts = {}) {
     cwd,
   });
 
-  // Wire keystrokes -> pty.
-  term.onData((data) => window.swarm.sendInput(id, data));
+  // Wire keystrokes -> pty. Strip focus in/out reports (CSI I / CSI O): with
+  // focus-reporting on, every focus change (clicking the terminal or a tab) makes
+  // Claude repaint, and that burst was being read as "работает" for a moment. A
+  // multi-tab pulpit doesn't need Claude to track terminal focus.
+  term.onData((data) => {
+    const clean = data.replace(/\x1b\[[IO]/g, '');
+    if (clean) window.swarm.sendInput(id, clean);
+  });
 
   // Wire terminal resize -> pty resize.
   term.onResize(({ cols, rows }) => window.swarm.resize(id, cols, rows));
@@ -139,22 +193,39 @@ async function createSession(opts = {}) {
     <span class="dot"></span>
     <span class="body">
       <span class="label"></span>
-      <span class="folder"></span>
+      <span class="ctx" hidden>
+        <span class="ctx-track"><span class="ctx-fill"></span></span>
+        <span class="ctx-num"></span>
+      </span>
       <span class="sub">готов</span>
     </span>
     <span class="close" title="Close">×</span>
   `;
-  // Default name = folder basename (de-duplicated). textContent, never innerHTML.
+  // Name: restored name if given, else folder basename (de-duplicated).
   const folderName = resolvedCwd ? basename(resolvedCwd) : 'claude';
-  tab.querySelector('.label').textContent = defaultName(folderName);
+  tab.querySelector('.label').textContent = opts.name || defaultName(folderName);
   tab.addEventListener('click', (e) => {
-    if (e.target.classList.contains('close')) { closeSession(id); return; }
+    if (e.target.classList.contains('close')) { requestCloseSession(id); return; }
     activate(id);
+  });
+  tab.dataset.sid = id;
+  tab.draggable = true;
+  tab.addEventListener('dragstart', (e) => {
+    const cwd = sessions.get(id)?.cwd || '';
+    // A card in a multi-tab group reorders within the folder; a loner is itself a
+    // top-level unit (reorders among folders/loners, never into a folder).
+    const inGroup = (withinOrder.get(cwd) || []).length > 1;
+    startDrag(e, inGroup ? { kind: 'card', id, cwd } : { kind: 'unit', cwd });
   });
   attachRename(tab.querySelector('.label'));
 
-  sessions.set(id, { term, fit, holder, tab, alive: true, status: null, cwd: resolvedCwd });
+  sessions.set(id, { term, fit, holder, tab, alive: true, status: null, cwd: resolvedCwd, id, sumDot: null });
+  const okey = resolvedCwd || '';
+  if (!folderOrder.includes(okey)) folderOrder.push(okey);
+  if (!withinOrder.has(okey)) withinOrder.set(okey, []);
+  if (!withinOrder.get(okey).includes(id)) withinOrder.get(okey).push(id);
   relayoutTabs();
+  persistTabs();
   setStatus(id, 'ready', 'готов');
   activate(id);
 }
@@ -189,7 +260,6 @@ function activate(id) {
   s.holder.classList.add('active');
   s.tab.classList.add('active');
   activeId = id;
-  renderStatusbar();
   // Refit now that the holder is visible (fit on a hidden element is a no-op).
   requestAnimationFrame(() => { s.fit.fit(); if (!renaming) s.term.focus(); });
 }
@@ -202,12 +272,53 @@ function closeSession(id) {
   s.holder.remove();
   s.tab.remove();
   sessions.delete(id);
+  const key = s.cwd || '';
+  const arr = withinOrder.get(key);
+  if (arr) {
+    const i = arr.indexOf(id);
+    if (i >= 0) arr.splice(i, 1);
+    if (!arr.length) {
+      withinOrder.delete(key);
+      const fi = folderOrder.indexOf(key);
+      if (fi >= 0) folderOrder.splice(fi, 1);
+    }
+  }
   relayoutTabs();
+  persistTabs();
   if (activeId === id) {
     const next = sessions.keys().next();
     if (!next.done) { activate(next.value); }
-    else { activeId = null; renderStatusbar(); }
+    else { activeId = null; }
   }
+}
+
+// Ask before closing — the × is easy to hit by accident.
+async function requestCloseSession(id) {
+  const s = sessions.get(id);
+  if (!s) return;
+  const name = s.tab.querySelector('.label').textContent;
+  if (await confirmModal(`Закрыть «${name}»? Сессия агента завершится.`, 'Закрыть')) closeSession(id);
+}
+
+// Save the open tabs (folder + name) so they can be restored next launch.
+// Session content isn't persisted — each restored tab spawns a fresh claude.
+function persistTabs() {
+  const out = [];
+  for (const u of orderedUnits()) {
+    for (const s of u.list) out.push({ cwd: s.cwd || null, name: s.tab.querySelector('.label').textContent });
+  }
+  localStorage.setItem('swarm.tabs', JSON.stringify(out));
+}
+
+// Sessions in display order, grouped into units (a folder or a loner) by cwd.
+function orderedUnits() {
+  const units = [];
+  for (const cwd of folderOrder) {
+    const list = (withinOrder.get(cwd) || []).filter((id) => sessions.has(id)).map((id) => sessions.get(id));
+    if (list.length) units.push({ cwd, list });
+  }
+
+  return units;
 }
 
 // A default name for a new session: the folder basename, de-duplicated.
@@ -225,35 +336,125 @@ function defaultName(folderName) {
 // session shows the folder on the card; 2+ get boxed under a folder header.
 // Existing tab elements are re-appended (listeners preserved).
 function relayoutTabs() {
-  const groups = new Map(); // cwd -> [session, …], first-seen order
-  for (const s of sessions.values()) {
-    const key = s.cwd || '';
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(s);
-  }
+  for (const s of sessions.values()) s.sumDot = null; // reset; reassigned for collapsed groups
   tabsEl.innerHTML = '';
-  for (const [cwd, list] of groups) {
-    const folderName = cwd ? basename(cwd) : '';
-    if (list.length === 1) {
-      list[0].tab.querySelector('.folder').textContent = folderName; // shown on the lone card
-      tabsEl.appendChild(list[0].tab);
-    } else {
-      const grp = document.createElement('div');
-      grp.className = 'tab-group';
-      const head = document.createElement('div');
-      head.className = 'group-head';
-      head.textContent = folderName || '—';
-      const inner = document.createElement('div');
-      inner.className = 'group-tabs';
-      for (const s of list) {
-        s.tab.querySelector('.folder').textContent = ''; // folder is in the header
-        inner.appendChild(s.tab);
-      }
-      grp.appendChild(head);
-      grp.appendChild(inner);
-      tabsEl.appendChild(grp);
+  // Every working folder is a group (with a header) — even with a single tab.
+  for (const { cwd, list } of orderedUnits()) {
+    const folderName = cwd ? basename(cwd) : 'claude';
+    const collapsed = collapsedFolders.has(cwd);
+    const grp = document.createElement('div');
+    grp.className = 'tab-group' + (collapsed ? ' collapsed' : '');
+    grp.dataset.cwd = cwd;
+
+    const head = document.createElement('div');
+    head.className = 'group-head';
+    head.title = collapsed ? 'Развернуть' : 'Свернуть';
+    head.dataset.cwd = cwd;
+    head.draggable = true;
+    head.addEventListener('dragstart', (e) => startDrag(e, { kind: 'unit', cwd }));
+    const chev = document.createElement('span');
+    chev.className = 'group-chev';
+    chev.innerHTML = ICONS.chevron;
+    const nameEl = document.createElement('span');
+    nameEl.className = 'group-name';
+    setFolderLabel(nameEl, folderName);
+    const count = document.createElement('span');
+    count.className = 'group-count';
+    count.textContent = list.length;
+    const dots = document.createElement('span');
+    dots.className = 'group-dots'; // shown only when collapsed
+    for (const s of list) {
+      const d = document.createElement('span');
+      d.className = 'sum-dot status-' + (s.status || 'ready');
+      d.title = s.tab.querySelector('.label').textContent;
+      d.addEventListener('click', (e) => { e.stopPropagation(); activate(s.id); });
+      s.sumDot = d;
+      dots.appendChild(d);
     }
+    head.append(chev, nameEl, count, dots);
+    head.addEventListener('click', () => toggleFolder(cwd));
+
+    const inner = document.createElement('div');
+    inner.className = 'group-tabs';
+    inner.addEventListener('dragover', (e) => onWithinDragOver(e, cwd));
+    inner.addEventListener('drop', (e) => onWithinDrop(e, cwd));
+    for (const s of list) {
+      s.tab.dataset.cwd = cwd;
+      inner.appendChild(s.tab);
+    }
+    grp.append(head, inner);
+    tabsEl.appendChild(grp);
   }
+}
+
+// --- drag & drop: live reflow (dragged item leaves a faint slot; others move) -
+function axisOf() {
+  return document.body.classList.contains('layout-top') ? 'x' : 'y';
+}
+
+// The element the dragged item should be inserted before (null => append).
+function dropBefore(els, x, y) {
+  const axis = axisOf();
+  for (const el of els) {
+    const r = el.getBoundingClientRect();
+    const mid = axis === 'x' ? r.left + r.width / 2 : r.top + r.height / 2;
+    if ((axis === 'x' ? x : y) < mid) return el;
+  }
+
+  return null;
+}
+
+function startDrag(e, payload) {
+  drag = payload;
+  dropped = false;
+  e.dataTransfer.effectAllowed = 'move';
+  try { e.dataTransfer.setData('text/plain', payload.id || payload.cwd); } catch (_) {}
+  // The in-list element becomes a dashed empty slot; a card, or the whole group
+  // for a folder drag. Deferred so the browser's drag image (what follows the
+  // cursor) is captured with full content first — then it turns into the slot.
+  const ghost = payload.kind === 'unit' ? e.currentTarget.closest('.tab-group') : e.currentTarget;
+  const el = ghost || e.currentTarget;
+  setTimeout(() => { if (drag) el.classList.add('dragging'); }, 0);
+}
+
+function endDrag() {
+  document.querySelectorAll('.dragging').forEach((el) => el.classList.remove('dragging'));
+  if (!dropped) relayoutTabs(); // drop didn't land — restore original order
+  dropped = false;
+  drag = null;
+}
+
+// Reorder cards within one folder group by live-reflow.
+function onWithinDragOver(e, cwd) {
+  if (!drag || drag.kind !== 'card' || drag.cwd !== cwd) return;
+  e.preventDefault();
+  e.stopPropagation();
+  e.dataTransfer.dropEffect = 'move';
+  const container = e.currentTarget;
+  const draggedEl = sessions.get(drag.id)?.tab;
+  if (!draggedEl) return;
+  const others = [...container.querySelectorAll('.tab')].filter((el) => el !== draggedEl);
+  const before = dropBefore(others, e.clientX, e.clientY);
+  if (before) container.insertBefore(draggedEl, before);
+  else container.appendChild(draggedEl);
+}
+
+function onWithinDrop(e, cwd) {
+  if (!drag || drag.kind !== 'card' || drag.cwd !== cwd) return;
+  e.preventDefault();
+  e.stopPropagation();
+  // DOM is already in the target order — sync it into the data model.
+  withinOrder.set(cwd, [...e.currentTarget.querySelectorAll('.tab')].map((el) => el.dataset.sid));
+  dropped = true;
+  persistTabs();
+}
+
+// Collapse / expand a folder group (persisted).
+function toggleFolder(cwd) {
+  if (collapsedFolders.has(cwd)) collapsedFolders.delete(cwd);
+  else collapsedFolders.add(cwd);
+  localStorage.setItem('swarm.collapsed', JSON.stringify([...collapsedFolders]));
+  relayoutTabs();
 }
 
 // Double-click a card title to rename it (e.g. what that agent is working on).
@@ -263,6 +464,8 @@ function attachRename(labelEl) {
   labelEl.addEventListener('dblclick', (e) => {
     e.stopPropagation();
     renaming = true;
+    const t = labelEl.closest('.tab');
+    if (t) t.draggable = false; // don't drag while editing the title
     labelEl.contentEditable = 'plaintext-only';
     labelEl.spellcheck = false;
     labelEl.focus();
@@ -279,8 +482,11 @@ function attachRename(labelEl) {
   labelEl.addEventListener('blur', () => {
     renaming = false;
     labelEl.contentEditable = 'false';
+    const t = labelEl.closest('.tab');
+    if (t) t.draggable = true;
     const text = labelEl.textContent.replace(/\s+/g, ' ').trim();
     labelEl.textContent = text || 'claude';
+    persistTabs();
   });
 }
 
@@ -333,7 +539,7 @@ function applyNotify(enabled) {
   notifyEnabled = enabled;
   localStorage.setItem('swarm.notify', enabled ? '1' : '0');
   const btn = document.getElementById('notify-toggle');
-  btn.querySelector('.ic').textContent = enabled ? '🔔' : '🔕';
+  btn.querySelector('.ic').innerHTML = enabled ? ICONS.bell : ICONS.bellOff;
   btn.querySelector('.tx').textContent = enabled ? 'alerts' : 'muted';
   btn.classList.toggle('muted', !enabled);
 }
@@ -362,30 +568,46 @@ async function onQuickCommand(item) {
   runQuickCommand(item.name);
 }
 
-function buildCmdMenu() {
+function addCmdSection(title) {
+  const sep = document.createElement('div');
+  sep.className = 'cmd-sep';
+  sep.textContent = title;
+  cmdMenu.appendChild(sep);
+}
+
+function cmdItemButton(item) {
+  const b = document.createElement('button');
+  b.className = 'cmd-item' + (item.confirm ? ' danger' : '');
+  b.innerHTML = '<span class="cmd-name"></span><span class="cmd-hint"></span>';
+  // "…" on arg commands signals they tee up for you to finish typing.
+  b.querySelector('.cmd-name').textContent = item.arg ? `${item.name} …` : item.name;
+  b.querySelector('.cmd-hint').textContent = item.hint || '';
+  b.addEventListener('click', () => onQuickCommand(item));
+
+  return b;
+}
+
+async function openCmdMenu() {
   cmdMenu.innerHTML = '';
-  if (!activeId || !sessions.get(activeId)?.alive) {
+  const s = sessions.get(activeId);
+  if (!s || !s.alive) {
     const empty = document.createElement('div');
     empty.className = 'cmd-empty';
     empty.textContent = 'нет активного агента';
     cmdMenu.appendChild(empty);
-
-    return;
+  } else {
+    // Built-in commands grouped by purpose, then this project's custom commands.
+    for (const g of BUILTIN_GROUPS) {
+      addCmdSection(g.title);
+      g.items.forEach((item) => cmdMenu.appendChild(cmdItemButton(item)));
+    }
+    let discovered = [];
+    try { discovered = await window.swarm.listCommands(s.cwd); } catch (_) {}
+    if (discovered.length) {
+      addCmdSection('кастомные команды');
+      discovered.forEach((item) => cmdMenu.appendChild(cmdItemButton(item)));
+    }
   }
-  QUICK_COMMANDS.forEach((item) => {
-    const b = document.createElement('button');
-    b.className = 'cmd-item' + (item.confirm ? ' danger' : '');
-    b.innerHTML = '<span class="cmd-name"></span><span class="cmd-hint"></span>';
-    // "…" on arg commands signals they tee up for you to finish typing.
-    b.querySelector('.cmd-name').textContent = item.arg ? `${item.name} …` : item.name;
-    b.querySelector('.cmd-hint').textContent = item.hint || '';
-    b.addEventListener('click', () => onQuickCommand(item));
-    cmdMenu.appendChild(b);
-  });
-}
-
-function openCmdMenu() {
-  buildCmdMenu();
   cmdMenu.classList.remove('hidden');
   // Anchor to the burger button; flip above / clamp to viewport as needed.
   cmdMenu.style.visibility = 'hidden';
@@ -418,7 +640,7 @@ function toggleCmdMenu() {
 }
 
 // Dark themed confirm dialog. Resolves true/false.
-function confirmModal(message) {
+function confirmModal(message, okLabel = 'Выполнить') {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
@@ -427,10 +649,11 @@ function confirmModal(message) {
         <div class="modal-msg"></div>
         <div class="modal-actions">
           <button class="modal-cancel">Отмена</button>
-          <button class="modal-ok">Выполнить</button>
+          <button class="modal-ok"></button>
         </div>
       </div>`;
     overlay.querySelector('.modal-msg').textContent = message;
+    overlay.querySelector('.modal-ok').textContent = okLabel;
     document.body.appendChild(overlay);
 
     const close = (val) => {
@@ -456,13 +679,45 @@ window.addEventListener('resize', () => {
   if (s) s.fit.fit();
 });
 
+// Refit when the terminal area itself resizes — e.g. the top chrome bar grows or
+// shrinks as cards gain context meters, wrap long names, or groups collapse.
+// Without this the terminal overflows its container and clips the last line.
+const stageObserver = new ResizeObserver(() => {
+  const s = sessions.get(activeId);
+  if (s) s.fit.fit();
+});
+stageObserver.observe(stageEl);
+
+// Top-level reorder: dragging a loner card or a group head reorders the units
+// (folders + loners). A unit never drops inside a folder (that handler ignores it).
+tabsEl.addEventListener('dragover', (e) => {
+  if (!drag || drag.kind !== 'unit') return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  const dragged = [...tabsEl.children].find((el) => el.dataset.cwd === drag.cwd);
+  if (!dragged) return;
+  const others = [...tabsEl.children].filter((el) => el.dataset.cwd && el !== dragged);
+  const before = dropBefore(others, e.clientX, e.clientY);
+  if (before) tabsEl.insertBefore(dragged, before);
+  else tabsEl.appendChild(dragged);
+});
+tabsEl.addEventListener('drop', (e) => {
+  if (!drag || drag.kind !== 'unit') return;
+  e.preventDefault();
+  folderOrder.length = 0;
+  folderOrder.push(...[...tabsEl.children].filter((el) => el.dataset.cwd).map((el) => el.dataset.cwd));
+  dropped = true;
+  persistTabs();
+});
+document.addEventListener('dragend', endDrag);
+
 // Shortcuts: ⌘T new, ⌘W close, ⌘L toggle layout, ⌘1..9 jump.
 window.addEventListener('keydown', (e) => {
   if (!(e.metaKey || e.ctrlKey)) return;
   if (e.key === 't') { e.preventDefault(); createSession(); }
   else if (e.key === 'o') { e.preventDefault(); createSessionInFolder(); }
   else if (e.key === 'k') { e.preventDefault(); toggleCmdMenu(); }
-  else if (e.key === 'w' && activeId) { e.preventDefault(); closeSession(activeId); }
+  else if (e.key === 'w' && activeId) { e.preventDefault(); requestCloseSession(activeId); }
   else if (e.key === 'l') { e.preventDefault(); toggleLayout(); }
   else if (/^[1-9]$/.test(e.key)) {
     const idx = Number(e.key) - 1;
@@ -477,7 +732,26 @@ layoutBtn.addEventListener('click', toggleLayout);
 document.getElementById('notify-toggle').addEventListener('click', () => applyNotify(!notifyEnabled));
 cmdBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleCmdMenu(); });
 
-// Restore saved prefs, then start with one session.
+// Set the button icons (Lucide SVGs).
+document.querySelector('#new-session .ic').innerHTML = ICONS.plus;
+document.querySelector('#new-session-folder .ic').innerHTML = ICONS.folderPlus;
+document.querySelector('#cmd-menu-btn .ic').innerHTML = ICONS.command;
+document.querySelector('#layout-toggle .ic').innerHTML = ICONS.layout;
+
+// Restore the previous session's tabs (folders + names), or start with one.
+// Content isn't restored — each tab spawns a fresh claude in its folder.
+async function restoreOrStart() {
+  let saved = [];
+  try { saved = JSON.parse(localStorage.getItem('swarm.tabs') || '[]'); } catch (_) {}
+  saved = Array.isArray(saved) ? saved.filter((t) => t && t.cwd) : [];
+  if (!saved.length) { createSession(); return; }
+  for (const t of saved) await createSession({ cwd: t.cwd, name: t.name });
+  const first = sessions.keys().next();
+  if (!first.done) activate(first.value);
+}
+
+// Restore saved prefs, then the tabs.
 applyLayout(localStorage.getItem('swarm.layout') || 'layout-rail');
-applyNotify(localStorage.getItem('swarm.notify') !== '0');
-createSession();
+applyNotify(localStorage.getItem('swarm.notify') !== '0'); // also sets the bell icon
+try { JSON.parse(localStorage.getItem('swarm.collapsed') || '[]').forEach((c) => collapsedFolders.add(c)); } catch (_) {}
+restoreOrStart();

@@ -202,12 +202,99 @@ ipcMain.handle('dialog:pickFolder', async (_e, defaultPath) => {
   return res.filePaths[0];
 });
 
+// --- IPC: list a project's + global custom slash commands --------------------
+// Claude Code custom commands are markdown files under .claude/commands. We read
+// the active session's project dir + the global ~/.claude/commands, pull the
+// frontmatter (description → hint, argument-hint → needs a tee-up), and let the
+// quick-menu show what's actually available for that project.
+function parseFrontmatter(text) {
+  const out = {};
+  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (m) {
+    for (const line of m[1].split(/\r?\n/)) {
+      const kv = line.match(/^([A-Za-z][\w-]*):\s*(.*)$/);
+      if (kv) out[kv[1].toLowerCase()] = kv[2].trim().replace(/^["']|["']$/g, '');
+    }
+  }
+
+  return out;
+}
+
+function readCommandsDir(baseDir, scope) {
+  const out = [];
+  const walk = (dir, prefix) => {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        walk(full, prefix ? `${prefix}:${e.name}` : e.name); // Claude namespaces subdirs with ":"
+      } else if (e.isFile() && e.name.endsWith('.md')) {
+        const base = e.name.slice(0, -3);
+        let fm = {};
+        try { fm = parseFrontmatter(fs.readFileSync(full, 'utf8')); } catch (_) {}
+        out.push({
+          name: '/' + (prefix ? `${prefix}:${base}` : base),
+          hint: fm.description || '',
+          arg: !!fm['argument-hint'],
+          scope,
+        });
+      }
+    }
+  };
+  walk(baseDir, '');
+
+  return out;
+}
+
+// Short one-liner for the menu from a (usually long) skill description.
+function shortHint(desc) {
+  const first = desc.split(/(?<=[.!?])\s|—/)[0] || desc;
+  const t = first.replace(/^Use\s+(when|to)\s+/i, '').trim();
+
+  return t.length > 60 ? t.slice(0, 59) + '…' : t;
+}
+
+// Skills are directories with a SKILL.md (name + description frontmatter); each
+// is invokable as /<name>. We guess "needs an argument" from the description
+// showing "/name <…>" (like "/groom <issue-url>").
+function readSkillsDir(baseDir, scope) {
+  const out = [];
+  let entries = [];
+  try { entries = fs.readdirSync(baseDir, { withFileTypes: true }); } catch (_) { return out; }
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    let fm = {};
+    try { fm = parseFrontmatter(fs.readFileSync(path.join(baseDir, e.name, 'SKILL.md'), 'utf8')); } catch (_) { continue; }
+    const name = fm.name || e.name;
+    const desc = fm.description || '';
+    const arg = new RegExp('/' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s+[<«[]').test(desc);
+    out.push({ name: '/' + name, hint: shortHint(desc), arg, scope });
+  }
+
+  return out;
+}
+
+ipcMain.handle('commands:list', (_e, cwd) => {
+  const list = [];
+  if (cwd) {
+    list.push(...readCommandsDir(path.join(cwd, '.claude', 'commands'), 'project'));
+    list.push(...readSkillsDir(path.join(cwd, '.claude', 'skills'), 'project'));
+  }
+  list.push(...readCommandsDir(path.join(os.homedir(), '.claude', 'commands'), 'global'));
+  list.push(...readSkillsDir(path.join(os.homedir(), '.claude', 'skills'), 'global'));
+  const seen = new Set();
+
+  return list.filter((c) => (seen.has(c.name) ? false : seen.add(c.name))).sort((a, b) => a.name.localeCompare(b.name));
+});
+
 // --- IPC: renderer asks main to spawn a new claude session -------------------
 ipcMain.handle('session:create', (_event, opts = {}) => {
   const id = String(nextId++);
   const shell = pickShell();
   const isWin = os.platform() === 'win32';
-  const cwd = opts.cwd || defaultWorkdir(); // neutral folder, not TCC-protected home
+  // Restored tabs may point at a folder that no longer exists — fall back safely.
+  const cwd = opts.cwd && fs.existsSync(opts.cwd) ? opts.cwd : defaultWorkdir();
 
   const child = pty.spawn(shell, isWin ? [] : ['-l'], {
     name: 'xterm-256color',

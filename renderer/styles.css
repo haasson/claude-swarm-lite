@@ -37,19 +37,8 @@ body {
   display: grid;
   height: 100vh;
 }
-body.layout-rail {
-  grid-template-columns: 208px 1fr;
-  grid-template-rows: 1fr auto;
-  grid-template-areas: "chrome stage" "statusbar statusbar";
-}
-body.layout-top {
-  grid-template-columns: 1fr;
-  grid-template-rows: auto 1fr auto;
-  grid-template-areas: "chrome" "stage" "statusbar";
-}
-#chrome { grid-area: chrome; }
-#stage { grid-area: stage; }
-#statusbar { grid-area: statusbar; }
+body.layout-rail { grid-template-columns: 208px 1fr; grid-template-rows: 1fr; }
+body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1fr; }
 
 /* --- chrome (session list + controls) ------------------------------------- */
 #chrome {
@@ -71,7 +60,9 @@ body.layout-top {
 
 #brand { display: flex; flex-direction: column; justify-content: center; }
 .layout-rail #brand { padding: 34px 16px 14px; border-bottom: 1px solid var(--border); }
-.layout-top  #brand { padding: 10px 16px; border-right: 1px solid var(--border); }
+/* In top layout the traffic-light gap (#chrome padding-left) is the left margin;
+   a brand block there just looks like awkward empty space, so drop it. */
+.layout-top  #brand { display: none; }
 .brand {
   font-size: 15px;
   font-weight: 600;
@@ -119,6 +110,9 @@ body.layout-top {
 .layout-rail .group-tabs { flex-direction: column; }
 .layout-top  .group-tabs { flex-direction: row; align-items: stretch; }
 .group-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   color: var(--muted);
   font-size: 10px;
   letter-spacing: 0.06em;
@@ -126,9 +120,30 @@ body.layout-top {
   padding: 2px 4px;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+  cursor: pointer;
+  border-radius: 6px;
 }
-.group-head::before { content: "📁 "; }
+.group-head:hover { color: var(--text); background: rgba(255, 255, 255, 0.03); }
+.group-chev { display: inline-flex; flex: none; }
+.group-chev svg { width: 12px; height: 12px; transition: transform 0.15s ease; }
+.tab-group.collapsed .group-chev svg { transform: rotate(-90deg); }
+.group-name { display: inline-flex; align-items: center; gap: 4px; overflow: hidden; text-overflow: ellipsis; }
+.group-count {
+  flex: none;
+  color: var(--muted);
+  background: var(--border);
+  border-radius: 8px;
+  padding: 0 5px;
+  font-size: 9px;
+}
+.group-dots { display: none; align-items: center; gap: 4px; margin-left: 2px; }
+.tab-group.collapsed .group-dots { display: inline-flex; }
+.tab-group.collapsed .group-tabs { display: none; }
+.sum-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ready); cursor: pointer; flex: none; }
+.sum-dot.status-ready   { background: var(--ready); }
+.sum-dot.status-running { background: var(--run); }
+.sum-dot.status-waiting { background: var(--waiting); }
+.sum-dot.status-dead    { background: var(--danger); }
 
 /* --- a session entry (name + status + optional folder) -------------------- */
 .tab {
@@ -143,17 +158,29 @@ body.layout-top {
 }
 .layout-top .tab {
   flex: 0 0 auto;
-  width: 190px;
+  width: auto;
+  min-width: 120px;
+  max-width: 210px;
   background: var(--panel-2);
   border: 1px solid var(--border);
 }
 .tab .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ready); flex: none; margin-top: 3px; }
 .tab .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .tab .label { color: var(--text); font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
-.tab .folder { color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+.tab .folder { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
 .tab .folder:empty { display: none; }
-.tab .folder::before { content: "📁 "; }
+.tab .folder svg, .group-head svg { width: 11px; height: 11px; flex: none; }
 .tab .sub { color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* per-card context meter (parsed from the session's Claude statusline) */
+.tab .ctx { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+.tab .ctx[hidden] { display: none; }
+.tab .ctx-track { flex: 1; min-width: 26px; height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.tab .ctx-fill { display: block; height: 100%; width: 0; background: var(--ready); transition: width 0.3s ease; }
+.tab .ctx-num { font-size: 9px; color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+.tab .ctx.ctx-lo  .ctx-fill { background: var(--ready); }
+.tab .ctx.ctx-mid .ctx-fill { background: var(--run); }
+.tab .ctx.ctx-hi  .ctx-fill { background: var(--danger); }
 .tab .close { flex: none; opacity: 0; color: var(--muted); font-size: 14px; line-height: 1; padding: 0 2px; }
 .tab:hover .close { opacity: 1; }
 .tab .close:hover { color: var(--danger); }
@@ -179,8 +206,22 @@ body.layout-top {
 .tab.status-running { border-color: var(--run);     background: color-mix(in srgb, var(--run)     16%, var(--panel-2)); }
 .tab.status-waiting { border-color: var(--waiting); background: color-mix(in srgb, var(--waiting) 16%, var(--panel-2)); }
 .tab.status-dead    { border-color: var(--danger);  background: color-mix(in srgb, var(--danger)  16%, var(--panel-2)); }
-.tab:hover  { filter: brightness(1.12); }
-.tab.active { box-shadow: 0 0 0 1px var(--accent); }
+.tab:not(.active) { opacity: 0.68; }                 /* inactive tabs sit back */
+.tab.active { box-shadow: 0 0 0 1px var(--accent), 0 0 10px -3px var(--accent); }
+.tab:hover  { filter: brightness(1.12); opacity: 1; } /* hovering un-dims */
+
+/* drag & drop — the moved item becomes a faint dashed slot; others reflow around it */
+.tab.dragging {
+  opacity: 0.5;
+  border-style: dashed !important;
+  border-color: var(--accent) !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.tab.dragging * { visibility: hidden; }
+.tab-group.dragging { opacity: 0.5; }
+.tab[draggable="true"] { cursor: grab; }
+.group-head[draggable="true"]:active, .tab[draggable="true"]:active { cursor: grabbing; }
 
 /* --- controls ------------------------------------------------------------- */
 #chrome-actions { display: flex; -webkit-app-region: no-drag; }
@@ -209,8 +250,10 @@ body.layout-top {
 .layout-top  #notify-toggle,
 .layout-top  #layout-toggle { padding: 8px 10px; }
 #new-session:hover, #new-session-folder:hover, #cmd-menu-btn:hover, #notify-toggle:hover, #layout-toggle:hover { color: var(--text); border-color: var(--accent); }
-#chrome-actions .ic { color: var(--accent); }
-#chrome-actions .tx { margin-left: 6px; }
+#chrome-actions .ic { color: var(--accent); display: inline-flex; align-items: center; vertical-align: middle; }
+#chrome-actions .ic svg { width: 15px; height: 15px; }
+#chrome-actions .tx { margin-left: 7px; vertical-align: middle; }
+#chrome-actions button { display: inline-flex; align-items: center; justify-content: center; }
 /* top layout has little horizontal room — collapse buttons to icons only */
 .layout-top #chrome-actions .tx { display: none; }
 .layout-top #chrome-actions button { font-size: 14px; }
@@ -222,7 +265,9 @@ body.layout-top {
   position: fixed;
   z-index: 60;
   min-width: 240px;
-  max-width: 320px;
+  max-width: 340px;
+  max-height: 60vh;
+  overflow-y: auto;
   padding: 6px;
   background: var(--panel-2);
   border: 1px solid var(--border);
@@ -234,6 +279,16 @@ body.layout-top {
 }
 .cmd-menu.hidden { display: none; }
 .cmd-menu .cmd-empty { padding: 9px 11px; color: var(--muted); font-size: 12px; }
+.cmd-sep {
+  padding: 8px 11px 4px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.cmd-sep:first-child { margin-top: 0; border-top: none; }
 .cmd-item {
   text-align: left;
   padding: 9px 11px;
@@ -309,23 +364,3 @@ body.layout-top {
   letter-spacing: 0.04em;
 }
 
-/* --- bottom status bar: active session's Claude statusline ---------------- */
-#statusbar {
-  background: var(--panel);
-  border-top: 1px solid var(--border);
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 11px;
-  line-height: 1.2;
-  padding: 5px 12px;
-  min-height: 25px;
-  display: flex;
-  align-items: center;
-  white-space: nowrap;
-  overflow-x: auto;
-  overflow-y: hidden;
-}
-#statusbar:empty::after {
-  content: "— нет активного агента —";
-  opacity: 0.5;
-}

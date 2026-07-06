@@ -10,6 +10,9 @@ contextBridge.exposeInMainWorld('swarm', {
   // Returns the chosen path, or null if cancelled.
   pickFolder: (defaultPath) => ipcRenderer.invoke('dialog:pickFolder', defaultPath),
 
+  // List custom slash commands for a project dir (+ global). [{name, hint, arg, scope}]
+  listCommands: (cwd) => ipcRenderer.invoke('commands:list', cwd),
+
   // Ask main to spawn a session. Returns { id }.
   // opts: { cwd?, cols?, rows?, command? }
   createSession: (opts) => ipcRenderer.invoke('session:create', opts),
