@@ -21,6 +21,7 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const os = require('os');
 const path = require('path');
+const fs = require('fs');
 const pty = require('node-pty');
 
 /** @type {BrowserWindow | null} */
@@ -38,6 +39,17 @@ const START_COMMAND = 'claude';
 function pickShell() {
   if (os.platform() === 'win32') return process.env.COMSPEC || 'powershell.exe';
   return process.env.SHELL || '/bin/zsh';
+}
+
+// Default working dir for sessions that don't pick a folder. Deliberately NOT
+// the home dir: launching claude in ~ makes it touch TCC-protected folders
+// (~/Pictures, ~/Music, ~/Documents…), triggering a barrage of macOS permission
+// prompts against our unsigned app. A dedicated plain folder isn't protected.
+function defaultWorkdir() {
+  const dir = path.join(os.homedir(), 'ClaudeSwarm');
+  try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {}
+
+  return dir;
 }
 
 // Send to the renderer only if the window/frame is still alive. Late pty chunks
@@ -75,7 +87,7 @@ function makeDetector(cols, rows) {
     term: new HeadlessTerminal({ cols: cols || 80, rows: rows || 24, scrollback: 200, allowProposedApi: true }),
     lastDataAt: Date.now(),
     resizeUntil: 0,
-    status: '', detail: '', dead: false,
+    status: '', detail: '', statusline: '', dead: false,
   };
 }
 
@@ -90,6 +102,23 @@ function snapshot(d) {
     if (line) out.push(line.translateToString(true));
   }
   return out.join('\n');
+}
+
+// The user's Claude statusline (model │ dir [bar] % │ task) renders on the very
+// bottom row. Grab the lowest visible line that looks like it (has the │
+// separators or the progress-bar blocks) so the app can show it in a footer.
+function extractStatusline(d) {
+  const buf = d.term.buffer.active;
+  const end = buf.length;
+  const start = Math.max(0, end - SNAP_ROWS);
+  for (let y = end - 1; y >= start; y--) {
+    const line = buf.getLine(y);
+    if (!line) continue;
+    const t = line.translateToString(true).trim();
+    if (t.includes('│') || /[█░]/.test(t)) return t;
+  }
+
+  return '';
 }
 
 function feedDetector(id, chunk) {
@@ -123,10 +152,12 @@ setInterval(() => {
     if (d.dead) continue;
     try {
       const next = decide(d, now);
-      if (next.status !== d.status || next.detail !== d.detail) {
+      const statusline = extractStatusline(d);
+      if (next.status !== d.status || next.detail !== d.detail || statusline !== d.statusline) {
         d.status = next.status;
         d.detail = next.detail;
-        safeSend('session:status', { id, status: next.status, detail: next.detail });
+        d.statusline = statusline;
+        safeSend('session:status', { id, status: next.status, detail: next.detail, statusline });
       }
     } catch (_) {
       // A detector hiccup must never crash the app or freeze the UI.
@@ -160,9 +191,10 @@ function createWindow() {
 }
 
 // --- IPC: pick a working directory for a new session -------------------------
-ipcMain.handle('dialog:pickFolder', async () => {
+ipcMain.handle('dialog:pickFolder', async (_e, defaultPath) => {
   const res = await dialog.showOpenDialog(win, {
     title: 'Рабочая папка для агента',
+    defaultPath: defaultPath || undefined, // open where the user last was
     properties: ['openDirectory', 'createDirectory'],
   });
   if (res.canceled || !res.filePaths.length) return null;
@@ -175,12 +207,13 @@ ipcMain.handle('session:create', (_event, opts = {}) => {
   const id = String(nextId++);
   const shell = pickShell();
   const isWin = os.platform() === 'win32';
+  const cwd = opts.cwd || defaultWorkdir(); // neutral folder, not TCC-protected home
 
   const child = pty.spawn(shell, isWin ? [] : ['-l'], {
     name: 'xterm-256color',
     cols: opts.cols || 80,
     rows: opts.rows || 24,
-    cwd: opts.cwd || os.homedir(), // pass a git worktree path here later (step 3)
+    cwd,
     env: process.env,             // <-- inherits your Claude Code auth. Do not strip.
   });
 
@@ -208,7 +241,7 @@ ipcMain.handle('session:create', (_event, opts = {}) => {
     }, 350);
   }
 
-  return { id };
+  return { id, cwd };
 });
 
 // --- IPC: keystrokes from the xterm in the renderer --------------------------

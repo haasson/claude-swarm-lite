@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Claude Swarm Lite</title>
 
-  <!-- xterm ships prebuilt UMD files; loaded straight from node_modules.
-       In dev (`npm start`) these relative paths resolve fine. -->
-  <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
+  <!-- xterm assets are vendored locally (renderer/vendor) so paths work both in
+       dev and in the packaged .app — the node_modules paths break once bundled. -->
+  <link rel="stylesheet" href="./vendor/xterm.css" />
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body class="layout-rail">
@@ -20,28 +20,30 @@
       <span class="brand-sub">claude sessions</span>
     </div>
 
-    <!-- The ordered list of sessions. Numbering is meaningful — you refer to
-         sessions as "1", "2", "3" while you work. -->
-    <ul id="tabs"></ul>
+    <!-- Sessions, grouped by working folder (built in JS). -->
+    <div id="tabs"></div>
 
     <div id="chrome-actions">
-      <button id="new-session" title="Новая сессия (⌘T)">
-        <span class="plus">+</span> new session
-      </button>
-      <button id="new-session-folder" title="Новая сессия в папке… (⌘O)">
-        <span class="plus">+</span> в папке…
-      </button>
-      <button id="notify-toggle" title="Уведомления">🔔 alerts</button>
-      <button id="layout-toggle" title="Сменить раскладку (⌘L)">⇄ layout</button>
+      <button id="new-session" title="Новая сессия (⌘T)"><span class="ic">＋</span><span class="tx">new session</span></button>
+      <button id="new-session-folder" title="Новая сессия в папке… (⌘O)"><span class="ic">📁</span><span class="tx">в папке…</span></button>
+      <button id="cmd-menu-btn" title="Быстрые команды (⌘K)"><span class="ic">☰</span><span class="tx">команды</span></button>
+      <button id="notify-toggle" title="Уведомления"><span class="ic">🔔</span><span class="tx">alerts</span></button>
+      <button id="layout-toggle" title="Сменить раскладку (⌘L)"><span class="ic">⇄</span><span class="tx">layout</span></button>
     </div>
   </div>
 
   <!-- One xterm container per session, only the active one is shown. -->
   <main id="stage"></main>
 
+  <!-- Bottom bar: the active session's Claude statusline (model · dir · context · task). -->
+  <div id="statusbar"></div>
+
+  <!-- Quick-commands popover (populated from JS, anchored to the burger button). -->
+  <div id="cmd-menu" class="cmd-menu hidden"></div>
+
   <!-- xterm core + fit addon (UMD globals: Terminal, FitAddon.FitAddon) -->
-  <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
-  <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="./vendor/xterm.js"></script>
+  <script src="./vendor/addon-fit.js"></script>
   <script src="./renderer.js"></script>
 </body>
 </html>

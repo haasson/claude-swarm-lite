@@ -7,9 +7,31 @@
   "scripts": {
     "start": "electron .",
     "rebuild": "electron-rebuild -f -w node-pty",
-    "postinstall": "electron-rebuild -f -w node-pty"
+    "postinstall": "electron-rebuild -f -w node-pty",
+    "dist": "electron-builder --mac"
   },
   "license": "MIT",
+  "build": {
+    "appId": "io.swarm.claude-swarm-lite",
+    "productName": "Claude Swarm Lite",
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "**/node_modules/node-pty/**"
+    ],
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.developer-tools",
+      "identity": null
+    },
+    "directories": {
+      "output": "dist"
+    }
+  },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/headless": "^5.5.0",
@@ -18,6 +40,7 @@
   },
   "devDependencies": {
     "@electron/rebuild": "^3.7.0",
-    "electron": "^33.2.0"
+    "electron": "^33.2.0",
+    "electron-builder": "^26.15.3"
   }
 }

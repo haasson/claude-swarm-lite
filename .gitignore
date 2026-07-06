@@ -3,3 +3,6 @@ dist/
 out/
 *.log
 .DS_Store
+
+# icon build intermediates
+build/icon.iconset/
