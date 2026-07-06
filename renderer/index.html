@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Claude Swarm Lite</title>
+
+  <!-- xterm ships prebuilt UMD files; loaded straight from node_modules.
+       In dev (`npm start`) these relative paths resolve fine. -->
+  <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body class="layout-rail">
+  <!-- #chrome holds the session list + controls. In "rail" layout it's a
+       vertical sidebar on the left; in "top" layout it's a horizontal bar of
+       cards across the top. Same DOM, two CSS arrangements — toggle with ⌘L. -->
+  <div id="chrome">
+    <div id="brand">
+      <span class="brand">swarm</span>
+      <span class="brand-sub">claude sessions</span>
+    </div>
+
+    <!-- The ordered list of sessions. Numbering is meaningful — you refer to
+         sessions as "1", "2", "3" while you work. -->
+    <ul id="tabs"></ul>
+
+    <div id="chrome-actions">
+      <button id="new-session" title="New Claude session (⌘T)">
+        <span class="plus">+</span> new session
+      </button>
+      <button id="layout-toggle" title="Switch layout (⌘L)">⇄ layout</button>
+    </div>
+  </div>
+
+  <!-- One xterm container per session, only the active one is shown. -->
+  <main id="stage"></main>
+
+  <!-- xterm core + fit addon (UMD globals: Terminal, FitAddon.FitAddon) -->
+  <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="./renderer.js"></script>
+</body>
+</html>
