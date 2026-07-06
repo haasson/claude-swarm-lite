@@ -106,6 +106,19 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   min-width: 14px;
   font-size: 12px;
 }
+
+/* While a title is being renamed, allow caret + text selection (the tab itself
+   sets user-select:none, which otherwise freezes the contenteditable). */
+.tab .label[contenteditable="plaintext-only"] {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+  outline: none;
+  overflow: visible;
+  box-shadow: 0 0 0 1px var(--accent);
+  border-radius: 3px;
+  padding: 0 2px;
+}
 .tab .dot {
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--ready);
@@ -146,7 +159,7 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .layout-rail .tab .label {
   grid-area: label;
   color: var(--text);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  overflow-wrap: anywhere; /* long names wrap to multiple lines, never truncate */
 }
 .layout-rail .tab .sub {
   grid-area: sub;
@@ -181,7 +194,7 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   font-size: 12px;
   font-weight: 600;
   margin-top: 2px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  overflow-wrap: anywhere; /* long names wrap to multiple lines, never truncate */
 }
 .layout-top .tab .sub {
   grid-area: sub;

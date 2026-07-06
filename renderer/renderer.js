@@ -16,6 +16,7 @@ const layoutBtn  = document.getElementById('layout-toggle');
 /** id -> { term, fit, holder, tab, alive, status, idleTimer } */
 const sessions = new Map();
 let activeId = null;
+let renaming = false; // true while a card title is being edited (don't steal focus)
 
 // --- status ------------------------------------------------------------------
 // Status is inferred from the pty stream in main.js (see the detector there)
@@ -113,6 +114,7 @@ async function createSession() {
     activate(id);
   });
   tabsEl.appendChild(tab);
+  attachRename(tab.querySelector('.label'));
 
   sessions.set(id, { term, fit, holder, tab, alive: true, status: null });
   setStatus(id, 'ready', 'готов');
@@ -130,7 +132,7 @@ function activate(id) {
   s.tab.classList.add('active');
   activeId = id;
   // Refit now that the holder is visible (fit on a hidden element is a no-op).
-  requestAnimationFrame(() => { s.fit.fit(); s.term.focus(); });
+  requestAnimationFrame(() => { s.fit.fit(); if (!renaming) s.term.focus(); });
 }
 
 function closeSession(id) {
@@ -149,7 +151,8 @@ function closeSession(id) {
   }
 }
 
-// Keep the visible numbers 1..N contiguous after a close.
+// Keep the visible numbers 1..N contiguous after a close. Custom names (anything
+// not matching "claude <n>") are left untouched.
 function renumber() {
   let i = 1;
   for (const [, s] of sessions) {
@@ -158,6 +161,35 @@ function renumber() {
     if (/^claude \d+$/.test(label.textContent)) label.textContent = `claude ${i}`;
     i++;
   }
+}
+
+// Double-click a card title to rename it (e.g. what that agent is working on).
+// Enter/Escape or blur commits; empty reverts to the default "claude <n>".
+function attachRename(labelEl) {
+  labelEl.title = 'Двойной клик — переименовать';
+  labelEl.addEventListener('dblclick', (e) => {
+    e.stopPropagation();
+    renaming = true;
+    labelEl.contentEditable = 'plaintext-only';
+    labelEl.spellcheck = false;
+    labelEl.focus();
+    const range = document.createRange();
+    range.selectNodeContents(labelEl);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  });
+  labelEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); labelEl.blur(); }
+    e.stopPropagation(); // don't fire app shortcuts (⌘T etc.) while typing
+  });
+  labelEl.addEventListener('blur', () => {
+    renaming = false;
+    labelEl.contentEditable = 'false';
+    const text = labelEl.textContent.replace(/\s+/g, ' ').trim();
+    const num = labelEl.parentElement.querySelector('.num')?.textContent || '';
+    labelEl.textContent = text || `claude ${num}`;
+  });
 }
 
 // --- layout switching (rail <-> top dashboard) -------------------------------

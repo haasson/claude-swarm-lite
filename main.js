@@ -40,6 +40,14 @@ function pickShell() {
   return process.env.SHELL || '/bin/zsh';
 }
 
+// Send to the renderer only if the window/frame is still alive. Late pty chunks
+// arriving during quit would otherwise throw "Render frame was disposed".
+function safeSend(channel, payload) {
+  if (win && !win.isDestroyed() && win.webContents && !win.webContents.isDestroyed()) {
+    win.webContents.send(channel, payload);
+  }
+}
+
 // --- status detection --------------------------------------------------------
 // Claude Code prints no machine-readable status, so we infer it from the pty
 // stream — but simply, not by scraping the TUI text:
@@ -111,7 +119,7 @@ setInterval(() => {
       if (next.status !== d.status || next.detail !== d.detail) {
         d.status = next.status;
         d.detail = next.detail;
-        win.webContents.send('session:status', { id, status: next.status, detail: next.detail });
+        safeSend('session:status', { id, status: next.status, detail: next.detail });
       }
     } catch (_) {
       // A detector hiccup must never crash the app or freeze the UI.
@@ -163,14 +171,14 @@ ipcMain.handle('session:create', (_event, opts = {}) => {
 
   child.onData((data) => {
     feedDetector(id, data);
-    win && win.webContents.send('session:data', { id, data });
+    safeSend('session:data', { id, data });
   });
 
   child.onExit(({ exitCode }) => {
     const d = det.get(id);
     if (d) d.dead = true;
     sessions.delete(id);
-    win && win.webContents.send('session:exit', { id, code: exitCode });
+    safeSend('session:exit', { id, code: exitCode });
   });
 
   // Give the login shell a moment to finish sourcing the profile, then run claude.
