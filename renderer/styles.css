@@ -217,7 +217,7 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .layout-rail #chrome-actions { flex-direction: column; }
 .layout-top  #chrome-actions { flex-direction: row; align-items: center; gap: 6px; padding: 0 10px 0 4px; }
 
-#new-session, #layout-toggle {
+#new-session, #new-session-folder, #layout-toggle {
   -webkit-app-region: no-drag;
   background: transparent;
   border: 1px dashed var(--border);
@@ -228,12 +228,14 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   cursor: pointer;
   white-space: nowrap;
 }
-.layout-rail #new-session  { margin: 8px 8px 4px; padding: 10px; text-align: center; }
-.layout-rail #layout-toggle { margin: 0 8px 8px;  padding: 8px;  text-align: center; }
+.layout-rail #new-session        { margin: 8px 8px 4px; padding: 10px; text-align: center; }
+.layout-rail #new-session-folder { margin: 0 8px 4px;   padding: 10px; text-align: center; }
+.layout-rail #layout-toggle      { margin: 0 8px 8px;   padding: 8px;  text-align: center; }
 .layout-top  #new-session,
+.layout-top  #new-session-folder,
 .layout-top  #layout-toggle { padding: 8px 10px; }
-#new-session:hover, #layout-toggle:hover { color: var(--text); border-color: var(--accent); }
-#new-session .plus { color: var(--accent); font-weight: 700; }
+#new-session:hover, #new-session-folder:hover, #layout-toggle:hover { color: var(--text); border-color: var(--accent); }
+#new-session .plus, #new-session-folder .plus { color: var(--accent); font-weight: 700; }
 
 /* --- terminal stage ------------------------------------------------------- */
 #stage {

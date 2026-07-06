@@ -76,7 +76,7 @@ function makeXterm() {
   return { term, fit };
 }
 
-async function createSession() {
+async function createSession(opts = {}) {
   const { term, fit } = makeXterm();
 
   const holder = document.createElement('div');
@@ -85,11 +85,12 @@ async function createSession() {
   term.open(holder);
   fit.fit();
 
-  // Spawn the pty in main with the current grid size.
-  // TODO(step 3): pass { cwd: <git worktree path> } to isolate each task.
+  // Spawn the pty in main with the current grid size. opts.cwd sets the working
+  // directory (folder picker / worktree); default is the user's home dir.
   const { id } = await window.swarm.createSession({
     cols: term.cols,
     rows: term.rows,
+    cwd: opts.cwd,
   });
 
   // Wire keystrokes -> pty.
@@ -105,10 +106,12 @@ async function createSession() {
   tab.innerHTML = `
     <span class="dot"></span>
     <span class="num">${num}</span>
-    <span class="label">claude ${num}</span>
+    <span class="label"></span>
     <span class="sub">готов</span>
     <span class="close" title="Close">×</span>
   `;
+  // textContent (not innerHTML) — a folder name must never be treated as markup.
+  tab.querySelector('.label').textContent = opts.label || `claude ${num}`;
   tab.addEventListener('click', (e) => {
     if (e.target.classList.contains('close')) { closeSession(id); return; }
     activate(id);
@@ -119,6 +122,20 @@ async function createSession() {
   sessions.set(id, { term, fit, holder, tab, alive: true, status: null });
   setStatus(id, 'ready', 'готов');
   activate(id);
+}
+
+// Last path segment of a folder path, used as the tab label.
+function basename(p) {
+  const parts = p.split(/[\\/]/).filter(Boolean);
+
+  return parts.length ? parts[parts.length - 1] : p;
+}
+
+// Pick a folder, then open a session whose cwd is that folder (label = its name).
+async function createSessionInFolder() {
+  const dir = await window.swarm.pickFolder();
+  if (!dir) return;
+  createSession({ cwd: dir, label: basename(dir) });
 }
 
 function activate(id) {
@@ -222,6 +239,7 @@ window.addEventListener('resize', () => {
 window.addEventListener('keydown', (e) => {
   if (!(e.metaKey || e.ctrlKey)) return;
   if (e.key === 't') { e.preventDefault(); createSession(); }
+  else if (e.key === 'o') { e.preventDefault(); createSessionInFolder(); }
   else if (e.key === 'w' && activeId) { e.preventDefault(); closeSession(activeId); }
   else if (e.key === 'l') { e.preventDefault(); toggleLayout(); }
   else if (/^[1-9]$/.test(e.key)) {
@@ -231,7 +249,8 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
-newBtn.addEventListener('click', createSession);
+newBtn.addEventListener('click', () => createSession());
+document.getElementById('new-session-folder').addEventListener('click', createSessionInFolder);
 layoutBtn.addEventListener('click', toggleLayout);
 
 // Restore the last-used layout, then start with one session.

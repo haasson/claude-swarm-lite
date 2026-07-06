@@ -18,7 +18,7 @@
 //   just type `claude` into it. Bonus: auth "just works" because it's the same
 //   environment you log in from.
 
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const os = require('os');
 const path = require('path');
 const pty = require('node-pty');
@@ -151,6 +151,17 @@ function createWindow() {
     win = null;
   });
 }
+
+// --- IPC: pick a working directory for a new session -------------------------
+ipcMain.handle('dialog:pickFolder', async () => {
+  const res = await dialog.showOpenDialog(win, {
+    title: 'Рабочая папка для агента',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (res.canceled || !res.filePaths.length) return null;
+
+  return res.filePaths[0];
+});
 
 // --- IPC: renderer asks main to spawn a new claude session -------------------
 ipcMain.handle('session:create', (_event, opts = {}) => {

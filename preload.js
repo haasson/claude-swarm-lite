@@ -6,6 +6,9 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('swarm', {
+  // Open a native folder picker. Returns the chosen path, or null if cancelled.
+  pickFolder: () => ipcRenderer.invoke('dialog:pickFolder'),
+
   // Ask main to spawn a session. Returns { id }.
   // opts: { cwd?, cols?, rows?, command? }
   createSession: (opts) => ipcRenderer.invoke('session:create', opts),
