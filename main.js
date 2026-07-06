@@ -59,9 +59,10 @@ function safeSend(channel, payload) {
 // surface Claude's token counter or activity words — just the four states.
 const { Terminal: HeadlessTerminal } = require('@xterm/headless');
 
-const ACTIVE_MS = 1200; // bytes seen this recently => the agent is working
+const ACTIVE_MS = 1200;      // bytes seen this recently => the agent is working
 const TICK_MS = 300;
-const SNAP_ROWS = 16;   // how many bottom screen rows to inspect
+const SNAP_ROWS = 16;        // how many bottom screen rows to inspect
+const RESIZE_GRACE_MS = 700; // after a resize, ignore the repaint burst as "activity"
 
 // Waiting on me: a permission / confirm prompt sits statically on screen.
 const RE_WAIT = /Esc to cancel|Do you want|Enter to confirm|❯\s*\d+\.\s|No, and tell Claude/i;
@@ -73,6 +74,7 @@ function makeDetector(cols, rows) {
   return {
     term: new HeadlessTerminal({ cols: cols || 80, rows: rows || 24, scrollback: 200, allowProposedApi: true }),
     lastDataAt: Date.now(),
+    resizeUntil: 0,
     status: '', detail: '', dead: false,
   };
 }
@@ -93,8 +95,13 @@ function snapshot(d) {
 function feedDetector(id, chunk) {
   const d = det.get(id);
   if (!d || d.dead) return;
-  d.lastDataAt = Date.now();
   d.term.write(chunk);
+  // A resize makes Claude repaint the whole screen — a burst of output that is
+  // NOT real work. Inside the grace window after a resize we keep feeding the
+  // emulator (so the screen stays correct) but don't count it as activity, so an
+  // idle agent won't flash "работает" and fire a false notification.
+  const now = Date.now();
+  if (now >= d.resizeUntil) d.lastDataAt = now;
 }
 
 function decide(d, now) {
@@ -218,6 +225,7 @@ ipcMain.on('session:resize', (_event, { id, cols, rows }) => {
     const d = det.get(id);
     if (d && d.term) {
       try { d.term.resize(cols, rows); } catch (_) {}
+      d.resizeUntil = Date.now() + RESIZE_GRACE_MS;
     }
   }
 });
@@ -230,6 +238,25 @@ ipcMain.on('session:kill', (_event, { id }) => {
     sessions.delete(id);
   }
   det.delete(id);
+});
+
+// --- IPC: a UI action is about to repaint terminals; grace ALL detectors -----
+// Switching tabs blurs one xterm and focuses another; with focus-reporting on,
+// Claude repaints on both focus-out and focus-in. That burst is not real work,
+// so we briefly stop counting activity for every session.
+ipcMain.on('ui:repaint', () => {
+  const until = Date.now() + RESIZE_GRACE_MS;
+  for (const d of det.values()) d.resizeUntil = until;
+});
+
+// --- IPC: bring the app forward (clicked a notification) ---------------------
+ipcMain.on('app:focus', () => {
+  if (win && !win.isDestroyed()) {
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  }
+  app.focus({ steal: true });
 });
 
 app.whenReady().then(createWindow);

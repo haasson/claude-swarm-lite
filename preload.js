@@ -22,6 +22,13 @@ contextBridge.exposeInMainWorld('swarm', {
   // Close a session.
   killSession: (id) => ipcRenderer.send('session:kill', { id }),
 
+  // Bring the app window forward (used when a notification is clicked).
+  focusApp: () => ipcRenderer.send('app:focus'),
+
+  // Tell main a UI action (tab switch / layout change) is about to repaint the
+  // terminals — so their focus/redraw burst isn't mistaken for real activity.
+  uiRepaint: () => ipcRenderer.send('ui:repaint'),
+
   // Subscribe to pty output. cb({ id, data }). Returns an unsubscribe fn.
   onData: (cb) => {
     const handler = (_e, payload) => cb(payload);

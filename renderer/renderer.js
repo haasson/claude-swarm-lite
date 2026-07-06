@@ -16,7 +16,8 @@ const layoutBtn  = document.getElementById('layout-toggle');
 /** id -> { term, fit, holder, tab, alive, status, idleTimer } */
 const sessions = new Map();
 let activeId = null;
-let renaming = false; // true while a card title is being edited (don't steal focus)
+let renaming = false;       // true while a card title is being edited (don't steal focus)
+let notifyEnabled = true;   // system notifications when a background agent needs attention
 
 // --- status ------------------------------------------------------------------
 // Status is inferred from the pty stream in main.js (see the detector there)
@@ -45,7 +46,10 @@ window.swarm.onData(({ id, data }) => {
 // Inferred status from main (running / ready / waiting + detail text).
 window.swarm.onStatus(({ id, status, detail }) => {
   const s = sessions.get(id);
-  if (s && s.alive) setStatus(id, status, detail);
+  if (!s || !s.alive) return;
+  const prev = s.status;
+  setStatus(id, status, detail);
+  maybeNotify(id, prev, status);
 });
 
 window.swarm.onExit(({ id }) => {
@@ -141,6 +145,9 @@ async function createSessionInFolder() {
 function activate(id) {
   const s = sessions.get(id);
   if (!s) return;
+  // Switching focus makes both the old and new terminals repaint — grace all
+  // detectors so that burst isn't read as activity (would flash "работает").
+  window.swarm.uiRepaint();
   for (const [, other] of sessions) {
     other.holder.classList.remove('active');
     other.tab.classList.remove('active');
@@ -217,6 +224,7 @@ function applyLayout(name) {
   document.body.classList.remove(...LAYOUTS);
   document.body.classList.add(name);
   localStorage.setItem('swarm.layout', name);
+  window.swarm.uiRepaint(); // the relayout repaints terminals — don't count it as activity
   // Chrome changed size => the stage did too; refit the visible terminal.
   requestAnimationFrame(() => {
     const s = sessions.get(activeId);
@@ -227,6 +235,38 @@ function applyLayout(name) {
 function toggleLayout() {
   const cur = document.body.classList.contains('layout-top') ? 'layout-top' : 'layout-rail';
   applyLayout(cur === 'layout-top' ? 'layout-rail' : 'layout-top');
+}
+
+// --- notifications -----------------------------------------------------------
+// Ping when a BACKGROUND agent needs attention: it started waiting on me, or it
+// finished (running -> ready). The agent you're actively watching in a focused
+// window is never pinged — that would just be noise.
+function maybeNotify(id, prev, next) {
+  if (!notifyEnabled || prev === next) return;
+
+  let body = null;
+  if (next === 'waiting') body = 'ждёт ответа';
+  else if (next === 'ready' && prev === 'running') body = 'готов';
+  if (!body) return;
+
+  // You're already looking at this one — no need to ping.
+  if (id === activeId && document.hasFocus()) return;
+
+  const s = sessions.get(id);
+  const name = s?.tab.querySelector('.label')?.textContent?.trim() || `claude ${id}`;
+  const note = new Notification(name, { body, silent: false });
+  note.onclick = () => {
+    window.swarm.focusApp();
+    activate(id);
+  };
+}
+
+function applyNotify(enabled) {
+  notifyEnabled = enabled;
+  localStorage.setItem('swarm.notify', enabled ? '1' : '0');
+  const btn = document.getElementById('notify-toggle');
+  btn.textContent = enabled ? '🔔 alerts' : '🔕 muted';
+  btn.classList.toggle('muted', !enabled);
 }
 
 // Refit the active terminal when the window changes size.
@@ -252,7 +292,9 @@ window.addEventListener('keydown', (e) => {
 newBtn.addEventListener('click', () => createSession());
 document.getElementById('new-session-folder').addEventListener('click', createSessionInFolder);
 layoutBtn.addEventListener('click', toggleLayout);
+document.getElementById('notify-toggle').addEventListener('click', () => applyNotify(!notifyEnabled));
 
-// Restore the last-used layout, then start with one session.
+// Restore saved prefs, then start with one session.
 applyLayout(localStorage.getItem('swarm.layout') || 'layout-rail');
+applyNotify(localStorage.getItem('swarm.notify') !== '0');
 createSession();
