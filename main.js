@@ -77,8 +77,14 @@ const SNAP_ROWS = 16;        // how many bottom screen rows to inspect
 const RESIZE_GRACE_MS = 700; // after a resize, ignore the repaint burst as "activity"
 const INPUT_GRACE_MS = 700;  // after a keystroke, ignore the echo/redraw as "activity"
 
-// Waiting on me: a permission / confirm prompt sits statically on screen.
+// Waiting on me: a permission / confirm prompt sits on screen.
 const RE_WAIT = /Esc to cancel|Do you want|Enter to confirm|❯\s*\d+\.\s|No, and tell Claude/i;
+// Strong subset — prompt UI chrome that never appears in normal streamed output
+// (numbered options, "Esc to cancel"). We trust these EVERY tick, even while bytes
+// are still flowing, so a prompt is caught the instant it renders. The full RE_WAIT
+// (with the looser "Do you want") stays gated behind the quiet window to avoid
+// matching that phrase mid-sentence in streamed prose.
+const RE_WAIT_NOW = /Esc to cancel|Enter to confirm|❯\s*\d+\.\s|No, and tell Claude/i;
 
 // Working but momentarily quiet. While Claude thinks or runs a tool it can go
 // >ACTIVE_MS without emitting a byte (model call with no repaint, a slow tool),
@@ -147,11 +153,19 @@ function feedDetector(id, chunk) {
 }
 
 function decide(d, now) {
-  // Active output => working. Only peek at the screen once it goes quiet.
+  const snap = snapshot(d);
+  // A confirm/permission prompt on screen means "waiting on me" regardless of byte
+  // activity — check it EVERY tick, not only when the stream goes quiet. Otherwise a
+  // background tab keeps showing "работает" while the prompt renders in bursts, and
+  // only flips to "ждёт ответа" once the stream finally falls silent for ACTIVE_MS
+  // (a long, ragged lag). Uses the strong prompt-chrome markers, safe mid-stream.
+  if (RE_WAIT_NOW.test(snap)) {
+    return { status: 'waiting', detail: 'ждёт ответа' };
+  }
+  // Active output => working. Only peek for the looser prompt once it goes quiet.
   if (now - d.lastDataAt < ACTIVE_MS) {
     return { status: 'running', detail: 'работает' };
   }
-  const snap = snapshot(d);
   if (RE_WAIT.test(snap)) {
     return { status: 'waiting', detail: 'ждёт ответа' };
   }
