@@ -176,20 +176,24 @@ function makeXterm() {
   return { term, fit };
 }
 
-// Which command a new tab runs to launch Claude. Defaults to 'claude', but we
-// remember the last claude-launcher you actually type at a shell prompt (e.g.
-// switch to 'claude-corp' to change subscription/config) and reuse it for every
-// subsequent tab. Persisted across restarts. Only TYPED/PASTED commands are
+// Which command a new tab runs to launch the agent. Defaults to 'claude', but we
+// remember the last agent launcher you actually type at a shell prompt (e.g.
+// 'claude-corp' to switch config, or 'glm'/'claude-glm' for a Claude-Code-compatible
+// backend via ANTHROPIC_BASE_URL) and reuse it for every subsequent tab. Persisted across restarts. Only TYPED/PASTED commands are
 // caught: recalling one from history (↑) or editing mid-line with arrow keys
 // arrives as a redraw / resets the buffer, so it won't update this — retype it.
 let startCommand = localStorage.getItem('swarm.startCommand') || 'claude';
-// A bare claude launcher: `claude`, `claude-my`, `claude-corp`, optionally flags.
-// Restricting extra tokens to flags stops chat messages ("claude is great") from
-// being mistaken for a launch command.
-const CLAUDE_CMD_RE = /^\s*claude[\w-]*(?:\s+--?[\w-]+(?:=\S+)?)*\s*$/;
+// An agent-CLI launcher, optionally with flags: `claude`, `claude-my`,
+// `claude-glm`, or a Claude-Code-compatible backend aliased under its own name
+// (glm/deepseek/… run via ANTHROPIC_BASE_URL), or another agent CLI. We match a
+// known launcher STEM, not any word, so `ls`/`git commit -m claude`/chat messages
+// aren't mistaken for a launch command. Extra tokens are restricted to flags for
+// the same reason. A custom alias outside this list won't be remembered — add its
+// stem here, or name the alias `claude-*` (which is always matched).
+const AGENT_CMD_RE = /^\s*(?:claude|glm|deepseek|codex|gemini|aider|qwen|kimi|opencode|crush|amp|droid)[\w-]*(?:\s+--?[\w-]+(?:=\S+)?)*\s*$/i;
 function rememberStartCommand(line) {
   const t = line.trim();
-  if (!CLAUDE_CMD_RE.test(t) || t === startCommand) return;
+  if (!AGENT_CMD_RE.test(t) || t === startCommand) return;
   startCommand = t;
   localStorage.setItem('swarm.startCommand', t);
 }
