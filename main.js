@@ -80,6 +80,18 @@ const INPUT_GRACE_MS = 700;  // after a keystroke, ignore the echo/redraw as "ac
 // Waiting on me: a permission / confirm prompt sits statically on screen.
 const RE_WAIT = /Esc to cancel|Do you want|Enter to confirm|❯\s*\d+\.\s|No, and tell Claude/i;
 
+// Working but momentarily quiet. While Claude thinks or runs a tool it can go
+// >ACTIVE_MS without emitting a byte (model call with no repaint, a slow tool),
+// yet it is NOT done — its spinner line stays on screen with a LIVE elapsed
+// timer: "✶ Cooking… (12s · thinking)" / "…(3s · esc to interrupt)". Idle looks
+// different: a past-tense summary "Worked for 12s" (no parens) or the bare input
+// box — neither carries a running "(Ns" timer. The spinner GLYPH animates through
+// many chars (✶ ✽ ✻ …), so we key off the ellipsis-then-timer text, not the glyph.
+// Without this, decide() falls through to "ready" on every silent work pause and
+// flashes «готов» — worse, the renderer paints ready instantly but buffers the
+// return to running by ~2.5s, so each false idle lingers.
+const RE_RUNNING = /(?:…|\.\.\.)\s*\(\d+\s*[smh]\b|\besc to interrupt\b/i;
+
 /** @type {Map<string, any>} id -> detector state */
 const det = new Map();
 
@@ -139,8 +151,15 @@ function decide(d, now) {
   if (now - d.lastDataAt < ACTIVE_MS) {
     return { status: 'running', detail: 'работает' };
   }
-  if (RE_WAIT.test(snapshot(d))) {
+  const snap = snapshot(d);
+  if (RE_WAIT.test(snap)) {
     return { status: 'waiting', detail: 'ждёт ответа' };
+  }
+  // Quiet, but the spinner (with its live timer) is still on screen => the agent
+  // is thinking / running a tool, not idle. Keep it "работает" instead of the
+  // false "готов" flash. See RE_RUNNING above for why we match the timer text.
+  if (RE_RUNNING.test(snap)) {
+    return { status: 'running', detail: 'работает' };
   }
 
   return { status: 'ready', detail: 'готов' };
