@@ -75,6 +75,7 @@ const ACTIVE_MS = 1200;      // bytes seen this recently => the agent is working
 const TICK_MS = 300;
 const SNAP_ROWS = 16;        // how many bottom screen rows to inspect
 const RESIZE_GRACE_MS = 700; // after a resize, ignore the repaint burst as "activity"
+const INPUT_GRACE_MS = 700;  // after a keystroke, ignore the echo/redraw as "activity"
 
 // Waiting on me: a permission / confirm prompt sits statically on screen.
 const RE_WAIT = /Esc to cancel|Do you want|Enter to confirm|❯\s*\d+\.\s|No, and tell Claude/i;
@@ -86,7 +87,7 @@ function makeDetector(cols, rows) {
   return {
     term: new HeadlessTerminal({ cols: cols || 80, rows: rows || 24, scrollback: 200, allowProposedApi: true }),
     lastDataAt: Date.now(),
-    resizeUntil: 0,
+    graceUntil: 0,
     status: '', detail: '', statusline: '', dead: false,
   };
 }
@@ -130,7 +131,7 @@ function feedDetector(id, chunk) {
   // emulator (so the screen stays correct) but don't count it as activity, so an
   // idle agent won't flash "работает" and fire a false notification.
   const now = Date.now();
-  if (now >= d.resizeUntil) d.lastDataAt = now;
+  if (now >= d.graceUntil) d.lastDataAt = now;
 }
 
 function decide(d, now) {
@@ -335,6 +336,10 @@ ipcMain.handle('session:create', (_event, opts = {}) => {
 ipcMain.on('session:input', (_event, { id, data }) => {
   const p = sessions.get(id);
   if (p) p.write(data);
+  // Your keystrokes echo back + redraw the input box — that's you typing, not the
+  // agent working. Grace it so it isn't counted as activity.
+  const d = det.get(id);
+  if (d) d.graceUntil = Date.now() + INPUT_GRACE_MS;
 });
 
 // --- IPC: the xterm was resized; keep the pty grid in sync -------------------
@@ -345,7 +350,7 @@ ipcMain.on('session:resize', (_event, { id, cols, rows }) => {
     const d = det.get(id);
     if (d && d.term) {
       try { d.term.resize(cols, rows); } catch (_) {}
-      d.resizeUntil = Date.now() + RESIZE_GRACE_MS;
+      d.graceUntil = Date.now() + RESIZE_GRACE_MS;
     }
   }
 });
@@ -366,7 +371,7 @@ ipcMain.on('session:kill', (_event, { id }) => {
 // so we briefly stop counting activity for every session.
 ipcMain.on('ui:repaint', () => {
   const until = Date.now() + RESIZE_GRACE_MS;
-  for (const d of det.values()) d.resizeUntil = until;
+  for (const d of det.values()) d.graceUntil = until;
 });
 
 // --- IPC: bring the app forward (clicked a notification) ---------------------

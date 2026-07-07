@@ -105,13 +105,33 @@ window.swarm.onData(({ id, data }) => {
 });
 
 // Inferred status from main (running / ready / waiting + detail + statusline).
+const RUN_BUFFER_MS = 2500; // delay painting "работает" so sub-buffer blips never show
+
 window.swarm.onStatus(({ id, status, detail, statusline }) => {
   const s = sessions.get(id);
   if (!s || !s.alive) return;
+
+  if (statusline != null) { s.statusline = statusline; updateCtx(s); }
+
+  if (status === 'running') {
+    if (s.runningSince == null) s.runningSince = Date.now(); // real start of this run
+    // Delay the orange paint; a blip that clears within the buffer never shows.
+    if (s.status !== 'running' && !s.runTimer) {
+      s.runTimer = setTimeout(() => {
+        s.runTimer = null;
+        if (s.alive) setStatus(id, 'running', 'работает');
+      }, RUN_BUFFER_MS);
+    }
+
+    return; // notifications only fire on the ready/waiting transitions below
+  }
+
+  // ready / waiting: cancel any pending orange, then apply immediately.
+  if (s.runTimer) { clearTimeout(s.runTimer); s.runTimer = null; }
   const prev = s.status;
   setStatus(id, status, detail);
-  if (statusline != null) { s.statusline = statusline; updateCtx(s); }
   maybeNotify(id, prev, status);
+  s.runningSince = null;
 });
 
 // Show the session's context fill on its card, parsed from the Claude statusline
@@ -132,6 +152,7 @@ window.swarm.onExit(({ id }) => {
   const s = sessions.get(id);
   if (!s) return;
   s.alive = false;
+  if (s.runTimer) { clearTimeout(s.runTimer); s.runTimer = null; }
   setStatus(id, 'dead', 'завершён');
   // Claude/the shell has exited. Leave the pane so output stays readable.
   s.term.write('\r\n\x1b[2m[session ended — close the tab]\x1b[0m\r\n');
@@ -267,6 +288,7 @@ function activate(id) {
 function closeSession(id) {
   const s = sessions.get(id);
   if (!s) return;
+  if (s.runTimer) { clearTimeout(s.runTimer); s.runTimer = null; }
   window.swarm.killSession(id);
   s.term.dispose();
   s.holder.remove();
@@ -515,18 +537,26 @@ function toggleLayout() {
 // Ping when a BACKGROUND agent needs attention: it started waiting on me, or it
 // finished (running -> ready). The agent you're actively watching in a focused
 // window is never pinged — that would just be noise.
+const MIN_RUN_MS = 3000; // a "run" shorter than this is a repaint blip, not real work
+
 function maybeNotify(id, prev, next) {
   if (!notifyEnabled || prev === next) return;
+  const s = sessions.get(id);
 
   let body = null;
-  if (next === 'waiting') body = 'ждёт ответа';
-  else if (next === 'ready' && prev === 'running') body = 'готов';
+  if (next === 'waiting') {
+    body = 'ждёт ответа';
+  } else if (next === 'ready' && prev === 'running') {
+    // Only ping "готов" if the agent actually worked for a bit — a sub-3s "run"
+    // is almost always a false blip (a focus/repaint), not a finished task.
+    if (s && s.runningSince && Date.now() - s.runningSince < MIN_RUN_MS) return;
+    body = 'готов';
+  }
   if (!body) return;
 
   // You're already looking at this one — no need to ping.
   if (id === activeId && document.hasFocus()) return;
 
-  const s = sessions.get(id);
   const name = s?.tab.querySelector('.label')?.textContent?.trim() || `claude ${id}`;
   const note = new Notification(name, { body, silent: false });
   note.onclick = () => {
