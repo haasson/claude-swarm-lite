@@ -347,10 +347,23 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .term-holder {
   position: absolute;
   inset: 0;
-  padding: 10px 6px 6px 12px;
+  /* Bottom pad >= one cell height (~15px at 13px/1.15) so the last row is never
+     clipped between fit steps: a terminal grid only changes by whole rows, so
+     while the window height sits between two row thresholds the grid overshoots
+     the content box by up to one cell — that overshoot lands in this padding
+     (inside #stage, same bg) instead of being cut off by overflow:hidden. */
+  padding: 10px 12px 16px 12px;
   display: none;
 }
 .term-holder.active { display: block; }
+
+/* xterm's viewport forces an always-on scrollbar (overflow-y: scroll in the
+   vendored xterm.css). Chromium's default is light and shows as a white stripe
+   on the right. Style it dark to match the terminal. */
+.xterm-viewport::-webkit-scrollbar { width: 9px; }
+.xterm-viewport::-webkit-scrollbar-track { background: transparent; }
+.xterm-viewport::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
+.xterm-viewport::-webkit-scrollbar-thumb:hover { background: #2f3742; }
 
 #stage:empty::after {
   content: "no sessions — press  + new session";
