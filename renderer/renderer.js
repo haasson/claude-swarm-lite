@@ -10,7 +10,6 @@ const { FitAddon } = window.FitAddon;        // UMD global from addon-fit
 
 const tabsEl     = document.getElementById('tabs');
 const stageEl    = document.getElementById('stage');
-const newBtn     = document.getElementById('new-session');
 const layoutBtn  = document.getElementById('layout-toggle');
 const cmdBtn     = document.getElementById('cmd-menu-btn');
 const cmdMenu    = document.getElementById('cmd-menu');
@@ -177,6 +176,24 @@ function makeXterm() {
   return { term, fit };
 }
 
+// Which command a new tab runs to launch Claude. Defaults to 'claude', but we
+// remember the last claude-launcher you actually type at a shell prompt (e.g.
+// switch to 'claude-corp' to change subscription/config) and reuse it for every
+// subsequent tab. Persisted across restarts. Only TYPED/PASTED commands are
+// caught: recalling one from history (↑) or editing mid-line with arrow keys
+// arrives as a redraw / resets the buffer, so it won't update this — retype it.
+let startCommand = localStorage.getItem('swarm.startCommand') || 'claude';
+// A bare claude launcher: `claude`, `claude-my`, `claude-corp`, optionally flags.
+// Restricting extra tokens to flags stops chat messages ("claude is great") from
+// being mistaken for a launch command.
+const CLAUDE_CMD_RE = /^\s*claude[\w-]*(?:\s+--?[\w-]+(?:=\S+)?)*\s*$/;
+function rememberStartCommand(line) {
+  const t = line.trim();
+  if (!CLAUDE_CMD_RE.test(t) || t === startCommand) return;
+  startCommand = t;
+  localStorage.setItem('swarm.startCommand', t);
+}
+
 async function createSession(opts = {}) {
   const { term, fit } = makeXterm();
 
@@ -184,6 +201,13 @@ async function createSession(opts = {}) {
   holder.className = 'term-holder';
   stageEl.appendChild(holder);
   term.open(holder);
+  // xterm reserves space for a scrollbar via `viewport.offsetWidth - scrollArea || 15`.
+  // On macOS the scrollbar is overlay (0 layout width), so that measures 0 and the
+  // `|| 15` fallback reserves a phantom 15px strip on the right that's just empty —
+  // FitAddon subtracts it from the width, so the grid never fills the last ~2 cols.
+  // We use an overlay scrollbar (styled thin in CSS, floats over content), so reserve
+  // nothing and let the terminal fill the width.
+  if (term._core && term._core.viewport) term._core.viewport.scrollBarWidth = 0;
   fit.fit();
 
   // A plain new session inherits the folder of the one you're currently on;
@@ -193,15 +217,30 @@ async function createSession(opts = {}) {
     cols: term.cols,
     rows: term.rows,
     cwd,
+    command: opts.command != null ? opts.command : startCommand,
   });
 
   // Wire keystrokes -> pty. Strip focus in/out reports (CSI I / CSI O): with
   // focus-reporting on, every focus change (clicking the terminal or a tab) makes
   // Claude repaint, and that burst was being read as "работает" for a moment. A
   // multi-tab pulpit doesn't need Claude to track terminal focus.
+  // Track what you type at the shell so we can remember a `claude…` launcher and
+  // reuse it for new tabs. Buffer printable chars until Enter; backspace pops;
+  // an escape sequence (arrow keys / history) resets the line — see the caveat on
+  // rememberStartCommand. inEsc persists across chunks (a seq can split).
+  let cmdBuf = '';
+  let inEsc = false;
   term.onData((data) => {
     const clean = data.replace(/\x1b\[[IO]/g, '');
-    if (clean) window.swarm.sendInput(id, clean);
+    if (!clean) return;
+    for (const ch of clean) {
+      if (inEsc) { if (/[a-zA-Z~]/.test(ch)) inEsc = false; continue; }
+      if (ch === '\x1b') { inEsc = true; cmdBuf = ''; }
+      else if (ch === '\r' || ch === '\n') { rememberStartCommand(cmdBuf); cmdBuf = ''; }
+      else if (ch === '\x7f' || ch === '\b') cmdBuf = cmdBuf.slice(0, -1);
+      else if (ch >= ' ') cmdBuf += ch;
+    }
+    window.swarm.sendInput(id, clean);
   });
 
   // Wire terminal resize -> pty resize.
@@ -393,7 +432,13 @@ function relayoutTabs() {
       s.sumDot = d;
       dots.appendChild(d);
     }
-    head.append(chev, nameEl, count, dots);
+    // Per-folder "+" — opens a new session in this folder, without collapsing it.
+    const add = document.createElement('span');
+    add.className = 'group-add';
+    add.title = 'Новая сессия в этой папке';
+    add.innerHTML = ICONS.plus;
+    add.addEventListener('click', (e) => { e.stopPropagation(); createSession({ cwd: cwd || undefined }); });
+    head.append(chev, nameEl, count, dots, add);
     head.addEventListener('click', () => toggleFolder(cwd));
 
     const inner = document.createElement('div');
@@ -741,6 +786,14 @@ tabsEl.addEventListener('drop', (e) => {
 });
 document.addEventListener('dragend', endDrag);
 
+// Swallow the browser default for any drag/drop that isn't over the tab strip
+// (those handlers do their own preventDefault + reordering). Without this, a file
+// dropped onto the terminal/stage makes Chromium navigate the page to that file
+// and render its raw source — the window would then show e.g. preload.js, not the
+// UI. main.js also blocks will-navigate as a backstop.
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('drop', (e) => e.preventDefault());
+
 // Shortcuts: ⌘T new, ⌘W close, ⌘L toggle layout, ⌘1..9 jump.
 window.addEventListener('keydown', (e) => {
   if (!(e.metaKey || e.ctrlKey)) return;
@@ -756,14 +809,12 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
-newBtn.addEventListener('click', () => createSession());
 document.getElementById('new-session-folder').addEventListener('click', createSessionInFolder);
 layoutBtn.addEventListener('click', toggleLayout);
 document.getElementById('notify-toggle').addEventListener('click', () => applyNotify(!notifyEnabled));
 cmdBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleCmdMenu(); });
 
 // Set the button icons (Lucide SVGs).
-document.querySelector('#new-session .ic').innerHTML = ICONS.plus;
 document.querySelector('#new-session-folder .ic').innerHTML = ICONS.folderPlus;
 document.querySelector('#cmd-menu-btn .ic').innerHTML = ICONS.command;
 document.querySelector('#layout-toggle .ic').innerHTML = ICONS.layout;

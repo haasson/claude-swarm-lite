@@ -200,6 +200,15 @@ function createWindow() {
 
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
+  // Harden against accidental navigation. If a file is dropped anywhere on the
+  // window that the renderer didn't preventDefault (e.g. onto the terminal/stage,
+  // not the tab strip), Chromium navigates the webContents to that file:// URL and
+  // renders its source as plain text — that's how the window could suddenly show
+  // preload.js instead of the UI. We only ever load index.html, so block any
+  // navigation and any window-open outright.
+  win.webContents.on('will-navigate', (e) => e.preventDefault());
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
   win.on('closed', () => {
     // Kill every child so we don't leak `claude` processes on quit.
     for (const p of sessions.values()) {

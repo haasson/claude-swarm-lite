@@ -136,7 +136,22 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   padding: 0 5px;
   font-size: 9px;
 }
+.group-add {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 1px;
+  cursor: pointer;
+}
+.group-add:hover { color: var(--accent); background: rgba(255, 255, 255, 0.06); }
+.group-add svg { width: 13px !important; height: 13px !important; }
 .group-dots { display: none; align-items: center; gap: 4px; margin-left: 2px; }
+/* When dots are shown (collapsed), the "+" no longer eats the auto-margin. */
+.tab-group.collapsed .group-dots { margin-left: auto; }
 .tab-group.collapsed .group-dots { display: inline-flex; }
 .tab-group.collapsed .group-tabs { display: none; }
 .sum-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ready); cursor: pointer; flex: none; }
@@ -226,9 +241,16 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 /* --- controls ------------------------------------------------------------- */
 #chrome-actions { display: flex; -webkit-app-region: no-drag; }
 .layout-rail #chrome-actions { flex-direction: column; }
-.layout-top  #chrome-actions { flex-direction: row; align-items: center; gap: 6px; padding: 0 10px 0 4px; }
+/* Top layout: 4 controls in a compact 2×2 grid. */
+.layout-top  #chrome-actions {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  align-items: stretch;
+  padding: 0 10px 0 4px;
+}
 
-#new-session, #new-session-folder, #cmd-menu-btn, #notify-toggle, #layout-toggle {
+#new-session-folder, #cmd-menu-btn, #notify-toggle, #layout-toggle {
   -webkit-app-region: no-drag;
   background: transparent;
   border: 1px dashed var(--border);
@@ -239,17 +261,15 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   cursor: pointer;
   white-space: nowrap;
 }
-.layout-rail #new-session        { margin: 8px 8px 4px; padding: 10px; text-align: center; }
-.layout-rail #new-session-folder { margin: 0 8px 4px;   padding: 10px; text-align: center; }
+.layout-rail #new-session-folder { margin: 8px 8px 4px; padding: 10px; text-align: center; }
 .layout-rail #cmd-menu-btn       { margin: 0 8px 4px;   padding: 8px;  text-align: center; }
 .layout-rail #notify-toggle      { margin: 0 8px 4px;   padding: 8px;  text-align: center; }
 .layout-rail #layout-toggle      { margin: 0 8px 8px;   padding: 8px;  text-align: center; }
-.layout-top  #new-session,
 .layout-top  #new-session-folder,
 .layout-top  #cmd-menu-btn,
 .layout-top  #notify-toggle,
 .layout-top  #layout-toggle { padding: 8px 10px; }
-#new-session:hover, #new-session-folder:hover, #cmd-menu-btn:hover, #notify-toggle:hover, #layout-toggle:hover { color: var(--text); border-color: var(--accent); }
+#new-session-folder:hover, #cmd-menu-btn:hover, #notify-toggle:hover, #layout-toggle:hover { color: var(--text); border-color: var(--accent); }
 #chrome-actions .ic { color: var(--accent); display: inline-flex; align-items: center; vertical-align: middle; }
 #chrome-actions .ic svg { width: 15px; height: 15px; }
 #chrome-actions .tx { margin-left: 7px; vertical-align: middle; }
@@ -346,13 +366,16 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 }
 .term-holder {
   position: absolute;
-  inset: 0;
-  /* Bottom pad >= one cell height (~15px at 13px/1.15) so the last row is never
-     clipped between fit steps: a terminal grid only changes by whole rows, so
-     while the window height sits between two row thresholds the grid overshoots
-     the content box by up to one cell — that overshoot lands in this padding
-     (inside #stage, same bg) instead of being cut off by overflow:hidden. */
-  padding: 10px 12px 16px 12px;
+  /* Inset via position, NOT padding. FitAddon computes rows from the holder's
+     height MINUS the terminal element's OWN padding — it never subtracts the
+     holder's padding (and with box-sizing:border-box getComputedStyle reports
+     the padded height in full), so padding here made it compute too many rows
+     and the grid overflowed the bottom, clipping the last row(s). With inset the
+     holder itself is the smaller box: fit gets the true available height.
+     The 16px bottom gap also absorbs the ≤1-cell overshoot between fit steps
+     (the grid only changes by whole rows), landing it in #stage bg, not clipped. */
+  inset: 6px;
+  padding: 0;
   display: none;
 }
 .term-holder.active { display: block; }
@@ -360,7 +383,7 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 /* xterm's viewport forces an always-on scrollbar (overflow-y: scroll in the
    vendored xterm.css). Chromium's default is light and shows as a white stripe
    on the right. Style it dark to match the terminal. */
-.xterm-viewport::-webkit-scrollbar { width: 9px; }
+.xterm-viewport::-webkit-scrollbar { width: 6px; }
 .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
 .xterm-viewport::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
 .xterm-viewport::-webkit-scrollbar-thumb:hover { background: #2f3742; }
