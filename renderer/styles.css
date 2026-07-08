@@ -256,7 +256,7 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   padding: 0 10px 0 4px;
 }
 
-#new-session-folder, #cmd-menu-btn, #notify-toggle, #settings-btn, #layout-toggle {
+#new-session-folder, #cmd-menu-btn, #settings-btn, #layout-toggle {
   -webkit-app-region: no-drag;
   background: transparent;
   border: 1px dashed var(--border);
@@ -269,15 +269,13 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 }
 .layout-rail #new-session-folder { margin: 8px 8px 4px; padding: 10px; text-align: center; }
 .layout-rail #cmd-menu-btn       { margin: 0 8px 4px;   padding: 8px;  text-align: center; }
-.layout-rail #notify-toggle      { margin: 0 8px 4px;   padding: 8px;  text-align: center; }
 .layout-rail #settings-btn       { margin: 0 8px 4px;   padding: 8px;  text-align: center; }
 .layout-rail #layout-toggle      { margin: 0 8px 8px;   padding: 8px;  text-align: center; }
 .layout-top  #new-session-folder,
 .layout-top  #cmd-menu-btn,
-.layout-top  #notify-toggle,
 .layout-top  #settings-btn,
 .layout-top  #layout-toggle { padding: 8px 10px; }
-#new-session-folder:hover, #cmd-menu-btn:hover, #notify-toggle:hover, #settings-btn:hover, #layout-toggle:hover { color: var(--text); border-color: var(--accent); }
+#new-session-folder:hover, #cmd-menu-btn:hover, #settings-btn:hover, #layout-toggle:hover { color: var(--text); border-color: var(--accent); }
 #chrome-actions .ic { color: var(--accent); display: inline-flex; align-items: center; vertical-align: middle; }
 #chrome-actions .ic svg { width: 15px; height: 15px; }
 #chrome-actions .tx { margin-left: 7px; vertical-align: middle; }
@@ -285,8 +283,6 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 /* top layout has little horizontal room — collapse buttons to icons only */
 .layout-top #chrome-actions .tx { display: none; }
 .layout-top #chrome-actions button { font-size: 14px; }
-#notify-toggle.muted { color: var(--muted); opacity: 0.65; }
-#notify-toggle.muted .ic { color: var(--muted); }
 
 /* --- quick-commands popover ----------------------------------------------- */
 .cmd-menu {
@@ -400,6 +396,7 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   line-height: 1.4;
 }
 .set-check input { margin-top: 1px; accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+.set-check-sub { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
 .set-sub { margin-left: 6px; padding-left: 16px; border-left: 1px solid var(--border); }
 .set-sub.disabled { opacity: 0.4; pointer-events: none; }
 .set-mono { font-family: var(--mono); font-size: 12px; color: var(--muted); }

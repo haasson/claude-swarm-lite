@@ -63,8 +63,6 @@ const ICONS = {
   plus: SVG('<path d="M5 12h14"/><path d="M12 5v14"/>'),
   folderPlus: SVG('<path d="M12 10v6"/><path d="M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>'),
   command: SVG('<path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/>'),
-  bell: SVG('<path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/>'),
-  bellOff: SVG('<path d="M8.7 3A6 6 0 0 1 18 8c0 2.1.4 3.8 1 5"/><path d="M20.7 17H4a1 1 0 0 1-.74-1.673C4.59 13.956 6 12.499 6 8a6.03 6.03 0 0 1 .2-1.5"/><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="m2 2 20 20"/>'),
   layout: SVG('<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>'),
   folder: SVG('<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>'),
   chevron: SVG('<path d="m6 9 6 6 6-6"/>'),
@@ -87,6 +85,9 @@ let notifyEnabled = true;   // master switch: system notifications for backgroun
 let notifySound = localStorage.getItem('swarm.notifySound') !== '0';   // play a sound
 let notifyOnReady = localStorage.getItem('swarm.notifyReady') !== '0';   // ping on «готов»
 let notifyOnWaiting = localStorage.getItem('swarm.notifyWaiting') !== '0'; // ping on «ждёт ответа»
+// Off by default: normally the tab you're actively watching in a focused window
+// isn't pinged (it'd be noise). Turn on to get pings for it too.
+let notifyActive = localStorage.getItem('swarm.notifyActive') === '1';
 let lastFolder = null;      // last folder picked, so the dialog reopens there
 const collapsedFolders = new Set(); // folders whose group is collapsed in the sidebar
 const folderOrder = [];             // cwd keys in display order (folders + loners)
@@ -459,7 +460,7 @@ function showSettingsModal(tab) {
       </div>
 
       <div class="set-panel" data-panel="notify">
-        <div class="modal-msg">Пинг, когда <b>фоновая</b> вкладка закончила или ждёт ответа. Активную вкладку в фокусе не трогаем.</div>
+        <div class="modal-msg">Пинг, когда фоновая вкладка закончила или ждёт ответа.</div>
         <label class="set-check">
           <input type="checkbox" id="set-notify-on" />
           <span class="set-check-tx"><b>Уведомления включены</b></span>
@@ -472,6 +473,11 @@ function showSettingsModal(tab) {
           <label class="set-check">
             <input type="checkbox" id="set-notify-waiting" />
             <span class="set-check-tx">Когда агент ждёт ответа — <span class="set-mono">ждёт ответа</span></span>
+          </label>
+          <label class="set-check">
+            <input type="checkbox" id="set-notify-active" />
+            <span class="set-check-tx">Пинговать и активную вкладку в фокусе
+              <span class="set-check-sub">обычно её не трогаем — вы и так на неё смотрите</span></span>
           </label>
           <label class="set-check">
             <input type="checkbox" id="set-notify-sound" />
@@ -504,10 +510,12 @@ function showSettingsModal(tab) {
   const onI = overlay.querySelector('#set-notify-on');
   const readyI = overlay.querySelector('#set-notify-ready');
   const waitingI = overlay.querySelector('#set-notify-waiting');
+  const activeI = overlay.querySelector('#set-notify-active');
   const soundI = overlay.querySelector('#set-notify-sound');
   onI.checked = notifyEnabled;
   readyI.checked = notifyOnReady;
   waitingI.checked = notifyOnWaiting;
+  activeI.checked = notifyActive;
   soundI.checked = notifySound;
   const syncNotify = () => {
     overlay.querySelector('.set-sub').classList.toggle('disabled', !onI.checked);
@@ -532,11 +540,13 @@ function showSettingsModal(tab) {
     saveLaunch();
     notifyOnReady = readyI.checked;
     notifyOnWaiting = waitingI.checked;
+    notifyActive = activeI.checked;
     notifySound = soundI.checked;
     localStorage.setItem('swarm.notifyReady', notifyOnReady ? '1' : '0');
     localStorage.setItem('swarm.notifyWaiting', notifyOnWaiting ? '1' : '0');
+    localStorage.setItem('swarm.notifyActive', notifyActive ? '1' : '0');
     localStorage.setItem('swarm.notifySound', notifySound ? '1' : '0');
-    applyNotify(onI.checked); // master switch — also syncs the 🔔 button icon/label
+    applyNotify(onI.checked); // master switch (persists swarm.notify)
     close();
   };
   const onKey = (ev) => {
@@ -834,13 +844,14 @@ function maybeNotify(id, prev, next) {
   // Silent for the first NOTIFY_GRACE_MS after launch: restoring tabs respawns
   // claude in every folder, and those startup status flips aren't worth a ping.
   if (Date.now() - appStartedAt < NOTIFY_GRACE_MS) return;
-  // You're already looking at THIS tab in a focused window — no need to ping it.
-  // But BACKGROUND tabs still ping even while the window is focused: that's the
+  // By default you're already looking at THIS tab in a focused window — no need to
+  // ping it. BACKGROUND tabs still ping even while the window is focused: that's the
   // whole point of a multi-agent pulpit — you can't watch every tab at once, so a
   // tab that finishes / starts waiting must announce itself. (An earlier version
   // muted ALL tabs whenever the window was focused, which silenced pings entirely
-  // for anyone who keeps the pulpit open — the common case. This restores them.)
-  if (id === activeId && document.hasFocus()) return;
+  // for anyone who keeps the pulpit open — the common case.) The notifyActive pref
+  // opts back in to pinging the active/focused tab too.
+  if (!notifyActive && id === activeId && document.hasFocus()) return;
   const s = sessions.get(id);
 
   let body = null;
@@ -867,10 +878,6 @@ function maybeNotify(id, prev, next) {
 function applyNotify(enabled) {
   notifyEnabled = enabled;
   localStorage.setItem('swarm.notify', enabled ? '1' : '0');
-  const btn = document.getElementById('notify-toggle');
-  btn.querySelector('.ic').innerHTML = enabled ? ICONS.bell : ICONS.bellOff;
-  btn.querySelector('.tx').textContent = enabled ? 'alerts' : 'muted';
-  btn.classList.toggle('muted', !enabled);
 }
 
 // --- quick commands ----------------------------------------------------------
@@ -1239,8 +1246,7 @@ window.addEventListener('keydown', (e) => {
 
 document.getElementById('new-session-folder').addEventListener('click', createSessionInFolder);
 layoutBtn.addEventListener('click', toggleLayout);
-document.getElementById('notify-toggle').addEventListener('click', () => applyNotify(!notifyEnabled));
-document.getElementById('settings-btn').addEventListener('click', showSettingsModal);
+document.getElementById('settings-btn').addEventListener('click', () => showSettingsModal());
 cmdBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleCmdMenu(); });
 gitBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleGitMenu(); });
 
@@ -1264,7 +1270,7 @@ async function restoreOrStart() {
 
 // Restore saved prefs, then the tabs.
 applyLayout(localStorage.getItem('swarm.layout') || 'layout-rail');
-applyNotify(localStorage.getItem('swarm.notify') !== '0'); // also sets the bell icon
+applyNotify(localStorage.getItem('swarm.notify') !== '0'); // master notifications on/off
 try { JSON.parse(localStorage.getItem('swarm.collapsed') || '[]').forEach((c) => collapsedFolders.add(c)); } catch (_) {}
 restoreOrStart();
 
