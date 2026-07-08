@@ -8,6 +8,10 @@
 const { Terminal } = window;                 // UMD global from xterm.js
 const { FitAddon } = window.FitAddon;        // UMD global from addon-fit
 
+// Tag the body with the host OS so the stylesheet can drop mac-only chrome
+// (the empty gaps reserved for the traffic lights) on Windows/Linux.
+document.body.classList.add('platform-' + (window.swarm.platform || 'unknown'));
+
 const tabsEl     = document.getElementById('tabs');
 const stageEl    = document.getElementById('stage');
 const layoutBtn  = document.getElementById('layout-toggle');
@@ -751,6 +755,69 @@ function confirmModal(message, okLabel = 'Выполнить') {
     overlay.querySelector('.modal-ok').focus();
   });
 }
+
+// Built-in help. Static, author-trusted HTML (no user input) — focuses on the
+// gotchas: what a tab really is, what the statuses mean, and — the big one — that
+// the app runs whatever `claude` your environment resolves to, so account/model
+// selection lives in your shell, not here.
+const HELP_HTML = `
+  <h3>Claude Swarm Lite</h3>
+  <p>Пульт для нескольких сессий Claude Code разом. Каждая вкладка — <b>настоящий процесс <code>claude</code></b> в твоём login-шелле; аппа его только показывает и переключает. Токенов она не хранит.</p>
+
+  <h4>Статусы вкладок</h4>
+  <ul>
+    <li><b>🔵 работает</b> — агент думает/генерит (идёт поток вывода).</li>
+    <li><b>🟡 ждёт ответа</b> — на экране вопрос или запрос разрешения, нужен твой ввод.</li>
+    <li><b>⚪ готов</b> — простаивает у пустого промпта.</li>
+    <li><b>⚫ завершена</b> — процесс закрыт.</li>
+  </ul>
+
+  <h4>Горячие клавиши</h4>
+  <ul>
+    <li><code>⌘T</code> — новая вкладка (папка по умолчанию) · <code>⌘O</code> — с выбором папки</li>
+    <li><code>⌘K</code> — палитра команд · <code>⌘L</code> — раскладка · <code>⌘W</code> — закрыть вкладку</li>
+    <li><code>⌘1…9</code> — прыжок на вкладку · <code>⌘/</code> — эта справка</li>
+  </ul>
+
+  <h4>Какой аккаунт / модель запускается</h4>
+  <p>Аппа наследует окружение от того, <b>кто её запустил</b>, и просто печатает <code>claude</code>. Значит выбор аккаунта живёт в твоём шелле, не в аппе:</p>
+  <ul>
+    <li><b>Надёжно:</b> пропиши нужные <code>export</code> в <code>~/.zshrc</code>. Каждая вкладка поднимает login-шелл, сорсит <code>.zshrc</code> и подхватывает их — даже при запуске из Finder.</li>
+    <li>Запуск из Finder без настроек в <code>.zshrc</code> = голое окружение → дефолтный <code>claude</code> (может быть разлогинен).</li>
+    <li>Правки <code>.zshrc</code> подхватывают <b>новые</b> вкладки; уже открытые — нет.</li>
+  </ul>
+
+  <h4>Другие модели (GLM, DeepSeek…)</h4>
+  <p>Если модель подключена через <code>ANTHROPIC_BASE_URL</code> — это <b>тот же Claude Code</b>, просто другой бэкенд. Всё работает без изменений: команды (<code>/compact</code>, <code>/clear</code>, <code>/usage</code>) — это фичи CLI, а не модели. Токен и base URL держи в <code>~/.zshrc</code>, <b>не в аппе</b>.</p>
+
+  <h4>Запоминание команды запуска</h4>
+  <p>Вбей в терминал вкладки нужный лончер <b>руками</b> (<code>claude-my</code>, <code>claude-glm</code>, <code>glm</code>…) — аппа запомнит его и будет открывать новые вкладки им (переживает перезапуск). Ловится только набранное/вставленное: команда, поднятая из истории стрелкой ↑, не запомнится — набери разок целиком.</p>
+`;
+
+function openHelp() {
+  if (document.querySelector('.modal-overlay .modal.help')) return; // already open
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal help">
+      <div class="help-body">${HELP_HTML}</div>
+      <div class="modal-actions"><button class="modal-ok help-close">Понятно</button></div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const close = () => {
+    document.removeEventListener('keydown', onKey, true);
+    overlay.remove();
+  };
+  const onKey = (ev) => { if (ev.key === 'Escape') { ev.preventDefault(); close(); } };
+  overlay.querySelector('.help-close').addEventListener('click', close);
+  overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(); });
+  document.addEventListener('keydown', onKey, true);
+  overlay.querySelector('.help-close').focus();
+}
+
+// Opened from the native "Справка" app-menu item (⌘/), handled in main.
+window.swarm.onOpenHelp(openHelp);
 
 // Refit the active terminal when the window changes size.
 window.addEventListener('resize', () => {

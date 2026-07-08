@@ -18,11 +18,13 @@
 //   just type `claude` into it. Bonus: auth "just works" because it's the same
 //   environment you log in from.
 
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
-const pty = require('node-pty');
+// Prebuilt fork of node-pty: ships ready-made binaries for Windows/mac/Linux,
+// so users don't need a C++ compiler + Python to install. Same API as node-pty.
+const pty = require('@homebridge/node-pty-prebuilt-multiarch');
 
 /** @type {BrowserWindow | null} */
 let win = null;
@@ -204,7 +206,9 @@ function createWindow() {
     width: 1200,
     height: 780,
     backgroundColor: '#0d0f12',
-    titleBarStyle: 'hiddenInset', // native mac traffic lights, no chrome bar
+    // Frameless-with-traffic-lights is a macOS affordance. On Windows/Linux we
+    // keep the native window frame (min/max/close), so only opt in on darwin.
+    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true, // renderer cannot touch Node directly
@@ -426,7 +430,31 @@ ipcMain.on('app:focus', () => {
   app.focus({ steal: true });
 });
 
-app.whenReady().then(createWindow);
+// Native app menu. A custom menu REPLACES Electron's default, so we must re-add
+// the standard roles (Edit gives ⌘C/⌘V/⌘A — critical in a terminal; View gives
+// reload/devtools; Window gives minimize/close), then append our own "Справка".
+// The Help item just asks the renderer to open the in-app help overlay.
+function buildMenu() {
+  const template = [
+    { role: 'appMenu' },
+    { role: 'editMenu' },
+    { role: 'viewMenu' },
+    { role: 'windowMenu' },
+    {
+      label: 'Справка',
+      submenu: [
+        { label: 'Как пользоваться', accelerator: 'CmdOrCtrl+/', click: () => safeSend('open-help') },
+      ],
+    },
+  ];
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+app.whenReady().then(() => {
+  buildMenu();
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();

@@ -6,6 +6,10 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('swarm', {
+  // The host OS ('darwin' | 'win32' | 'linux'), so the UI can drop mac-only
+  // chrome (traffic-light gaps) on Windows/Linux.
+  platform: process.platform,
+
   // Open a native folder picker (opens at defaultPath if given).
   // Returns the chosen path, or null if cancelled.
   pickFolder: (defaultPath) => ipcRenderer.invoke('dialog:pickFolder', defaultPath),
@@ -52,5 +56,12 @@ contextBridge.exposeInMainWorld('swarm', {
     const handler = (_e, payload) => cb(payload);
     ipcRenderer.on('session:status', handler);
     return () => ipcRenderer.removeListener('session:status', handler);
+  },
+
+  // Native "Справка" menu item (main) asks the renderer to open the help overlay.
+  onOpenHelp: (cb) => {
+    const handler = () => cb();
+    ipcRenderer.on('open-help', handler);
+    return () => ipcRenderer.removeListener('open-help', handler);
   },
 });

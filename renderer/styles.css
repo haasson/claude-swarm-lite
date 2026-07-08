@@ -55,11 +55,17 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   flex-direction: row;
   align-items: stretch;
   border-bottom: 1px solid var(--border);
-  padding-left: 78px; /* clear the mac traffic lights */
 }
+/* Reserve the left gap only on macOS, where the window's traffic lights sit
+   inside the content (titleBarStyle: hiddenInset). Windows/Linux use a native
+   frame, so no gap is needed. */
+.platform-darwin .layout-top #chrome { padding-left: 78px; }
 
 #brand { display: flex; flex-direction: column; justify-content: center; }
-.layout-rail #brand { padding: 34px 16px 14px; border-bottom: 1px solid var(--border); }
+/* 16px top on Windows/Linux; macOS bumps it to 34px to clear the traffic
+   lights that overlap the sidebar's top-left corner. */
+.layout-rail #brand { padding: 16px 16px 14px; border-bottom: 1px solid var(--border); }
+.platform-darwin .layout-rail #brand { padding-top: 34px; }
 /* In top layout the traffic-light gap (#chrome padding-left) is the left margin;
    a brand block there just looks like awkward empty space, so drop it. */
 .layout-top  #brand { display: none; }
@@ -357,6 +363,31 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .modal-cancel:hover { border-color: var(--muted); }
 .modal-ok { border-color: var(--danger); color: var(--danger); }
 .modal-ok:hover { background: color-mix(in srgb, var(--danger) 16%, var(--panel-2)); }
+
+/* Help modal — wider, scrollable, neutral (not the destructive-red confirm). */
+.modal.help { width: min(640px, 92vw); padding: 0; }
+.help-body {
+  max-height: min(72vh, 620px);
+  overflow-y: auto;
+  padding: 22px 24px 8px;
+}
+.help-body h3 { color: var(--text); font-size: 16px; margin: 0 0 6px; }
+.help-body h4 { color: var(--accent); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; margin: 18px 0 7px; }
+.help-body p { color: var(--text); font-size: 13px; line-height: 1.55; margin: 0 0 8px; }
+.help-body ul { margin: 0 0 8px; padding-left: 18px; }
+.help-body li { color: var(--text); font-size: 13px; line-height: 1.6; }
+.help-body b { color: var(--text); }
+.help-body code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.modal.help .modal-actions { padding: 12px 20px 16px; border-top: 1px solid var(--border); }
+.modal.help .help-close { border-color: var(--border); color: var(--text); }
+.modal.help .help-close:hover { border-color: var(--accent); }
 
 /* --- terminal stage ------------------------------------------------------- */
 #stage {
