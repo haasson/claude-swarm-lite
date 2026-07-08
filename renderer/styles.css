@@ -59,13 +59,13 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 /* Reserve the left gap only on macOS, where the window's traffic lights sit
    inside the content (titleBarStyle: hiddenInset). Windows/Linux use a native
    frame, so no gap is needed. */
-.platform-darwin .layout-top #chrome { padding-left: 78px; }
+.platform-darwin.layout-top #chrome { padding-left: 78px; }
 
 #brand { display: flex; flex-direction: column; justify-content: center; }
 /* 16px top on Windows/Linux; macOS bumps it to 34px to clear the traffic
    lights that overlap the sidebar's top-left corner. */
 .layout-rail #brand { padding: 16px 16px 14px; border-bottom: 1px solid var(--border); }
-.platform-darwin .layout-rail #brand { padding-top: 34px; }
+.platform-darwin.layout-rail #brand { padding-top: 34px; }
 /* In top layout the traffic-light gap (#chrome padding-left) is the left margin;
    a brand block there just looks like awkward empty space, so drop it. */
 .layout-top  #brand { display: none; }
