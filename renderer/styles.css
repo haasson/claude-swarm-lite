@@ -247,7 +247,7 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 /* --- controls ------------------------------------------------------------- */
 #chrome-actions { display: flex; -webkit-app-region: no-drag; }
 .layout-rail #chrome-actions { flex-direction: column; }
-/* Top layout: 4 controls in a compact 2×2 grid. */
+/* Top layout: controls in a compact 2-col grid. */
 .layout-top  #chrome-actions {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -256,7 +256,7 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   padding: 0 10px 0 4px;
 }
 
-#new-session-folder, #cmd-menu-btn, #notify-toggle, #layout-toggle {
+#new-session-folder, #cmd-menu-btn, #notify-toggle, #settings-btn, #layout-toggle {
   -webkit-app-region: no-drag;
   background: transparent;
   border: 1px dashed var(--border);
@@ -270,12 +270,14 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .layout-rail #new-session-folder { margin: 8px 8px 4px; padding: 10px; text-align: center; }
 .layout-rail #cmd-menu-btn       { margin: 0 8px 4px;   padding: 8px;  text-align: center; }
 .layout-rail #notify-toggle      { margin: 0 8px 4px;   padding: 8px;  text-align: center; }
+.layout-rail #settings-btn       { margin: 0 8px 4px;   padding: 8px;  text-align: center; }
 .layout-rail #layout-toggle      { margin: 0 8px 8px;   padding: 8px;  text-align: center; }
 .layout-top  #new-session-folder,
 .layout-top  #cmd-menu-btn,
 .layout-top  #notify-toggle,
+.layout-top  #settings-btn,
 .layout-top  #layout-toggle { padding: 8px 10px; }
-#new-session-folder:hover, #cmd-menu-btn:hover, #notify-toggle:hover, #layout-toggle:hover { color: var(--text); border-color: var(--accent); }
+#new-session-folder:hover, #cmd-menu-btn:hover, #notify-toggle:hover, #settings-btn:hover, #layout-toggle:hover { color: var(--text); border-color: var(--accent); }
 #chrome-actions .ic { color: var(--accent); display: inline-flex; align-items: center; vertical-align: middle; }
 #chrome-actions .ic svg { width: 15px; height: 15px; }
 #chrome-actions .tx { margin-left: 7px; vertical-align: middle; }
@@ -369,8 +371,38 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .modal-ok { border-color: var(--danger); color: var(--danger); }
 .modal-ok:hover { background: color-mix(in srgb, var(--danger) 16%, var(--panel-2)); }
 
-/* Settings modal — launch command + flags form. */
+/* Settings modal — tabbed: launch config + notification prefs. */
 .modal.settings { width: min(460px, 92vw); }
+.set-tabs { display: flex; gap: 4px; margin: -4px 0 16px; border-bottom: 1px solid var(--border); }
+.set-tab {
+  -webkit-app-region: no-drag;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 6px 10px 8px;
+  margin-bottom: -1px;
+  cursor: pointer;
+}
+.set-tab:hover { color: var(--text); }
+.set-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.set-panel.hidden { display: none; }
+.set-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 7px 0;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.set-check input { margin-top: 1px; accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+.set-sub { margin-left: 6px; padding-left: 16px; border-left: 1px solid var(--border); }
+.set-sub.disabled { opacity: 0.4; pointer-events: none; }
+.set-mono { font-family: var(--mono); font-size: 12px; color: var(--muted); }
 .set-field { display: block; margin-bottom: 16px; }
 .set-label { display: block; color: var(--text); font-size: 12px; font-weight: 600; margin-bottom: 6px; }
 .set-input {

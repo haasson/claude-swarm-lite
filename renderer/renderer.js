@@ -82,7 +82,11 @@ function setFolderLabel(el, name) {
 const sessions = new Map();
 let activeId = null;
 let renaming = false;       // true while a card title is being edited (don't steal focus)
-let notifyEnabled = true;   // system notifications when a background agent needs attention
+let notifyEnabled = true;   // master switch: system notifications for background agents
+// Finer notification prefs (all default on), editable in Settings → Уведомления.
+let notifySound = localStorage.getItem('swarm.notifySound') !== '0';   // play a sound
+let notifyOnReady = localStorage.getItem('swarm.notifyReady') !== '0';   // ping on «готов»
+let notifyOnWaiting = localStorage.getItem('swarm.notifyWaiting') !== '0'; // ping on «ждёт ответа»
 let lastFolder = null;      // last folder picked, so the dialog reopens there
 const collapsedFolders = new Set(); // folders whose group is collapsed in the sidebar
 const folderOrder = [];             // cwd keys in display order (folders + loners)
@@ -423,37 +427,67 @@ function showGitLoginModal() {
 }
 
 // --- settings (⚙) ------------------------------------------------------------
-// Launch config for NEW tabs: which agent CLI + extra flags, applied globally.
-// See loadLaunch/launchCommand/saveLaunch for the model. Open tabs are untouched.
-function showSettingsModal() {
+// Tabbed modal. "Запуск": which agent CLI + flags a NEW tab runs (global; open
+// tabs untouched — see loadLaunch/launchCommand/saveLaunch). "Уведомления": the
+// system-notification prefs (mirrors the 🔔 quick-mute; see maybeNotify).
+function showSettingsModal(tab) {
   if (document.querySelector('.modal-overlay .modal.settings')) return; // already open
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
     <div class="modal settings">
-      <div class="modal-title">Настройки запуска</div>
-      <div class="modal-msg">
-        Применяется ко всем <b>новым</b> вкладкам. Уже открытые сессии не трогаем.
+      <div class="set-tabs" role="tablist">
+        <button class="set-tab" data-tab="launch">Запуск</button>
+        <button class="set-tab" data-tab="notify">Уведомления</button>
       </div>
-      <label class="set-field">
-        <span class="set-label">Команда запуска</span>
-        <input class="set-input" id="set-cmd" type="text" spellcheck="false"
-               autocapitalize="off" autocorrect="off" placeholder="claude" />
-        <span class="set-hint">Какой агент запускать: <code>claude</code>, <code>cld</code>, <code>claude-glm</code>…</span>
-      </label>
-      <label class="set-field">
-        <span class="set-label">Доп. флаги</span>
-        <input class="set-input" id="set-flags" type="text" spellcheck="false"
-               autocapitalize="off" autocorrect="off" placeholder="напр. --dangerously-skip-permissions" />
-        <span class="set-hint">Дописываются к команде: <code>--dangerously-skip-permissions</code>, <code>--resume</code>, <code>--model sonnet</code>…</span>
-      </label>
-      <div class="set-preview">Новая вкладка запустит: <code class="set-preview-cmd"></code></div>
+
+      <div class="set-panel" data-panel="launch">
+        <div class="modal-msg">Применяется ко всем <b>новым</b> вкладкам. Уже открытые сессии не трогаем.</div>
+        <label class="set-field">
+          <span class="set-label">Команда запуска</span>
+          <input class="set-input" id="set-cmd" type="text" spellcheck="false"
+                 autocapitalize="off" autocorrect="off" placeholder="claude" />
+          <span class="set-hint">Какой агент запускать: <code>claude</code>, <code>cld</code>, <code>claude-glm</code>…</span>
+        </label>
+        <label class="set-field">
+          <span class="set-label">Доп. флаги</span>
+          <input class="set-input" id="set-flags" type="text" spellcheck="false"
+                 autocapitalize="off" autocorrect="off" placeholder="напр. --dangerously-skip-permissions" />
+          <span class="set-hint">Дописываются к команде: <code>--dangerously-skip-permissions</code>, <code>--resume</code>, <code>--model sonnet</code>…</span>
+        </label>
+        <div class="set-preview">Новая вкладка запустит: <code class="set-preview-cmd"></code></div>
+      </div>
+
+      <div class="set-panel" data-panel="notify">
+        <div class="modal-msg">Пинг, когда <b>фоновая</b> вкладка закончила или ждёт ответа. Активную вкладку в фокусе не трогаем.</div>
+        <label class="set-check">
+          <input type="checkbox" id="set-notify-on" />
+          <span class="set-check-tx"><b>Уведомления включены</b></span>
+        </label>
+        <div class="set-sub">
+          <label class="set-check">
+            <input type="checkbox" id="set-notify-ready" />
+            <span class="set-check-tx">Когда агент закончил — <span class="set-mono">готов</span></span>
+          </label>
+          <label class="set-check">
+            <input type="checkbox" id="set-notify-waiting" />
+            <span class="set-check-tx">Когда агент ждёт ответа — <span class="set-mono">ждёт ответа</span></span>
+          </label>
+          <label class="set-check">
+            <input type="checkbox" id="set-notify-sound" />
+            <span class="set-check-tx">Звук</span>
+          </label>
+        </div>
+      </div>
+
       <div class="modal-actions">
         <button class="modal-cancel">Отмена</button>
         <button class="modal-ok neutral">Сохранить</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
+
+  // Launch panel wiring + live preview.
   const cmdI = overlay.querySelector('#set-cmd');
   const flagsI = overlay.querySelector('#set-flags');
   const preview = overlay.querySelector('.set-preview-cmd');
@@ -466,10 +500,43 @@ function showSettingsModal() {
   cmdI.addEventListener('input', renderPreview);
   flagsI.addEventListener('input', renderPreview);
 
+  // Notify panel wiring: the sub-options grey out when the master is off.
+  const onI = overlay.querySelector('#set-notify-on');
+  const readyI = overlay.querySelector('#set-notify-ready');
+  const waitingI = overlay.querySelector('#set-notify-waiting');
+  const soundI = overlay.querySelector('#set-notify-sound');
+  onI.checked = notifyEnabled;
+  readyI.checked = notifyOnReady;
+  waitingI.checked = notifyOnWaiting;
+  soundI.checked = notifySound;
+  const syncNotify = () => {
+    overlay.querySelector('.set-sub').classList.toggle('disabled', !onI.checked);
+  };
+  syncNotify();
+  onI.addEventListener('change', syncNotify);
+
+  // Tab switching.
+  const panels = overlay.querySelectorAll('.set-panel');
+  const tabs = overlay.querySelectorAll('.set-tab');
+  const showTab = (name) => {
+    tabs.forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
+    panels.forEach((p) => p.classList.toggle('hidden', p.dataset.panel !== name));
+    if (name === 'launch') { cmdI.focus(); cmdI.select(); }
+  };
+  tabs.forEach((t) => t.addEventListener('click', () => showTab(t.dataset.tab)));
+  showTab(tab === 'notify' ? 'notify' : 'launch');
+
   const close = () => { document.removeEventListener('keydown', onKey, true); overlay.remove(); };
   const save = () => {
     launch = { cmd: cmdI.value.trim() || 'claude', flags: flagsI.value.trim() };
     saveLaunch();
+    notifyOnReady = readyI.checked;
+    notifyOnWaiting = waitingI.checked;
+    notifySound = soundI.checked;
+    localStorage.setItem('swarm.notifyReady', notifyOnReady ? '1' : '0');
+    localStorage.setItem('swarm.notifyWaiting', notifyOnWaiting ? '1' : '0');
+    localStorage.setItem('swarm.notifySound', notifySound ? '1' : '0');
+    applyNotify(onI.checked); // master switch — also syncs the 🔔 button icon/label
     close();
   };
   const onKey = (ev) => {
@@ -480,8 +547,6 @@ function showSettingsModal() {
   overlay.querySelector('.modal-ok').addEventListener('click', save);
   overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(); });
   document.addEventListener('keydown', onKey, true);
-  cmdI.focus();
-  cmdI.select();
 }
 
 function activate(id) {
@@ -780,8 +845,10 @@ function maybeNotify(id, prev, next) {
 
   let body = null;
   if (next === 'waiting') {
+    if (!notifyOnWaiting) return;
     body = 'ждёт ответа';
   } else if (next === 'ready' && prev === 'running') {
+    if (!notifyOnReady) return;
     // Only ping "готов" if the agent actually worked for a bit — a sub-3s "run"
     // is almost always a false blip (a focus/repaint), not a finished task.
     if (s && s.runningSince && Date.now() - s.runningSince < MIN_RUN_MS) return;
@@ -790,7 +857,7 @@ function maybeNotify(id, prev, next) {
   if (!body) return;
 
   const name = s?.tab.querySelector('.label')?.textContent?.trim() || `claude ${id}`;
-  const note = new Notification(name, { body, silent: false });
+  const note = new Notification(name, { body, silent: !notifySound });
   note.onclick = () => {
     window.swarm.focusApp();
     activate(id);
