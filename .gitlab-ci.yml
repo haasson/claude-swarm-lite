@@ -1,0 +1,103 @@
+# CI for claude-swarm-lite.
+#
+# Split of labour (GitLab has only Linux runners here):
+#   • macOS .dmg — built LOCALLY by `npm run release` and uploaded to the package
+#     registry before the tag is pushed. Not built here (no macOS runner).
+#   • Windows .exe — built HERE on a Linux runner via Wine (electron-builder can
+#     package nsis on Linux, and node-pty ships a prebuilt win32 binary — so no
+#     compiler is needed, we just fetch it).
+#   • GitLab Release — created here on a version tag, linking both binaries.
+#
+# Trigger: pushing a tag like v1.2.3 (the release script does this). Regular
+# pushes / MRs only run the cheap `validate` job.
+#
+# Runner: jobs target the `ci` tag (the shared "infra/ci" runner). Change the
+# `tags:` below if you want a different runner.
+
+stages:
+  - validate
+  - build
+  - release
+
+variables:
+  ELECTRON_VERSION: "29.4.6"
+  # generic-package download base: .../packages/generic/apps/<version>/<file>
+  PKG_BASE: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/apps"
+
+# Syntax-check the JS on every MR and every push to the default branch.
+validate:
+  stage: validate
+  image: node:20-alpine
+  tags: [ci]
+  script:
+    - node --check main.js
+    - node --check preload.js
+    - node --check git.js
+    - node --check renderer/renderer.js
+    - node --check scripts/release.mjs
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+# On a version tag: expose the bare version (0.1.2) to later jobs via dotenv,
+# so the release-links (which can't do bash ${VAR#v}) get a clean $VERSION.
+prepare:
+  stage: validate
+  image: alpine
+  tags: [ci]
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
+  script:
+    - 'echo "VERSION=${CI_COMMIT_TAG#v}" > build.env'
+    - cat build.env
+  artifacts:
+    reports:
+      dotenv: build.env
+
+# Build the Windows installer on Linux via Wine, upload it to the package registry.
+build_windows:
+  stage: build
+  image: electronuserland/builder:wine
+  tags: [ci]
+  needs: [prepare]
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
+  # A Windows-build hiccup must never block the macOS release below.
+  allow_failure: true
+  variables:
+    # We don't run Electron here, only package it — skip the dev-binary download.
+    ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+  script:
+    - npm ci --no-audit --no-fund
+    # host npm ci fetched the linux node-pty; grab the win32 build for packaging
+    - cd node_modules/@homebridge/node-pty-prebuilt-multiarch
+    - npx --yes prebuild-install --runtime electron --target "$ELECTRON_VERSION" --platform win32 --arch x64 --dist-url https://electronjs.org/headers
+    - cd "$CI_PROJECT_DIR"
+    - npx --yes electron-builder --win --x64
+    - ls -la dist/
+    - EXE="claude-swarm-lite-${VERSION}-x64.exe"
+    - 'curl --fail -sS --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "dist/${EXE}" "${PKG_BASE}/${VERSION}/${EXE}"'
+    - echo "uploaded ${EXE}"
+
+# Create the GitLab Release linking the macOS .dmg (uploaded locally) and the
+# Windows .exe (uploaded above). Description = the annotated tag message.
+release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  tags: [ci]
+  needs: [prepare, build_windows]
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
+  script:
+    - echo "Creating release for $CI_COMMIT_TAG (v$VERSION)"
+  release:
+    tag_name: '$CI_COMMIT_TAG'
+    description: '$CI_COMMIT_TAG_MESSAGE'
+    assets:
+      links:
+        - name: 'macOS · Apple Silicon (.dmg)'
+          url: '${PKG_BASE}/${VERSION}/claude-swarm-lite-${VERSION}-arm64.dmg'
+          link_type: package
+        - name: 'Windows (.exe)'
+          url: '${PKG_BASE}/${VERSION}/claude-swarm-lite-${VERSION}-x64.exe'
+          link_type: package
