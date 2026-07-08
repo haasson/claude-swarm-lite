@@ -23,11 +23,10 @@
     <!-- Sessions, grouped by working folder (built in JS). -->
     <div id="tabs"></div>
 
+    <!-- The one primary action that stays next to the sessions it creates. The
+         rest (commands / settings / layout) live in the bottom bar. -->
     <div id="chrome-actions">
-      <button id="new-session-folder" title="Новая сессия в папке… (⌘O)"><span class="ic">📁</span><span class="tx">в папке…</span></button>
-      <button id="cmd-menu-btn" title="Быстрые команды (⌘K)"><span class="ic">☰</span><span class="tx">команды</span></button>
-      <button id="settings-btn" title="Настройки (⌘,)"><span class="ic">⚙</span><span class="tx">настройки</span></button>
-      <button id="layout-toggle" title="Сменить раскладку (⌘L)"><span class="ic">⇄</span><span class="tx">layout</span></button>
+      <button id="new-session-folder" title="Новая сессия в папке… (⌘O)"><span class="ic">＋</span><span class="tx">новая сессия</span></button>
     </div>
   </div>
 
@@ -43,6 +42,12 @@
       <span class="git-track"></span>
     </button>
     <span id="git-msg" class="git-msg"></span>
+    <!-- Action icons (VS Code style), pinned to the right of the bar. -->
+    <div id="bar-actions">
+      <button id="cmd-menu-btn" title="Быстрые команды (⌘K)"><span class="ic">☰</span><span class="tx">команды</span></button>
+      <button id="settings-btn" title="Настройки (⌘,)"><span class="ic">⚙</span><span class="tx">настройки</span></button>
+      <button id="layout-toggle" title="Сменить раскладку (⌘L)"><span class="ic">⇄</span><span class="tx">layout</span></button>
+    </div>
   </footer>
 
   <!-- Branch popover (built in JS, reuses .cmd-menu look, anchored to #git-branch). -->

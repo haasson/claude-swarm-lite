@@ -245,19 +245,16 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .group-head[draggable="true"]:active, .tab[draggable="true"]:active { cursor: grabbing; }
 
 /* --- controls ------------------------------------------------------------- */
+/* "+ new session" — the one primary action, kept right under the session list
+   (rail) or at the end of the card row (top). Everything else moved to the bar. */
 #chrome-actions { display: flex; -webkit-app-region: no-drag; }
-.layout-rail #chrome-actions { flex-direction: column; }
-/* Top layout: controls in a compact 2-col grid. */
-.layout-top  #chrome-actions {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 6px;
-  align-items: stretch;
-  padding: 0 10px 0 4px;
-}
-
-#new-session-folder, #cmd-menu-btn, #settings-btn, #layout-toggle {
+.layout-rail #chrome-actions { flex-direction: column; padding: 4px 8px 8px; }
+.layout-top  #chrome-actions { align-items: center; padding: 0 10px 0 4px; }
+#new-session-folder {
   -webkit-app-region: no-drag;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: transparent;
   border: 1px dashed var(--border);
   border-radius: 6px;
@@ -266,23 +263,31 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   font-size: 12px;
   cursor: pointer;
   white-space: nowrap;
+  padding: 9px 10px;
 }
-.layout-rail #new-session-folder { margin: 8px 8px 4px; padding: 10px; text-align: center; }
-.layout-rail #cmd-menu-btn       { margin: 0 8px 4px;   padding: 8px;  text-align: center; }
-.layout-rail #settings-btn       { margin: 0 8px 4px;   padding: 8px;  text-align: center; }
-.layout-rail #layout-toggle      { margin: 0 8px 8px;   padding: 8px;  text-align: center; }
-.layout-top  #new-session-folder,
-.layout-top  #cmd-menu-btn,
-.layout-top  #settings-btn,
-.layout-top  #layout-toggle { padding: 8px 10px; }
-#new-session-folder:hover, #cmd-menu-btn:hover, #settings-btn:hover, #layout-toggle:hover { color: var(--text); border-color: var(--accent); }
-#chrome-actions .ic { color: var(--accent); display: inline-flex; align-items: center; vertical-align: middle; }
-#chrome-actions .ic svg { width: 15px; height: 15px; }
-#chrome-actions .tx { margin-left: 7px; vertical-align: middle; }
-#chrome-actions button { display: inline-flex; align-items: center; justify-content: center; }
-/* top layout has little horizontal room — collapse buttons to icons only */
-.layout-top #chrome-actions .tx { display: none; }
-.layout-top #chrome-actions button { font-size: 14px; }
+.layout-top #new-session-folder { padding: 8px 12px; }
+#new-session-folder:hover { color: var(--text); border-color: var(--accent); }
+#new-session-folder .ic { color: var(--accent); display: inline-flex; align-items: center; }
+#new-session-folder .ic svg { width: 15px; height: 15px; }
+#new-session-folder .tx { margin-left: 7px; }
+
+/* Bottom-bar action icons (commands / settings / layout), VS Code style. */
+#bar-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; -webkit-app-region: no-drag; }
+#bar-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  padding: 3px 6px;
+  color: var(--muted);
+  cursor: pointer;
+}
+#bar-actions button:hover { color: var(--text); background: var(--panel-2); }
+#bar-actions .ic { display: inline-flex; }
+#bar-actions .ic svg { width: 14px; height: 14px; }
+#bar-actions .tx { display: none; } /* icon-only in the bar; the title attr is the tooltip */
 
 /* --- quick-commands popover ----------------------------------------------- */
 .cmd-menu {
@@ -500,8 +505,8 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 24px;
-  padding: 0 10px;
+  height: 28px;
+  padding: 0 6px 0 10px;
   background: var(--panel);
   border-top: 1px solid var(--border);
   font-size: 11px;
@@ -526,5 +531,5 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .git-branch .git-ic { display: inline-flex; width: 13px; height: 13px; }
 .git-branch .git-ic svg { width: 13px; height: 13px; }
 .git-branch .git-track { color: var(--accent); letter-spacing: 0.02em; }
-.git-msg { color: var(--waiting); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-msg { color: var(--waiting); font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 

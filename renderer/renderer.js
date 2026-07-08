@@ -61,7 +61,6 @@ const SVG = (body) =>
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
 const ICONS = {
   plus: SVG('<path d="M5 12h14"/><path d="M12 5v14"/>'),
-  folderPlus: SVG('<path d="M12 10v6"/><path d="M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>'),
   command: SVG('<path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/>'),
   layout: SVG('<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>'),
   folder: SVG('<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>'),
@@ -967,7 +966,7 @@ function closeCmdMenu() {
 }
 
 function outsideCloseCmd(e) {
-  if (!cmdMenu.contains(e.target) && e.target !== cmdBtn) closeCmdMenu();
+  if (!cmdMenu.contains(e.target) && !cmdBtn.contains(e.target)) closeCmdMenu();
 }
 
 function toggleCmdMenu() {
@@ -1251,7 +1250,7 @@ cmdBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleCmdMenu(); 
 gitBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleGitMenu(); });
 
 // Set the button icons (Lucide SVGs).
-document.querySelector('#new-session-folder .ic').innerHTML = ICONS.folderPlus;
+document.querySelector('#new-session-folder .ic').innerHTML = ICONS.plus;
 document.querySelector('#cmd-menu-btn .ic').innerHTML = ICONS.command;
 document.querySelector('#layout-toggle .ic').innerHTML = ICONS.layout;
 document.querySelector('#settings-btn .ic').innerHTML = ICONS.gear;
