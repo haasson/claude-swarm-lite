@@ -16,6 +16,7 @@
     "npmRebuild": false,
     "files": [
       "main.js",
+      "git.js",
       "preload.js",
       "renderer/**/*",
       "package.json"

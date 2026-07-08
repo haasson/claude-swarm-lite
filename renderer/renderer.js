@@ -17,6 +17,12 @@ const stageEl    = document.getElementById('stage');
 const layoutBtn  = document.getElementById('layout-toggle');
 const cmdBtn     = document.getElementById('cmd-menu-btn');
 const cmdMenu    = document.getElementById('cmd-menu');
+const gitBtn      = document.getElementById('git-branch');
+const gitMenu     = document.getElementById('git-menu');
+const gitMsgEl    = document.getElementById('git-msg');
+
+let gitInfo = null;      // last git:info for the ACTIVE folder (null until first fetch)
+let gitMsgTimer = null;  // auto-clear timer for the transient error plaque
 
 // Built-in commands sent into the ACTIVE session on click, grouped by purpose.
 // Item flags (all optional):
@@ -62,6 +68,7 @@ const ICONS = {
   layout: SVG('<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>'),
   folder: SVG('<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>'),
   chevron: SVG('<path d="m6 9 6 6 6-6"/>'),
+  branch: SVG('<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>'),
 };
 
 // Put an icon + a folder name into an element (name via text node, never markup).
@@ -315,6 +322,49 @@ async function createSessionInFolder() {
   createSession({ cwd: dir });
 }
 
+// --- git status bar ----------------------------------------------------------
+// The bar reflects the ACTIVE tab's folder. Every refresh re-checks activeId
+// after its await so a fast tab switch mid-request can't paint stale data.
+function renderGitBar(info) {
+  gitInfo = info;
+  if (!info || !info.isRepo) { gitBtn.hidden = true; return; }
+  gitBtn.hidden = false;
+  gitBtn.querySelector('.git-ic').innerHTML = ICONS.branch;
+  gitBtn.querySelector('.git-name').textContent = info.branch || '';
+  const parts = [];
+  if (info.behind) parts.push('↓' + info.behind);
+  if (info.ahead) parts.push('↑' + info.ahead);
+  if (info.dirty) parts.push('*');
+  gitBtn.querySelector('.git-track').textContent = parts.join(' ');
+}
+
+async function refreshGit() {
+  const forId = activeId;
+  const cwd = sessions.get(activeId)?.cwd || '';
+  let info = null;
+  try { info = await window.swarm.git.info(cwd); } catch (_) {}
+  if (forId !== activeId) return; // switched tabs during the await — drop stale
+  renderGitBar(info);
+}
+
+// A short-lived message in the bar (e.g. checkout failed / needs login).
+// timeout 0 keeps it until the next call (used for "обновляю…").
+function showGitMsg(text, timeout = 4000) {
+  if (gitMsgTimer) { clearTimeout(gitMsgTimer); gitMsgTimer = null; }
+  gitMsgEl.textContent = text || '';
+  if (text && timeout) gitMsgTimer = setTimeout(() => { gitMsgEl.textContent = ''; }, timeout);
+}
+function clearGitMsg() { showGitMsg(''); }
+
+// git's auth failures are cryptic; map them to one clear hint. Everything else
+// shows git's own stderr so real errors (e.g. conflicts) stay visible.
+function gitAuthHint(err) {
+  if (/could not read Username|Authentication failed|terminal prompts disabled|Permission denied|Host key verification/i.test(err || '')) {
+    return 'нужен логин — выполните git fetch/pull в терминале';
+  }
+  return err || 'ошибка git';
+}
+
 function activate(id) {
   const s = sessions.get(id);
   if (!s) return;
@@ -330,6 +380,7 @@ function activate(id) {
   activeId = id;
   // Refit now that the holder is visible (fit on a hidden element is a no-op).
   requestAnimationFrame(() => { s.fit.fit(); if (!renaming) s.term.focus(); });
+  refreshGit();
 }
 
 function closeSession(id) {
@@ -651,11 +702,11 @@ async function onQuickCommand(item) {
   runQuickCommand(item.name);
 }
 
-function addCmdSection(title) {
+function addCmdSection(title, menu = cmdMenu) {
   const sep = document.createElement('div');
   sep.className = 'cmd-sep';
   sep.textContent = title;
-  cmdMenu.appendChild(sep);
+  menu.appendChild(sep);
 }
 
 function cmdItemButton(item) {
@@ -720,6 +771,103 @@ function outsideCloseCmd(e) {
 function toggleCmdMenu() {
   if (cmdMenu.classList.contains('hidden')) openCmdMenu();
   else closeCmdMenu();
+}
+
+// --- git branch menu ---------------------------------------------------------
+function gitMenuButton(label, hint, onClick) {
+  const b = document.createElement('button');
+  b.className = 'cmd-item';
+  b.innerHTML = '<span class="cmd-name"></span><span class="cmd-hint"></span>';
+  b.querySelector('.cmd-name').textContent = label;
+  b.querySelector('.cmd-hint').textContent = hint || '';
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+async function openGitMenu() {
+  if (!gitInfo || !gitInfo.isRepo) return; // nothing to show for a non-repo
+  const cwd = sessions.get(activeId)?.cwd || '';
+  gitMenu.innerHTML = '';
+
+  addCmdSection(`ветка: ${gitInfo.branch}${gitInfo.behind ? ' ↓' + gitInfo.behind : ''}${gitInfo.ahead ? ' ↑' + gitInfo.ahead : ''}`, gitMenu);
+  gitMenu.appendChild(gitMenuButton('Обновить', 'git fetch', onGitFetch));
+  if (gitInfo.behind) gitMenu.appendChild(gitMenuButton(`Подтянуть (${gitInfo.behind})`, 'git pull --ff-only', onGitPull));
+
+  addCmdSection('переключиться на', gitMenu);
+  let branches = [];
+  try { branches = await window.swarm.git.branches(cwd); } catch (_) {}
+  const current = gitInfo.branch;
+  if (!branches.length) {
+    const empty = document.createElement('div');
+    empty.className = 'cmd-empty';
+    empty.textContent = 'нет локальных веток';
+    gitMenu.appendChild(empty);
+  } else {
+    branches.forEach((b) => {
+      const label = b === current ? `● ${b}` : b;
+      gitMenu.appendChild(gitMenuButton(label, b === current ? 'текущая' : '', () => onGitCheckout(b)));
+    });
+  }
+
+  // Anchor above the branch button (the bar sits at the bottom of the window).
+  gitMenu.classList.remove('hidden');
+  gitMenu.style.visibility = 'hidden';
+  gitMenu.style.left = '0px';
+  gitMenu.style.top = '0px';
+  const r = gitBtn.getBoundingClientRect();
+  const mh = gitMenu.offsetHeight;
+  const mw = gitMenu.offsetWidth;
+  let top = r.top - mh - 6;
+  if (top < 8) top = Math.min(window.innerHeight - mh - 8, r.bottom + 6);
+  const left = Math.max(8, Math.min(r.left, window.innerWidth - mw - 8));
+  gitMenu.style.top = top + 'px';
+  gitMenu.style.left = left + 'px';
+  gitMenu.style.visibility = 'visible';
+  setTimeout(() => document.addEventListener('mousedown', outsideCloseGit), 0);
+}
+
+function closeGitMenu() {
+  gitMenu.classList.add('hidden');
+  document.removeEventListener('mousedown', outsideCloseGit);
+}
+
+function outsideCloseGit(e) {
+  if (!gitMenu.contains(e.target) && !gitBtn.contains(e.target)) closeGitMenu();
+}
+
+function toggleGitMenu() {
+  if (gitMenu.classList.contains('hidden')) openGitMenu();
+  else closeGitMenu();
+}
+
+async function onGitCheckout(branch) {
+  closeGitMenu();
+  const cwd = sessions.get(activeId)?.cwd;
+  if (!cwd) return;
+  const res = await window.swarm.git.checkout(cwd, branch);
+  if (!res.ok) showGitMsg(res.error || 'не удалось переключиться');
+  else clearGitMsg();
+  refreshGit();
+}
+
+async function onGitFetch() {
+  closeGitMenu();
+  const cwd = sessions.get(activeId)?.cwd;
+  if (!cwd) return;
+  showGitMsg('обновляю…', 0);
+  const res = await window.swarm.git.fetch(cwd);
+  showGitMsg(res.ok ? '' : gitAuthHint(res.error));
+  refreshGit();
+}
+
+async function onGitPull() {
+  closeGitMenu();
+  const cwd = sessions.get(activeId)?.cwd;
+  if (!cwd) return;
+  showGitMsg('подтягиваю…', 0);
+  const res = await window.swarm.git.pull(cwd);
+  showGitMsg(res.ok ? '' : gitAuthHint(res.error));
+  refreshGit();
 }
 
 // Dark themed confirm dialog. Resolves true/false.
@@ -884,6 +1032,7 @@ document.getElementById('new-session-folder').addEventListener('click', createSe
 layoutBtn.addEventListener('click', toggleLayout);
 document.getElementById('notify-toggle').addEventListener('click', () => applyNotify(!notifyEnabled));
 cmdBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleCmdMenu(); });
+gitBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleGitMenu(); });
 
 // Set the button icons (Lucide SVGs).
 document.querySelector('#new-session-folder .ic').innerHTML = ICONS.folderPlus;
@@ -907,3 +1056,26 @@ applyLayout(localStorage.getItem('swarm.layout') || 'layout-rail');
 applyNotify(localStorage.getItem('swarm.notify') !== '0'); // also sets the bell icon
 try { JSON.parse(localStorage.getItem('swarm.collapsed') || '[]').forEach((c) => collapsedFolders.add(c)); } catch (_) {}
 restoreOrStart();
+
+// Keep the branch bar live: poll the ACTIVE folder's git status every 2.5s so a
+// branch switch / new changes that `claude` makes right in the terminal show up
+// on their own — like VS Code's live git. Cheap: all-local git calls, active
+// folder only. Skips while a menu action's transient message is showing so it
+// doesn't clobber "обновляю…".
+setInterval(() => {
+  if (gitMsgEl.textContent) return;
+  refreshGit();
+}, 2500);
+
+// Auto-fetch the active folder every 3 minutes so "↓N can pull" appears without
+// user action. Network op, so it's on its own slow timer with GIT_TERMINAL_PROMPT=0
+// (set in git.js) — an auth-needing repo fails fast and is ignored here (the manual
+// "Обновить" button surfaces the login hint). No fetch when the folder isn't a repo.
+setInterval(async () => {
+  const forId = activeId;
+  if (!gitInfo || !gitInfo.isRepo) return;
+  const cwd = sessions.get(activeId)?.cwd;
+  if (!cwd) return;
+  try { await window.swarm.git.fetch(cwd); } catch (_) {}
+  if (forId === activeId) refreshGit();
+}, 180000);

@@ -25,6 +25,7 @@ const fs = require('fs');
 // Prebuilt fork of node-pty: ships ready-made binaries for Windows/mac/Linux,
 // so users don't need a C++ compiler + Python to install. Same API as node-pty.
 const pty = require('@homebridge/node-pty-prebuilt-multiarch');
+const git = require('./git');
 
 /** @type {BrowserWindow | null} */
 let win = null;
@@ -334,6 +335,16 @@ ipcMain.handle('commands:list', (_e, cwd) => {
 
   return list.filter((c) => (seen.has(c.name) ? false : seen.add(c.name))).sort((a, b) => a.name.localeCompare(b.name));
 });
+
+// --- IPC: git status / actions for the active session's folder ---------------
+// All logic lives in git.js (pure Node). The renderer drives which cwd to ask
+// about (the active tab's folder). checkout/pull affect the real working tree
+// that `claude` runs in — the same as running git yourself in that terminal.
+ipcMain.handle('git:info', (_e, cwd) => git.gitInfo(cwd));
+ipcMain.handle('git:branches', (_e, cwd) => git.gitBranches(cwd));
+ipcMain.handle('git:fetch', (_e, cwd) => git.gitFetch(cwd));
+ipcMain.handle('git:pull', (_e, cwd) => git.gitPull(cwd));
+ipcMain.handle('git:checkout', (_e, cwd, branch) => git.gitCheckout(cwd, branch));
 
 // --- IPC: renderer asks main to spawn a new claude session -------------------
 ipcMain.handle('session:create', (_event, opts = {}) => {

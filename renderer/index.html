@@ -34,6 +34,20 @@
   <!-- One xterm container per session, only the active one is shown. -->
   <main id="stage"></main>
 
+  <!-- Bottom status bar: git branch of the ACTIVE session's folder (VS Code
+       style). Hidden entirely when that folder is not a git repo. -->
+  <footer id="statusbar">
+    <button id="git-branch" class="git-branch" hidden title="Git — ветка активной сессии">
+      <span class="git-ic"></span>
+      <span class="git-name"></span>
+      <span class="git-track"></span>
+    </button>
+    <span id="git-msg" class="git-msg"></span>
+  </footer>
+
+  <!-- Branch popover (built in JS, reuses .cmd-menu look, anchored to #git-branch). -->
+  <div id="git-menu" class="cmd-menu hidden"></div>
+
   <!-- Quick-commands popover (populated from JS, anchored to the burger button). -->
   <div id="cmd-menu" class="cmd-menu hidden"></div>
 

@@ -37,8 +37,8 @@ body {
   display: grid;
   height: 100vh;
 }
-body.layout-rail { grid-template-columns: 208px 1fr; grid-template-rows: 1fr; }
-body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1fr; }
+body.layout-rail { grid-template-columns: 208px 1fr; grid-template-rows: 1fr auto; }
+body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1fr auto; }
 
 /* --- chrome (session list + controls) ------------------------------------- */
 #chrome {
@@ -430,4 +430,38 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   font-size: 13px;
   letter-spacing: 0.04em;
 }
+
+/* --- bottom git status bar ------------------------------------------------ */
+#statusbar {
+  grid-column: 1 / -1;           /* span the full window width under everything */
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 24px;
+  padding: 0 10px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+}
+.git-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 0;
+  padding: 2px 6px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+.git-branch:hover { color: var(--text); background: var(--panel-2); }
+.git-branch[hidden] { display: none; }
+.git-branch .git-ic { display: inline-flex; width: 13px; height: 13px; }
+.git-branch .git-ic svg { width: 13px; height: 13px; }
+.git-branch .git-track { color: var(--accent); letter-spacing: 0.02em; }
+.git-msg { color: var(--waiting); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 

@@ -37,6 +37,17 @@ contextBridge.exposeInMainWorld('swarm', {
   // terminals — so their focus/redraw burst isn't mistaken for real activity.
   uiRepaint: () => ipcRenderer.send('ui:repaint'),
 
+  // Git plumbing for the branch status bar. Each call targets a folder path
+  // (the active session's cwd). info → { isRepo, branch, ahead, behind, dirty };
+  // branches → string[]; fetch/pull/checkout → { ok, error }.
+  git: {
+    info:     (cwd)         => ipcRenderer.invoke('git:info', cwd),
+    branches: (cwd)         => ipcRenderer.invoke('git:branches', cwd),
+    fetch:    (cwd)         => ipcRenderer.invoke('git:fetch', cwd),
+    pull:     (cwd)         => ipcRenderer.invoke('git:pull', cwd),
+    checkout: (cwd, branch) => ipcRenderer.invoke('git:checkout', cwd, branch),
+  },
+
   // Subscribe to pty output. cb({ id, data }). Returns an unsubscribe fn.
   onData: (cb) => {
     const handler = (_e, payload) => cb(payload);
