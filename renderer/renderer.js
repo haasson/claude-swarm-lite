@@ -356,13 +356,42 @@ function showGitMsg(text, timeout = 4000) {
 }
 function clearGitMsg() { showGitMsg(''); }
 
-// git's auth failures are cryptic; map them to one clear hint. Everything else
-// shows git's own stderr so real errors (e.g. conflicts) stay visible.
-function gitAuthHint(err) {
-  if (/could not read Username|Authentication failed|terminal prompts disabled|Permission denied|Host key verification/i.test(err || '')) {
-    return 'нужен логин — выполните git fetch/pull в терминале';
-  }
-  return err || 'ошибка git';
+// True when a fetch/pull failed because git needs credentials we can't prompt
+// for (our background git runs with GIT_TERMINAL_PROMPT=0, so it fails fast
+// instead of hanging). Non-technical users get a friendly modal explaining how
+// to log in — not the raw git error.
+function isGitAuthError(err) {
+  return /could not read Username|Authentication failed|terminal prompts disabled|Permission denied|Host key verification|Could not read from remote repository|fatal: Authentication/i.test(err || '');
+}
+
+// Plain-language dialog shown when a remote sync (fetch/pull) needs a git login.
+// Local branch work (view/switch) never triggers this — only server sync does.
+function showGitLoginModal() {
+  if (document.querySelector('.modal-overlay .modal.git-login')) return; // already open
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal git-login">
+      <div class="modal-title">Нужен вход в Git</div>
+      <div class="modal-msg">
+        Чтобы <b>обновить</b> или <b>подтянуть</b> изменения с сервера, на этом
+        компьютере нужно войти в Git. Просмотр и переключение веток работают и
+        без входа — это делается локально.<br><br>
+        <b>Как войти (один раз):</b> открой любую вкладку с агентом и набери в
+        терминале <code>git fetch</code>. Git спросит логин и пароль (или токен) —
+        введи их, дальше он запомнит. Если не знаешь данные — попроси того, кто
+        настраивал проект.
+      </div>
+      <div class="modal-actions"><button class="modal-ok neutral">Понятно</button></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const btn = overlay.querySelector('.modal-ok');
+  const close = () => { document.removeEventListener('keydown', onKey, true); overlay.remove(); };
+  const onKey = (ev) => { if (ev.key === 'Escape' || ev.key === 'Enter') { ev.preventDefault(); close(); } };
+  btn.addEventListener('click', close);
+  overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(); });
+  document.addEventListener('keydown', onKey, true);
+  btn.focus();
 }
 
 function activate(id) {
@@ -856,7 +885,9 @@ async function onGitFetch() {
   if (!cwd) return;
   showGitMsg('обновляю…', 0);
   const res = await window.swarm.git.fetch(cwd);
-  showGitMsg(res.ok ? '' : gitAuthHint(res.error));
+  if (res.ok) clearGitMsg();
+  else if (isGitAuthError(res.error)) { clearGitMsg(); showGitLoginModal(); }
+  else showGitMsg(res.error || 'не удалось обновить');
   refreshGit();
 }
 
@@ -866,7 +897,9 @@ async function onGitPull() {
   if (!cwd) return;
   showGitMsg('подтягиваю…', 0);
   const res = await window.swarm.git.pull(cwd);
-  showGitMsg(res.ok ? '' : gitAuthHint(res.error));
+  if (res.ok) clearGitMsg();
+  else if (isGitAuthError(res.error)) { clearGitMsg(); showGitLoginModal(); }
+  else showGitMsg(res.error || 'не удалось подтянуть');
   refreshGit();
 }
 
@@ -918,6 +951,15 @@ const HELP_HTML = `
     <li><b>🟡 ждёт ответа</b> — на экране вопрос или запрос разрешения, нужен твой ввод.</li>
     <li><b>⚪ готов</b> — простаивает у пустого промпта.</li>
     <li><b>⚫ завершена</b> — процесс закрыт.</li>
+  </ul>
+
+  <h4>Git-ветка (панель снизу)</h4>
+  <p>Внизу окна видно, на какой <b>ветке</b> git находится папка активной вкладки. Значки рядом: <code>*</code> — есть несохранённые (незакоммиченные) правки; <code>↓N</code> — на сервере N новых коммитов, которые можно забрать; <code>↑N</code> — у тебя N своих, ещё не отправленных.</p>
+  <ul>
+    <li><b>Клик по ветке</b> — меню: <b>Обновить</b> (свериться с сервером), <b>Подтянуть</b> (забрать новое — появляется, когда есть <code>↓</code>), и список веток. Клик по ветке — переключиться на неё. Ветки идут по свежести: недавние сверху.</li>
+    <li>Просмотр и переключение веток работают <b>всегда</b>, даже без входа в git — это локально.</li>
+    <li><b>Обновить / Подтянуть</b> ходят на сервер и требуют <b>входа в git</b>. Если ты не залогинен, выскочит окно с объяснением, как войти (это делается один раз в терминале вкладки).</li>
+    <li>Если папка вкладки — не git-репозиторий, панель ветки пустая.</li>
   </ul>
 
   <h4>Горячие клавиши</h4>

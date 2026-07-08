@@ -63,10 +63,12 @@ async function gitInfo(cwd) {
   return { isRepo: true, branch, ahead, behind, dirty };
 }
 
-// Local branch names. Caller marks which one is current (from gitInfo.branch).
+// Local branch names, most-recently-committed first (--sort=-committerdate) —
+// the branches you're actively working on float to the top, like editors do.
+// Caller marks which one is current (from gitInfo.branch).
 async function gitBranches(cwd) {
   if (!cwd) return [];
-  const res = await runGit(cwd, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']);
+  const res = await runGit(cwd, ['for-each-ref', '--sort=-committerdate', '--format=%(refname:short)', 'refs/heads']);
   if (res.code !== 0) return [];
   return res.stdout.split(/\r?\n/).filter(Boolean);
 }

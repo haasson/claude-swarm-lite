@@ -348,7 +348,12 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   padding: 20px;
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
 }
+.modal-title { color: var(--text); font-size: 14px; font-weight: 600; margin-bottom: 10px; }
 .modal-msg { color: var(--text); font-size: 13px; line-height: 1.5; margin-bottom: 18px; }
+.modal-msg code { background: var(--panel); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+/* Neutral (teal) primary button for info dialogs — not the destructive red. */
+.modal-ok.neutral { border-color: var(--accent); color: var(--accent); }
+.modal-ok.neutral:hover { background: color-mix(in srgb, var(--accent) 16%, var(--panel-2)); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .modal-actions button {
   padding: 8px 14px;
