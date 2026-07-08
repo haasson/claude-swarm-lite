@@ -20,7 +20,8 @@
 // linking both. So this script owns the Mac half; CI owns the Windows half.
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 const HOST = 'gitlab.internal';
@@ -91,8 +92,25 @@ sh('git', ['tag', '-a', `v${version}`, '-m', entry.trim()]);
 step(`committed + tagged v${version}`);
 
 // 6. build the dmg -----------------------------------------------------------
+// electron-builder re-verifies the Electron dist against GitHub on every build;
+// when GitHub's asset CDN is slow that download times out even though the zip is
+// already cached. If we find the cached zip, hand it to electron-builder via
+// electronDist so the build never touches the network for Electron.
+function cachedElectronDist() {
+  try {
+    const ver = readFileSync('node_modules/electron/dist/version', 'utf8').trim();
+    const zip = `electron-v${ver}-darwin-${process.arch}.zip`;
+    const root = path.join(os.homedir(), 'Library', 'Caches', 'electron');
+    for (const d of readdirSync(root)) {
+      if (existsSync(path.join(root, d, zip))) return path.join(root, d);
+    }
+  } catch { /* no cache — fall back to a normal download */ }
+  return null;
+}
 step('building .dmg (npm run dist) …');
-sh('npm', ['run', 'dist']);
+const distDir = cachedElectronDist();
+if (distDir) step(`using cached Electron (offline-safe): ${distDir}`);
+sh('npm', distDir ? ['run', 'dist', '--', `-c.electronDist=${distDir}`] : ['run', 'dist']);
 const dmg = readdirSync('dist').find((f) => f === dmgFile) || readdirSync('dist').find((f) => f.endsWith('.dmg'));
 if (!dmg) fail('no .dmg found in dist/ after build');
 
