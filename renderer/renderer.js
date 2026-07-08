@@ -69,6 +69,7 @@ const ICONS = {
   folder: SVG('<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>'),
   chevron: SVG('<path d="m6 9 6 6 6-6"/>'),
   branch: SVG('<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>'),
+  gear: SVG('<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>'),
 };
 
 // Put an icon + a folder name into an element (name via text node, never markup).
@@ -187,26 +188,53 @@ function makeXterm() {
   return { term, fit };
 }
 
-// Which command a new tab runs to launch the agent. Defaults to 'claude', but we
-// remember the last agent launcher you actually type at a shell prompt (e.g.
-// 'claude-corp' to switch config, or 'glm'/'claude-glm' for a Claude-Code-compatible
-// backend via ANTHROPIC_BASE_URL) and reuse it for every subsequent tab. Persisted across restarts. Only TYPED/PASTED commands are
-// caught: recalling one from history (↑) or editing mid-line with arrow keys
-// arrives as a redraw / resets the buffer, so it won't update this — retype it.
-let startCommand = localStorage.getItem('swarm.startCommand') || 'claude';
-// An agent-CLI launcher, optionally with flags: `claude`, `claude-my`,
-// `claude-glm`, or a Claude-Code-compatible backend aliased under its own name
-// (glm/deepseek/… run via ANTHROPIC_BASE_URL), or another agent CLI. We match a
-// known launcher STEM, not any word, so `ls`/`git commit -m claude`/chat messages
-// aren't mistaken for a launch command. Extra tokens are restricted to flags for
-// the same reason. A custom alias outside this list won't be remembered — add its
-// stem here, or name the alias `claude-*` (which is always matched).
+// Launch config for NEW tabs: which agent CLI to run (`cmd`) + extra flags
+// (`flags`). Both are user-editable in Settings (⚙) and applied globally to every
+// new session. A new tab types `${cmd} ${flags}` once its shell is ready.
+//   cmd   — 'claude', or an alias like 'cld'/'claude-glm' (your own shell alias
+//           that points claude-code at a different config / ANTHROPIC_BASE_URL).
+//   flags — e.g. '--dangerously-skip-permissions', '--resume', '--model sonnet'.
+let launch = loadLaunch();
+
+function loadLaunch() {
+  let cmd = localStorage.getItem('swarm.launchCmd');
+  let flags = localStorage.getItem('swarm.launchFlags');
+  // Migrate the old single-string 'swarm.startCommand' (command + flags in one)
+  // into the split cmd/flags model, once. First token = launcher, rest = flags.
+  if (cmd == null && flags == null) {
+    const legacy = (localStorage.getItem('swarm.startCommand') || 'claude').trim();
+    const sp = legacy.indexOf(' ');
+    cmd = sp === -1 ? legacy : legacy.slice(0, sp);
+    flags = sp === -1 ? '' : legacy.slice(sp + 1).trim();
+  }
+  return { cmd: (cmd || '').trim() || 'claude', flags: (flags || '').trim() };
+}
+
+// The full launch line for a new tab, e.g. 'cld --dangerously-skip-permissions'.
+function launchCommand() {
+  return (launch.cmd + ' ' + launch.flags).trim();
+}
+
+function saveLaunch() {
+  localStorage.setItem('swarm.launchCmd', launch.cmd);
+  localStorage.setItem('swarm.launchFlags', launch.flags);
+}
+
+// Convenience: also LEARN the launcher from what you actually type at a shell
+// prompt, so switching to e.g. `claude-corp` by hand becomes the default for new
+// tabs without opening Settings. We match a known launcher STEM (not any word) so
+// `ls`/`git commit -m claude`/chat messages aren't mistaken for a launch command.
+// We only adopt the STEM (first token), never the flags — flags are a deliberate
+// Settings choice and typing a bare `claude` in some tab must not wipe them. An
+// alias outside this list (e.g. `cld`) won't auto-learn — set it once in Settings.
 const AGENT_CMD_RE = /^\s*(?:claude|glm|deepseek|codex|gemini|aider|qwen|kimi|opencode|crush|amp|droid)[\w-]*(?:\s+--?[\w-]+(?:=\S+)?)*\s*$/i;
 function rememberStartCommand(line) {
   const t = line.trim();
-  if (!AGENT_CMD_RE.test(t) || t === startCommand) return;
-  startCommand = t;
-  localStorage.setItem('swarm.startCommand', t);
+  if (!AGENT_CMD_RE.test(t)) return;
+  const cmd = t.split(/\s+/)[0];
+  if (cmd === launch.cmd) return;
+  launch = { cmd, flags: launch.flags };
+  saveLaunch();
 }
 
 async function createSession(opts = {}) {
@@ -232,7 +260,7 @@ async function createSession(opts = {}) {
     cols: term.cols,
     rows: term.rows,
     cwd,
-    command: opts.command != null ? opts.command : startCommand,
+    command: opts.command != null ? opts.command : launchCommand(),
   });
 
   // Wire keystrokes -> pty. Strip focus in/out reports (CSI I / CSI O): with
@@ -392,6 +420,68 @@ function showGitLoginModal() {
   overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(); });
   document.addEventListener('keydown', onKey, true);
   btn.focus();
+}
+
+// --- settings (⚙) ------------------------------------------------------------
+// Launch config for NEW tabs: which agent CLI + extra flags, applied globally.
+// See loadLaunch/launchCommand/saveLaunch for the model. Open tabs are untouched.
+function showSettingsModal() {
+  if (document.querySelector('.modal-overlay .modal.settings')) return; // already open
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal settings">
+      <div class="modal-title">Настройки запуска</div>
+      <div class="modal-msg">
+        Применяется ко всем <b>новым</b> вкладкам. Уже открытые сессии не трогаем.
+      </div>
+      <label class="set-field">
+        <span class="set-label">Команда запуска</span>
+        <input class="set-input" id="set-cmd" type="text" spellcheck="false"
+               autocapitalize="off" autocorrect="off" placeholder="claude" />
+        <span class="set-hint">Какой агент запускать: <code>claude</code>, <code>cld</code>, <code>claude-glm</code>…</span>
+      </label>
+      <label class="set-field">
+        <span class="set-label">Доп. флаги</span>
+        <input class="set-input" id="set-flags" type="text" spellcheck="false"
+               autocapitalize="off" autocorrect="off" placeholder="напр. --dangerously-skip-permissions" />
+        <span class="set-hint">Дописываются к команде: <code>--dangerously-skip-permissions</code>, <code>--resume</code>, <code>--model sonnet</code>…</span>
+      </label>
+      <div class="set-preview">Новая вкладка запустит: <code class="set-preview-cmd"></code></div>
+      <div class="modal-actions">
+        <button class="modal-cancel">Отмена</button>
+        <button class="modal-ok neutral">Сохранить</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const cmdI = overlay.querySelector('#set-cmd');
+  const flagsI = overlay.querySelector('#set-flags');
+  const preview = overlay.querySelector('.set-preview-cmd');
+  cmdI.value = launch.cmd;
+  flagsI.value = launch.flags;
+  const renderPreview = () => {
+    preview.textContent = ((cmdI.value.trim() || 'claude') + ' ' + flagsI.value.trim()).trim();
+  };
+  renderPreview();
+  cmdI.addEventListener('input', renderPreview);
+  flagsI.addEventListener('input', renderPreview);
+
+  const close = () => { document.removeEventListener('keydown', onKey, true); overlay.remove(); };
+  const save = () => {
+    launch = { cmd: cmdI.value.trim() || 'claude', flags: flagsI.value.trim() };
+    saveLaunch();
+    close();
+  };
+  const onKey = (ev) => {
+    if (ev.key === 'Escape') { ev.preventDefault(); close(); }
+    else if (ev.key === 'Enter') { ev.preventDefault(); save(); }
+  };
+  overlay.querySelector('.modal-cancel').addEventListener('click', close);
+  overlay.querySelector('.modal-ok').addEventListener('click', save);
+  overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(); });
+  document.addEventListener('keydown', onKey, true);
+  cmdI.focus();
+  cmdI.select();
 }
 
 function activate(id) {
@@ -679,9 +769,13 @@ function maybeNotify(id, prev, next) {
   // Silent for the first NOTIFY_GRACE_MS after launch: restoring tabs respawns
   // claude in every folder, and those startup status flips aren't worth a ping.
   if (Date.now() - appStartedAt < NOTIFY_GRACE_MS) return;
-  // The app window is in the foreground — you can see the tabs yourself, so never
-  // ping while focused (for ANY session, not only the active one).
-  if (document.hasFocus()) return;
+  // You're already looking at THIS tab in a focused window — no need to ping it.
+  // But BACKGROUND tabs still ping even while the window is focused: that's the
+  // whole point of a multi-agent pulpit — you can't watch every tab at once, so a
+  // tab that finishes / starts waiting must announce itself. (An earlier version
+  // muted ALL tabs whenever the window was focused, which silenced pings entirely
+  // for anyone who keeps the pulpit open — the common case. This restores them.)
+  if (id === activeId && document.hasFocus()) return;
   const s = sessions.get(id);
 
   let body = null;
@@ -1066,6 +1160,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 't') { e.preventDefault(); createSession(); }
   else if (e.key === 'o') { e.preventDefault(); createSessionInFolder(); }
   else if (e.key === 'k') { e.preventDefault(); toggleCmdMenu(); }
+  else if (e.key === ',') { e.preventDefault(); showSettingsModal(); }
   else if (e.key === 'w' && activeId) { e.preventDefault(); requestCloseSession(activeId); }
   else if (e.key === 'l') { e.preventDefault(); toggleLayout(); }
   else if (/^[1-9]$/.test(e.key)) {
@@ -1078,6 +1173,7 @@ window.addEventListener('keydown', (e) => {
 document.getElementById('new-session-folder').addEventListener('click', createSessionInFolder);
 layoutBtn.addEventListener('click', toggleLayout);
 document.getElementById('notify-toggle').addEventListener('click', () => applyNotify(!notifyEnabled));
+document.getElementById('settings-btn').addEventListener('click', showSettingsModal);
 cmdBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleCmdMenu(); });
 gitBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleGitMenu(); });
 
@@ -1085,6 +1181,7 @@ gitBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleGitMenu(); 
 document.querySelector('#new-session-folder .ic').innerHTML = ICONS.folderPlus;
 document.querySelector('#cmd-menu-btn .ic').innerHTML = ICONS.command;
 document.querySelector('#layout-toggle .ic').innerHTML = ICONS.layout;
+document.querySelector('#settings-btn .ic').innerHTML = ICONS.gear;
 
 // Restore the previous session's tabs (folders + names), or start with one.
 // Content isn't restored — each tab spawns a fresh claude in its folder.

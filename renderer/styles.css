@@ -369,6 +369,35 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .modal-ok { border-color: var(--danger); color: var(--danger); }
 .modal-ok:hover { background: color-mix(in srgb, var(--danger) 16%, var(--panel-2)); }
 
+/* Settings modal — launch command + flags form. */
+.modal.settings { width: min(460px, 92vw); }
+.set-field { display: block; margin-bottom: 16px; }
+.set-label { display: block; color: var(--text); font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.set-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  outline: none;
+}
+.set-input:focus { border-color: var(--accent); }
+.set-hint { display: block; color: var(--muted); font-size: 11px; line-height: 1.5; margin-top: 5px; }
+.set-hint code, .set-preview code { background: var(--panel); padding: 1px 5px; border-radius: 4px; font-size: 11px; color: var(--text); }
+.set-preview {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 4px 0 18px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px dashed var(--border);
+}
+.set-preview .set-preview-cmd { color: var(--accent); }
+
 /* Help modal — wider, scrollable, neutral (not the destructive-red confirm). */
 .modal.help { width: min(640px, 92vw); padding: 0; }
 .help-body {
