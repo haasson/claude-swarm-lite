@@ -2,17 +2,23 @@
 // (child_process only, no Electron), so it can be required from a plain
 // `node -e` script and main.js just wires the IPC.
 //
-// Every command runs via execFile (no shell → a branch name can't inject) with
-// GIT_TERMINAL_PROMPT=0 so a repo that needs interactive credentials fails fast
-// instead of hanging this background process. Auth is inherited from the same
-// environment the terminal uses (Keychain / ssh-agent), so normally these run
-// silently just like `git` in the shell. No UI login by design.
+// Every command runs via execFile (no shell → a branch name can't inject) and
+// is forced non-interactive so it can NEVER hang or pop a login window from this
+// background process — it fails fast and the renderer shows a friendly "log in"
+// modal. The three knobs, cross-platform:
+//   GIT_TERMINAL_PROMPT=0            — no terminal username/password prompt (all OS)
+//   GIT_SSH_COMMAND=ssh -oBatchMode=yes — no ssh passphrase prompt (all OS)
+//   -c credential.interactive=false  — stops Windows' Git Credential Manager from
+//                                      popping its GUI login (esp. on auto-fetch)
+// We deliberately do NOT set GIT_ASKPASS: the old value 'echo' is a shell builtin
+// with no .exe on Windows, so git errored trying to spawn it. The knobs above are
+// enough. Auth itself is inherited from the same environment the terminal uses
+// (Keychain / ssh-agent / GCM), so cached creds just work. No UI login by design.
 
 const { execFile } = require('child_process');
 
 const NO_PROMPT_ENV = {
   GIT_TERMINAL_PROMPT: '0',
-  GIT_ASKPASS: 'echo',
   GIT_SSH_COMMAND: 'ssh -oBatchMode=yes',
 };
 
@@ -20,7 +26,7 @@ const NO_PROMPT_ENV = {
 // code 0 = success; anything else (non-zero exit, ENOENT, timeout) = failure.
 function runGit(cwd, args, timeout = 8000) {
   return new Promise((resolve) => {
-    execFile('git', args, {
+    execFile('git', ['-c', 'credential.interactive=false', ...args], {
       cwd,
       timeout,
       windowsHide: true,

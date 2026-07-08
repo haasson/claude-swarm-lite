@@ -361,7 +361,7 @@ function clearGitMsg() { showGitMsg(''); }
 // instead of hanging). Non-technical users get a friendly modal explaining how
 // to log in — not the raw git error.
 function isGitAuthError(err) {
-  return /could not read Username|Authentication failed|terminal prompts disabled|Permission denied|Host key verification|Could not read from remote repository|fatal: Authentication/i.test(err || '');
+  return /could not read Username|could not read Password|Authentication failed|Invalid username or password|terminal prompts disabled|no credential|Permission denied|Host key verification|Could not read from remote repository|fatal: Authentication/i.test(err || '');
 }
 
 // Plain-language dialog shown when a remote sync (fetch/pull) needs a git login.
