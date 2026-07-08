@@ -671,9 +671,17 @@ function toggleLayout() {
 // finished (running -> ready). The agent you're actively watching in a focused
 // window is never pinged — that would just be noise.
 const MIN_RUN_MS = 3000; // a "run" shorter than this is a repaint blip, not real work
+const NOTIFY_GRACE_MS = 10000; // stay silent for the first 10s after launch
+const appStartedAt = Date.now(); // for the launch grace above
 
 function maybeNotify(id, prev, next) {
   if (!notifyEnabled || prev === next) return;
+  // Silent for the first NOTIFY_GRACE_MS after launch: restoring tabs respawns
+  // claude in every folder, and those startup status flips aren't worth a ping.
+  if (Date.now() - appStartedAt < NOTIFY_GRACE_MS) return;
+  // The app window is in the foreground — you can see the tabs yourself, so never
+  // ping while focused (for ANY session, not only the active one).
+  if (document.hasFocus()) return;
   const s = sessions.get(id);
 
   let body = null;
@@ -686,9 +694,6 @@ function maybeNotify(id, prev, next) {
     body = 'готов';
   }
   if (!body) return;
-
-  // You're already looking at this one — no need to ping.
-  if (id === activeId && document.hasFocus()) return;
 
   const name = s?.tab.querySelector('.label')?.textContent?.trim() || `claude ${id}`;
   const note = new Notification(name, { body, silent: false });
