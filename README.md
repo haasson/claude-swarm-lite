@@ -10,10 +10,12 @@ Electron + node-pty + xterm.js.
 ## Скачать
 
 <!--DL-->
-Пока нет опубликованных релизов. Первый появится после `npm run release` (см. ниже).
+**Последняя версия: 0.1.1** · [все релизы](https://gitlab.internal/ai-public/claude-swarm-lite/-/releases)
 
-- **macOS** (Apple Silicon) — `.dmg`
-- **Windows** — `.exe` (собирается в CI)
+- **macOS** (Apple Silicon): [`claude-swarm-lite-0.1.1-arm64.dmg`](https://gitlab.internal/api/v4/projects/331/packages/generic/apps/0.1.1/claude-swarm-lite-0.1.1-arm64.dmg)
+- **Windows**: [`claude-swarm-lite-0.1.1-x64.exe`](https://gitlab.internal/api/v4/projects/331/packages/generic/apps/0.1.1/claude-swarm-lite-0.1.1-x64.exe) — собирается в CI после тега
+
+> Ссылки ведут в приватный GitLab — нужен доступ к репозиторию.
 <!--/DL-->
 
 ## Запуск (из исходников)
