@@ -6,3 +6,4 @@ out/
 
 # icon build intermediates
 build/icon.iconset/
+build-info.json

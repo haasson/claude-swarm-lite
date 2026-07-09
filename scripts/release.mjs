@@ -21,6 +21,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -107,6 +108,16 @@ function cachedElectronDist() {
   } catch { /* no cache — fall back to a normal download */ }
   return null;
 }
+// build-info.json — this build's runtimeId + read-only registry token, bundled into
+// the asar. runtimeId = sha256(electronVersion|nodePtyVersion); if it changes between
+// releases, app.asar isn't swap-safe and a full installer is required.
+const electronVer = JSON.parse(readFileSync('node_modules/electron/package.json', 'utf8')).version;
+const nodePtyVer = JSON.parse(readFileSync('node_modules/@homebridge/node-pty-prebuilt-multiarch/package.json', 'utf8')).version;
+const runtimeId = createHash('sha256').update(`${electronVer}|${nodePtyVer}`).digest('hex');
+const updateToken = process.env.UPDATE_REGISTRY_TOKEN || '';
+if (!updateToken) console.warn('⚠ UPDATE_REGISTRY_TOKEN не задан — self-update будет выключен в этой сборке');
+writeFileSync('build-info.json', JSON.stringify({ runtimeId, updateToken }) + '\n');
+step(`build-info.json (runtimeId ${runtimeId.slice(0, 12)}…)`);
 step('building .dmg (npm run dist) …');
 const distDir = cachedElectronDist();
 if (distDir) step(`using cached Electron (offline-safe): ${distDir}`);
@@ -124,6 +135,37 @@ const put = await fetch(`${base}/${dmgFile}`, {
 });
 if (!put.ok) fail(`dmg upload failed: ${put.status} ${await put.text()}`);
 step('dmg uploaded');
+
+// Publish the platform-independent app.asar + a stable manifest for the in-app updater.
+const asarPath = path.join('dist', 'mac-arm64', 'Claude Swarm Lite.app', 'Contents', 'Resources', 'app.asar');
+if (!existsSync(asarPath)) fail('app.asar not found at ' + asarPath);
+const asarBytes = readFileSync(asarPath);
+const asarSha = createHash('sha256').update(asarBytes).digest('hex');
+step(`uploading app.asar (${(asarBytes.length / 1e6).toFixed(1)} MB) …`);
+const asarPut = await fetch(`${base}/app.asar`, {
+  method: 'PUT', headers: { 'PRIVATE-TOKEN': token }, body: asarBytes,
+});
+if (!asarPut.ok) fail(`asar upload failed: ${asarPut.status} ${await asarPut.text()}`);
+
+// Notes = the changelog section we just generated for this version.
+const manifest = {
+  version,
+  runtimeId,
+  asar: { url: `${base}/app.asar`, sha256: asarSha },
+  installers: {
+    dmg: `${base}/${dmgFile}`,
+    exe: `${base}/claude-swarm-lite-${version}-x64.exe`,
+  },
+  notes: commits,
+  pubDate: today,
+};
+const latestBase = `https://${HOST}/api/v4/projects/${PROJECT_ID}/packages/generic/${PKG}/latest`;
+const manPut = await fetch(`${latestBase}/manifest.json`, {
+  method: 'PUT', headers: { 'PRIVATE-TOKEN': token, 'Content-Type': 'application/json' },
+  body: JSON.stringify(manifest, null, 2),
+});
+if (!manPut.ok) fail(`manifest upload failed: ${manPut.status} ${await manPut.text()}`);
+step('app.asar + manifest.json published');
 
 // 8. push --------------------------------------------------------------------
 step('pushing main + tag …');

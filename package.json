@@ -20,6 +20,9 @@
     "files": [
       "main.js",
       "git.js",
+      "updater.js",
+      "updater-core.js",
+      "build-info.json",
       "preload.js",
       "renderer/**/*",
       "package.json"
