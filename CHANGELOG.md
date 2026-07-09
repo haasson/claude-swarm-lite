@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0 — 2026-07-09
+
+- feat(апдейт): релиз публикует app.asar + manifest.json, build-info с runtimeId
+- feat(апдейт): плашка «Обновить» + модалка + вкладка «Обновления» в настройках
+- feat(апдейт): IPC в main + методы моста в preload + relocation при старте
+- feat(апдейт): эффекты — проверка, скачивание+swap asar, self-relocation
+- feat(апдейт): чистая логика решения об обновлении + тесты
+- docs: план реализации авто-обновления
+- docs: спека авто-обновления (asar-swap + self-relocation + Windows)
+
 ## 0.3.1 — 2026-07-09
 
 - ci(windows): --publish never + авто-ретрай — чинит 404 на .exe в релизе
