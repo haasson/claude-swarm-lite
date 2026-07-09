@@ -533,3 +533,32 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .git-branch .git-track { color: var(--accent); letter-spacing: 0.02em; }
 .git-msg { color: var(--waiting); font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* --- settings: appearance tab -------------------------------------------- */
+.theme-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.theme-swatch {
+  display: flex; flex-direction: column; gap: 6px; padding: 8px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  cursor: pointer; text-align: left; color: var(--text);
+}
+.theme-swatch:hover { border-color: var(--muted); }
+.theme-swatch.active { border-color: var(--accent); }
+.theme-pal { display: flex; height: 22px; border-radius: 5px; overflow: hidden; }
+.theme-pal i { flex: 1; }
+.theme-name { font-size: 11px; color: var(--muted); }
+.theme-swatch.active .theme-name { color: var(--accent); }
+
+.set-stepper { display: flex; align-items: center; gap: 12px; }
+.step-btn {
+  width: 28px; height: 28px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--panel-2); color: var(--text); font-size: 16px; line-height: 1;
+  cursor: pointer;
+}
+.step-btn:hover { border-color: var(--accent); color: var(--accent); }
+.step-val { min-width: 28px; text-align: center; font-variant-numeric: tabular-nums; color: var(--text); }
+
+.term-preview {
+  padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border);
+  font-family: var(--mono); line-height: 1.4; white-space: nowrap; overflow: hidden;
+}
+.term-preview .prev-cur { font-weight: 700; }
+

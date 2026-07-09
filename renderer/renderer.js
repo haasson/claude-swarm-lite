@@ -7,6 +7,36 @@
 
 const { Terminal } = window;                 // UMD global from xterm.js
 const { FitAddon } = window.FitAddon;        // UMD global from addon-fit
+const APPEARANCE = window.SWARM_THEMES;       // terminal theme presets + helpers
+
+// Global terminal appearance (theme + font + cursor). One setting for all tabs,
+// persisted as a single JSON blob in localStorage (see swarm.appearance). Read by
+// makeXterm() for NEW tabs and by applyAppearance() to restyle LIVE tabs on save.
+let appearance = loadAppearance();
+
+function loadAppearance() {
+  let raw = null;
+  try { raw = JSON.parse(localStorage.getItem('swarm.appearance') || 'null'); } catch (_) {}
+  return APPEARANCE.normalizeAppearance(raw);
+}
+
+function saveAppearance() {
+  localStorage.setItem('swarm.appearance', JSON.stringify(appearance));
+}
+
+// Restyle every LIVE terminal in place, then refit — a font-size change alters the
+// cell grid, so the pty must be resized (same reason applyLayout refits).
+function applyAppearance() {
+  const xt = APPEARANCE.getTheme(appearance.theme).xterm;
+  for (const s of sessions.values()) {
+    s.term.options.theme = xt;
+    s.term.options.fontSize = appearance.fontSize;
+    s.term.options.fontFamily = appearance.fontFamily;
+    s.term.options.cursorStyle = appearance.cursorStyle;
+    s.term.options.cursorBlink = appearance.cursorBlink;
+    s.fit.fit();
+  }
+}
 
 // Tag the body with the host OS so the stylesheet can drop mac-only chrome
 // (the empty gaps reserved for the traffic lights) on Windows/Linux.
@@ -175,17 +205,13 @@ window.swarm.onExit(({ id }) => {
 
 function makeXterm() {
   const term = new Terminal({
-    cursorBlink: true,
-    fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
-    fontSize: 13,
+    cursorBlink: appearance.cursorBlink,
+    cursorStyle: appearance.cursorStyle,
+    fontFamily: appearance.fontFamily,
+    fontSize: appearance.fontSize,
     lineHeight: 1.15,
     scrollback: 10000,
-    theme: {
-      background: '#0d0f12',
-      foreground: '#c9d1d9',
-      cursor: '#3fd0c9',
-      selectionBackground: '#2b3640',
-    },
+    theme: APPEARANCE.getTheme(appearance.theme).xterm,
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
@@ -439,6 +465,7 @@ function showSettingsModal(tab) {
       <div class="set-tabs" role="tablist">
         <button class="set-tab" data-tab="launch">Запуск</button>
         <button class="set-tab" data-tab="notify">Уведомления</button>
+        <button class="set-tab" data-tab="appearance">Вид</button>
       </div>
 
       <div class="set-panel" data-panel="launch">
@@ -485,6 +512,38 @@ function showSettingsModal(tab) {
         </div>
       </div>
 
+      <div class="set-panel" data-panel="appearance">
+        <div class="modal-msg">Оформление терминала. Применяется ко <b>всем</b> вкладкам сразу.</div>
+        <div class="set-field">
+          <span class="set-label">Тема</span>
+          <div class="theme-grid" id="set-theme-grid"></div>
+        </div>
+        <div class="set-field">
+          <span class="set-label">Размер шрифта</span>
+          <div class="set-stepper">
+            <button type="button" class="step-btn" id="set-font-dec" aria-label="меньше">−</button>
+            <span class="step-val" id="set-font-val"></span>
+            <button type="button" class="step-btn" id="set-font-inc" aria-label="больше">+</button>
+          </div>
+        </div>
+        <label class="set-field">
+          <span class="set-label">Шрифт</span>
+          <select class="set-input" id="set-font-family"></select>
+        </label>
+        <label class="set-field">
+          <span class="set-label">Курсор</span>
+          <select class="set-input" id="set-cursor-style"></select>
+        </label>
+        <label class="set-check">
+          <input type="checkbox" id="set-cursor-blink" />
+          <span class="set-check-tx">Мигание курсора</span>
+        </label>
+        <div class="set-field">
+          <span class="set-label">Предпросмотр</span>
+          <div class="term-preview" id="set-term-preview"></div>
+        </div>
+      </div>
+
       <div class="modal-actions">
         <button class="modal-cancel">Отмена</button>
         <button class="modal-ok neutral">Сохранить</button>
@@ -522,6 +581,81 @@ function showSettingsModal(tab) {
   syncNotify();
   onI.addEventListener('change', syncNotify);
 
+  // Appearance panel. Edits accumulate in `draft` (a copy of the live appearance)
+  // and only commit on Save — Cancel/Esc discards them. A small preview strip
+  // reflects the draft immediately, before saving.
+  const draft = { ...appearance };
+  const grid = overlay.querySelector('#set-theme-grid');
+  const fontVal = overlay.querySelector('#set-font-val');
+  const fontDec = overlay.querySelector('#set-font-dec');
+  const fontInc = overlay.querySelector('#set-font-inc');
+  const familySel = overlay.querySelector('#set-font-family');
+  const cursorSel = overlay.querySelector('#set-cursor-style');
+  const blinkI = overlay.querySelector('#set-cursor-blink');
+  const previewEl = overlay.querySelector('#set-term-preview');
+
+  function renderThemeSwatch(t) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'theme-swatch' + (t.id === draft.theme ? ' active' : '');
+    b.dataset.theme = t.id;
+    b.title = t.name;
+    const pal = ['green', 'yellow', 'blue', 'magenta', 'cyan'];
+    b.innerHTML =
+      `<span class="theme-pal" style="background:${t.xterm.background}">` +
+      pal.map((k) => `<i style="background:${t.xterm[k]}"></i>`).join('') +
+      `</span><span class="theme-name"></span>`;
+    b.querySelector('.theme-name').textContent = t.name;
+    b.addEventListener('click', () => {
+      draft.theme = t.id;
+      grid.querySelectorAll('.theme-swatch').forEach((el) =>
+        el.classList.toggle('active', el.dataset.theme === t.id));
+      renderTermPreview();
+    });
+    return b;
+  }
+  APPEARANCE.THEMES.forEach((t) => grid.appendChild(renderThemeSwatch(t)));
+
+  APPEARANCE.FONT_FAMILIES.forEach((f) => {
+    const o = document.createElement('option');
+    o.value = f.value;
+    o.textContent = f.name;
+    familySel.appendChild(o);
+  });
+  familySel.value = draft.fontFamily; // no-op if the stored stack isn't in the list
+
+  APPEARANCE.CURSOR_STYLES.forEach((c) => {
+    const o = document.createElement('option');
+    o.value = c.id;
+    o.textContent = c.name;
+    cursorSel.appendChild(o);
+  });
+  cursorSel.value = draft.cursorStyle;
+  blinkI.checked = draft.cursorBlink;
+
+  function renderTermPreview() {
+    const xt = APPEARANCE.getTheme(draft.theme).xterm;
+    previewEl.style.background = xt.background;
+    previewEl.style.color = xt.foreground;
+    previewEl.style.fontFamily = draft.fontFamily;
+    previewEl.style.fontSize = draft.fontSize + 'px';
+    fontVal.textContent = draft.fontSize;
+    const cur = draft.cursorStyle === 'bar' ? '▏' : draft.cursorStyle === 'underline' ? '_' : '█';
+    previewEl.innerHTML =
+      `<span style="color:${xt.green}">claude</span> ` +
+      `<span style="color:${xt.yellow}">--help</span> ` +
+      `<span style="color:${xt.blue}">✓</span> ` +
+      `<span class="prev-cur" style="color:${xt.cursor}">${cur}</span>`;
+  }
+  renderTermPreview();
+
+  const setFont = (n) => { draft.fontSize = Math.max(10, Math.min(20, n)); renderTermPreview(); };
+  fontDec.addEventListener('click', () => setFont(draft.fontSize - 1));
+  fontInc.addEventListener('click', () => setFont(draft.fontSize + 1));
+  familySel.addEventListener('change', () => { draft.fontFamily = familySel.value; renderTermPreview(); });
+  cursorSel.addEventListener('change', () => { draft.cursorStyle = cursorSel.value; renderTermPreview(); });
+  blinkI.addEventListener('change', () => { draft.cursorBlink = blinkI.checked; });
+
   // Tab switching.
   const panels = overlay.querySelectorAll('.set-panel');
   const tabs = overlay.querySelectorAll('.set-tab');
@@ -531,7 +665,7 @@ function showSettingsModal(tab) {
     if (name === 'launch') { cmdI.focus(); cmdI.select(); }
   };
   tabs.forEach((t) => t.addEventListener('click', () => showTab(t.dataset.tab)));
-  showTab(tab === 'notify' ? 'notify' : 'launch');
+  showTab(['notify', 'appearance'].includes(tab) ? tab : 'launch');
 
   const close = () => { document.removeEventListener('keydown', onKey, true); overlay.remove(); };
   const save = () => {
@@ -546,6 +680,9 @@ function showSettingsModal(tab) {
     localStorage.setItem('swarm.notifyActive', notifyActive ? '1' : '0');
     localStorage.setItem('swarm.notifySound', notifySound ? '1' : '0');
     applyNotify(onI.checked); // master switch (persists swarm.notify)
+    appearance = { ...draft };
+    saveAppearance();
+    applyAppearance();
     close();
   };
   const onKey = (ev) => {
@@ -1180,6 +1317,29 @@ function openHelp() {
 
 // Opened from the native "Справка" app-menu item (⌘/), handled in main.
 window.swarm.onOpenHelp(openHelp);
+
+// ⌘C (native Edit → Copy) routes here instead of the stock `copy` role, whose
+// native path mangled the xterm selection's encoding (Cyrillic → MacRoman
+// mojibake). We read the selection as a proper JS string and write it via
+// Electron's clipboard (correct UTF-8): the active terminal's selection if it has
+// one, otherwise the page's DOM selection (a modal, the branch bar, etc.).
+window.swarm.onMenuCopy(() => {
+  const s = sessions.get(activeId);
+  if (s && s.term && s.term.hasSelection()) {
+    window.swarm.clipboardWrite(s.term.getSelection());
+    return;
+  }
+  // Form fields: window.getSelection() is empty inside <input>/<textarea>, so read
+  // the field's own selection range (e.g. the launch cmd/flags in Settings).
+  const el = document.activeElement;
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') &&
+      el.selectionStart != null && el.selectionStart !== el.selectionEnd) {
+    window.swarm.clipboardWrite(el.value.substring(el.selectionStart, el.selectionEnd));
+    return;
+  }
+  const domSel = window.getSelection ? String(window.getSelection()) : '';
+  if (domSel) window.swarm.clipboardWrite(domSel);
+});
 
 // Refit the active terminal when the window changes size.
 window.addEventListener('resize', () => {
