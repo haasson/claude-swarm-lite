@@ -26,6 +26,7 @@ const fs = require('fs');
 // so users don't need a C++ compiler + Python to install. Same API as node-pty.
 const pty = require('@homebridge/node-pty-prebuilt-multiarch');
 const git = require('./git');
+const updater = require('./updater');
 
 /** @type {BrowserWindow | null} */
 let win = null;
@@ -487,6 +488,24 @@ ipcMain.on('clipboard:write', (_event, text) => {
   try { clipboard.writeText(String(text == null ? '' : text)); } catch (_) {}
 });
 
+// --- IPC: auto-update ---------------------------------------------------------
+ipcMain.handle('app:version', () => app.getVersion());
+ipcMain.handle('update:check', async () => {
+  try { return await updater.checkForUpdate(); }
+  catch (e) { reportMainError(e); return { kind: 'none' }; }
+});
+ipcMain.handle('update:apply', async (_e, { url, sha256 }) => {
+  try {
+    await updater.applyAsar(url, sha256, (pct) => safeSend('update:progress', pct));
+    return { ok: true };
+  } catch (e) { reportMainError(e); return { ok: false, error: String(e && e.message || e) }; }
+});
+ipcMain.handle('update:installer', async (_e, { url, filename }) => {
+  try { return await updater.downloadInstaller(url, filename); }
+  catch (e) { reportMainError(e); return { ok: false, error: String(e && e.message || e) }; }
+});
+ipcMain.on('update:relaunch', () => { app.relaunch(); app.exit(0); });
+
 // Native app menu. A custom menu REPLACES Electron's default, so we must re-add
 // the standard roles (Edit gives ⌘C/⌘V/⌘A — critical in a terminal; View gives
 // reload/devtools; Window gives minimize/close), then append our own "Справка".
@@ -526,6 +545,9 @@ function buildMenu() {
 }
 
 app.whenReady().then(() => {
+  // Offer to move into ~/Applications on macOS so a later asar-swap can write.
+  // If it relocates, it exits — don't open a window in that case.
+  if (updater.maybeRelocate()) return;
   buildMenu();
   createWindow();
 });

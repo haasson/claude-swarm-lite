@@ -94,4 +94,16 @@ contextBridge.exposeInMainWorld('swarm', {
     ipcRenderer.on('app:error', handler);
     return () => ipcRenderer.removeListener('app:error', handler);
   },
+
+  // --- auto-update ---
+  getVersion: () => ipcRenderer.invoke('app:version'),
+  updateCheck: () => ipcRenderer.invoke('update:check'),
+  updateApply: (url, sha256) => ipcRenderer.invoke('update:apply', { url, sha256 }),
+  updateDownloadInstaller: (url, filename) => ipcRenderer.invoke('update:installer', { url, filename }),
+  updateRelaunch: () => ipcRenderer.send('update:relaunch'),
+  onUpdateProgress: (cb) => {
+    const handler = (_e, pct) => cb(pct);
+    ipcRenderer.on('update:progress', handler);
+    return () => ipcRenderer.removeListener('update:progress', handler);
+  },
 });
