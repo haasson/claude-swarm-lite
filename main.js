@@ -29,6 +29,9 @@ const git = require('./git');
 
 /** @type {BrowserWindow | null} */
 let win = null;
+// Set once the user confirms the close dialog, so the re-issued win.close() (or a
+// Cmd+Q that follows) passes through instead of re-prompting.
+let allowClose = false;
 
 /** @type {Map<string, import('node-pty').IPty>} sessionId -> pty process */
 const sessions = new Map();
@@ -227,6 +230,27 @@ function createWindow() {
   // navigation and any window-open outright.
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
+  // Confirm before the window closes — closing it kills every `claude` child
+  // (see the 'closed' handler), so an accidental ⌘Q / red-button click would drop
+  // live agents. Native sync dialog: simplest reliable gate in the main process.
+  win.on('close', (e) => {
+    if (allowClose) return;
+    e.preventDefault();
+    const n = sessions.size;
+    const message = n > 0
+      ? `Закрыть Claude Swarm? Сейчас запущено сессий: ${n}. Все агенты завершатся.`
+      : 'Закрыть Claude Swarm?';
+    const choice = dialog.showMessageBoxSync(win, {
+      type: 'warning',
+      buttons: ['Отмена', 'Закрыть'],
+      defaultId: 0,
+      cancelId: 0,
+      title: 'Закрытие приложения',
+      message,
+    });
+    if (choice === 1) { allowClose = true; win.close(); }
+  });
 
   win.on('closed', () => {
     // Kill every child so we don't leak `claude` processes on quit.
