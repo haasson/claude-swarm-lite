@@ -18,7 +18,7 @@
 //   just type `claude` into it. Bonus: auth "just works" because it's the same
 //   environment you log in from.
 
-const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard } = require('electron');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
@@ -465,6 +465,16 @@ ipcMain.on('app:focus', () => {
   app.focus({ steal: true });
 });
 
+// --- IPC: copy text to the clipboard -----------------------------------------
+// The renderer sends the exact string to copy (a terminal selection or a modal's
+// DOM selection). We write it via Electron's clipboard, which encodes UTF-8 to the
+// pasteboard correctly. This deliberately replaces the Edit-menu's native `copy`
+// role: that path read the xterm selection through a byte-mangled route and put
+// UTF-8 bytes on the board tagged as MacRoman, so Cyrillic pasted as mojibake.
+ipcMain.on('clipboard:write', (_event, text) => {
+  try { clipboard.writeText(String(text == null ? '' : text)); } catch (_) {}
+});
+
 // Native app menu. A custom menu REPLACES Electron's default, so we must re-add
 // the standard roles (Edit gives ⌘C/⌘V/⌘A — critical in a terminal; View gives
 // reload/devtools; Window gives minimize/close), then append our own "Справка".
@@ -472,7 +482,24 @@ ipcMain.on('app:focus', () => {
 function buildMenu() {
   const template = [
     { role: 'appMenu' },
-    { role: 'editMenu' },
+    {
+      // Explicit label (not role:'editMenu') so our custom submenu — with the
+      // routed Copy — is used instead of the auto-generated one. Copy is NOT the
+      // stock `copy` role: that native path mangled the xterm selection's encoding
+      // (Cyrillic → MacRoman mojibake). Instead ⌘C asks the renderer to copy — it
+      // grabs the terminal/modal selection as a proper string and writes it through
+      // clipboard:write. Cut/Paste/Select-All stay native.
+      label: 'Правка',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { label: 'Копировать', accelerator: 'CmdOrCtrl+C', click: () => safeSend('menu:copy') },
+        { role: 'paste' },
+        { role: 'selectAll' },
+      ],
+    },
     { role: 'viewMenu' },
     { role: 'windowMenu' },
     {

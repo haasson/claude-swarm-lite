@@ -75,4 +75,15 @@ contextBridge.exposeInMainWorld('swarm', {
     ipcRenderer.on('open-help', handler);
     return () => ipcRenderer.removeListener('open-help', handler);
   },
+
+  // Copy a string to the system clipboard via Electron (correct UTF-8 encoding).
+  // Used for ⌘C so a terminal/modal selection with Cyrillic doesn't get mangled.
+  clipboardWrite: (text) => ipcRenderer.send('clipboard:write', text),
+
+  // Native Edit → Copy (⌘C) asks the renderer to copy the current selection.
+  onMenuCopy: (cb) => {
+    const handler = () => cb();
+    ipcRenderer.on('menu:copy', handler);
+    return () => ipcRenderer.removeListener('menu:copy', handler);
+  },
 });
