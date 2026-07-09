@@ -64,6 +64,15 @@ build_windows:
     - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
   # A Windows-build hiccup must never block the macOS release below.
   allow_failure: true
+  # The win32 node-pty prebuild + Electron headers are fetched over the network,
+  # which occasionally times out (seen on v0.3.0). Auto-retry so a flaky download
+  # doesn't leave the Release advertising a .exe link that 404s.
+  retry:
+    max: 2
+    when:
+      - script_failure
+      - runner_system_failure
+      - stuck_or_timeout_failure
   variables:
     # We don't run Electron here, only package it — skip the dev-binary download.
     ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
@@ -73,7 +82,11 @@ build_windows:
     - cd node_modules/@homebridge/node-pty-prebuilt-multiarch
     - npx --yes prebuild-install --runtime electron --target "$ELECTRON_VERSION" --platform win32 --arch x64 --dist-url https://electronjs.org/headers
     - cd "$CI_PROJECT_DIR"
-    - npx --yes electron-builder --win --x64
+    # --publish never: on a git tag electron-builder otherwise tries an IMPLICIT
+    # publish to its default (GitHub) provider, which has no creds here and fails
+    # the whole build with a TLS/socket error (seen on v0.3.0). We only ever build
+    # here and upload via curl below, so never let it publish.
+    - npx --yes electron-builder --win --x64 --publish never
     - ls -la dist/
     - EXE="claude-swarm-lite-${VERSION}-x64.exe"
     - 'curl --fail -sS --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "dist/${EXE}" "${PKG_BASE}/${VERSION}/${EXE}"'
