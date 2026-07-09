@@ -568,6 +568,7 @@ function showSettingsModal(tab) {
         <button class="set-tab" data-tab="launch">Запуск</button>
         <button class="set-tab" data-tab="notify">Уведомления</button>
         <button class="set-tab" data-tab="appearance">Вид</button>
+        <button class="set-tab" data-tab="updates">Обновления</button>
       </div>
 
       <div class="set-panel" data-panel="launch">
@@ -644,6 +645,12 @@ function showSettingsModal(tab) {
           <span class="set-label">Предпросмотр</span>
           <div class="term-preview" id="set-term-preview"></div>
         </div>
+      </div>
+
+      <div class="set-panel" data-panel="updates">
+        <div class="modal-msg">Версия: <b class="upd-cur">…</b></div>
+        <button class="set-check-btn upd-check">Проверить обновления</button>
+        <div class="set-hint upd-status"></div>
       </div>
 
       <div class="modal-actions">
@@ -758,6 +765,17 @@ function showSettingsModal(tab) {
   cursorSel.addEventListener('change', () => { draft.cursorStyle = cursorSel.value; renderTermPreview(); });
   blinkI.addEventListener('change', () => { draft.cursorBlink = blinkI.checked; });
 
+  const curEl = overlay.querySelector('.upd-cur');
+  window.swarm.getVersion().then((v) => { if (curEl) curEl.textContent = v; }).catch(() => {});
+  const updStatus = overlay.querySelector('.upd-status');
+  overlay.querySelector('.upd-check').addEventListener('click', async () => {
+    updStatus.textContent = 'Проверяю…';
+    const res = await checkForUpdate(false);
+    updStatus.textContent = (res && res.kind !== 'none')
+      ? ('Доступно обновление ' + res.version)
+      : 'Установлена последняя версия.';
+  });
+
   // Tab switching.
   const panels = overlay.querySelectorAll('.set-panel');
   const tabs = overlay.querySelectorAll('.set-tab');
@@ -767,7 +785,7 @@ function showSettingsModal(tab) {
     if (name === 'launch') { cmdI.focus(); cmdI.select(); }
   };
   tabs.forEach((t) => t.addEventListener('click', () => showTab(t.dataset.tab)));
-  showTab(['notify', 'appearance'].includes(tab) ? tab : 'launch');
+  showTab(['notify', 'appearance', 'updates'].includes(tab) ? tab : 'launch');
 
   const close = () => { document.removeEventListener('keydown', onKey, true); overlay.remove(); };
   const save = () => {
@@ -1504,6 +1522,111 @@ window.addEventListener('keydown', (e) => {
     if (id) { e.preventDefault(); activate(id); }
   }
 });
+
+// --- auto-update -------------------------------------------------------------
+// A pill in the status bar appears when the manifest advertises a newer version.
+// Clicking it opens a modal: asar-swap (small, in-app) or a full-installer fallback
+// when the runtime changed. Checks on launch + every 4h + manually from Settings.
+let updateState = null; // last decideUpdate result with kind 'asar'|'installer'
+const UPDATE_POLL_MS = 4 * 60 * 60 * 1000;
+
+function snoozedVersion() { return localStorage.getItem('swarm.update.snooze') || ''; }
+
+function renderUpdatePill() {
+  const pill = document.getElementById('update-pill');
+  if (!pill) return;
+  const show = updateState && updateState.kind !== 'none' && updateState.version !== snoozedVersion();
+  pill.hidden = !show;
+  if (show) pill.textContent = '↑ Обновить ' + updateState.version;
+}
+
+async function checkForUpdate(manual) {
+  let res = null;
+  try { res = await window.swarm.updateCheck(); } catch (_) { res = { kind: 'none' }; }
+  localStorage.setItem('swarm.update.lastCheck', String(Date.now()));
+  if (res && res.kind !== 'none') { updateState = res; renderUpdatePill(); if (manual) openUpdateModal(); }
+  else if (manual) { updateState = res; alertNoUpdate(); }
+  return res;
+}
+
+function alertNoUpdate() {
+  confirmModalInfo('Обновлений нет — установлена последняя версия.');
+}
+
+// A one-button info modal (reuses the confirm modal look).
+function confirmModalInfo(message) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `<div class="modal"><div class="modal-msg"></div>
+    <div class="modal-actions"><button class="modal-ok neutral">Понятно</button></div></div>`;
+  overlay.querySelector('.modal-msg').textContent = message;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector('.modal-ok').addEventListener('click', close);
+  overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(); });
+}
+
+function openUpdateModal() {
+  if (!updateState || updateState.kind === 'none') return;
+  if (document.querySelector('.modal-overlay .modal.update')) return;
+  const st = updateState;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal update">
+      <div class="modal-title">Обновление ${st.version}</div>
+      <div class="modal-msg upd-notes"></div>
+      <div class="upd-progress" hidden><div class="upd-bar"></div></div>
+      <div class="modal-actions">
+        <button class="modal-cancel upd-later">Позже</button>
+        <button class="modal-ok neutral upd-go"></button>
+      </div>
+    </div>`;
+  overlay.querySelector('.upd-notes').textContent =
+    (st.kind === 'installer' ? 'Изменился рантайм — нужен полный установщик.\n\n' : '') + (st.notes || '');
+  const goBtn = overlay.querySelector('.upd-go');
+  goBtn.textContent = st.kind === 'asar' ? 'Обновить и перезапустить' : 'Скачать установщик';
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.remove();
+  overlay.querySelector('.upd-later').addEventListener('click', () => {
+    localStorage.setItem('swarm.update.snooze', st.version); renderUpdatePill(); close();
+  });
+  overlay.addEventListener('mousedown', (e) => { if (e.target === overlay && !goBtn.disabled) close(); });
+
+  goBtn.addEventListener('click', async () => {
+    goBtn.disabled = true;
+    if (st.kind === 'asar') {
+      const prog = overlay.querySelector('.upd-progress');
+      const bar = overlay.querySelector('.upd-bar');
+      prog.hidden = false;
+      const off = window.swarm.onUpdateProgress((pct) => { bar.style.width = pct + '%'; });
+      const res = await window.swarm.updateApply(st.asar.url, st.asar.sha256);
+      off();
+      if (res && res.ok) { window.swarm.updateRelaunch(); }
+      else {
+        prog.hidden = true; goBtn.disabled = false;
+        overlay.querySelector('.upd-notes').textContent =
+          'Не удалось обновить: ' + (res && res.error || 'ошибка') + '. Попробуйте полный установщик.';
+      }
+    } else {
+      const u = st.installers[window.swarm.platform === 'win32' ? 'exe' : 'dmg'];
+      const fname = (u || '').split('/').pop() || 'installer';
+      const res = await window.swarm.updateDownloadInstaller(u, fname);
+      close();
+      confirmModalInfo(res && res.ok ? 'Установщик скачан в «Загрузки».' : 'Не удалось скачать установщик.');
+    }
+  });
+}
+
+// initial + periodic checks (throttled)
+setTimeout(() => checkForUpdate(false), 3000);
+setInterval(() => {
+  const last = Number(localStorage.getItem('swarm.update.lastCheck') || 0);
+  if (Date.now() - last >= UPDATE_POLL_MS) checkForUpdate(false);
+}, 30 * 60 * 1000);
+
+document.getElementById('update-pill').addEventListener('click', openUpdateModal);
 
 document.getElementById('new-session-folder').addEventListener('click', createSessionInFolder);
 layoutBtn.addEventListener('click', toggleLayout);

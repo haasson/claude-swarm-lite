@@ -45,6 +45,8 @@
     <!-- Action icons (VS Code style), pinned to the right of the bar. -->
     <div id="bar-actions">
       <!-- Red "!" surfaces captured errors; click opens the logs modal. Hidden until an error occurs. -->
+      <!-- Появляется, когда доступно обновление; клик открывает модалку апдейта. -->
+      <button id="update-pill" class="update-pill" hidden></button>
       <button id="log-indicator" class="log-indicator" hidden title="Ошибки — показать логи"></button>
       <button id="cmd-menu-btn" title="Быстрые команды (⌘K)"><span class="ic">☰</span><span class="tx">команды</span></button>
       <button id="settings-btn" title="Настройки (⌘,)"><span class="ic">⚙</span><span class="tx">настройки</span></button>
