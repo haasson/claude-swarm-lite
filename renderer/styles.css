@@ -56,10 +56,12 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   align-items: stretch;
   border-bottom: 1px solid var(--border);
 }
-/* Reserve the left gap only on macOS, where the window's traffic lights sit
-   inside the content (titleBarStyle: hiddenInset). Windows/Linux use a native
-   frame, so no gap is needed. */
-.platform-darwin.layout-top #chrome { padding-left: 78px; }
+/* macOS traffic lights sit inside the content (titleBarStyle: hiddenInset). In the
+   top layout, reserve a full-width drag strip ABOVE the cards instead of indenting
+   them from the left — the lights live in that strip, the tabs sit flush-left below
+   it. #chrome is a drag region, so the empty strip also moves the window. Windows/
+   Linux use a native frame, so no strip is needed. */
+.platform-darwin.layout-top #chrome { padding-top: 30px; }
 
 #brand { display: flex; flex-direction: column; justify-content: center; }
 /* 16px top on Windows/Linux; macOS bumps it to 34px to clear the traffic
