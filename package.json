@@ -1,6 +1,6 @@
 {
   "name": "claude-swarm-lite",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Minimal Electron GUI that runs several Claude Code sessions in tabs by spawning your local `claude` CLI inside a login shell. It never touches OAuth tokens — each tab is a real `claude` process that inherits the auth you already set up, so everything runs on your normal subscription limits.",
   "main": "main.js",
