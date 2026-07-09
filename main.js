@@ -66,6 +66,18 @@ function safeSend(channel, payload) {
   }
 }
 
+// --- error reporting: surface main-process failures in the in-app log viewer ----
+// A crash in main (pty spawn, git, an IPC handler) otherwise only prints to the
+// terminal we were launched from, which regular users never see. Forward it to the
+// renderer's log store so it shows up behind the red "!" in the status bar. We log
+// and keep running rather than letting an uncaught error tear the process down.
+function reportMainError(err) {
+  const msg = (err && err.stack) || (err && err.message) || String(err);
+  safeSend('app:error', { ts: new Date().toISOString().slice(11, 19), source: 'main', level: 'error', msg });
+}
+process.on('uncaughtException', reportMainError);
+process.on('unhandledRejection', (reason) => reportMainError(reason));
+
 // --- status detection --------------------------------------------------------
 // Claude Code prints no machine-readable status, so we infer it from the pty
 // stream — but simply, not by scraping the TUI text:

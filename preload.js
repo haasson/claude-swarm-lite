@@ -86,4 +86,12 @@ contextBridge.exposeInMainWorld('swarm', {
     ipcRenderer.on('menu:copy', handler);
     return () => ipcRenderer.removeListener('menu:copy', handler);
   },
+
+  // Main-process errors, forwarded so they land in the in-app log viewer.
+  // cb({ ts, source, level, msg }). Returns an unsubscribe fn.
+  onAppError: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('app:error', handler);
+    return () => ipcRenderer.removeListener('app:error', handler);
+  },
 });

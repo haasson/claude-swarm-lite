@@ -564,3 +564,31 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 }
 .term-preview .prev-cur { font-weight: 700; }
 
+/* --- error indicator ("!") + logs modal ---------------------------------- */
+.log-indicator {
+  -webkit-app-region: no-drag;
+  display: inline-flex; align-items: center; gap: 4px;
+  border: 1px solid var(--danger); color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  border-radius: 6px; padding: 2px 7px; margin-right: 4px;
+  font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; cursor: pointer;
+}
+.log-indicator[hidden] { display: none; }
+.log-indicator:hover { background: color-mix(in srgb, var(--danger) 26%, transparent); }
+
+.modal.logs { width: min(680px, 94vw); }
+.logs-body {
+  max-height: 52vh; overflow-y: auto; margin-bottom: 16px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
+}
+.logs-empty { padding: 16px; color: var(--muted); font-size: 13px; }
+.logs-row { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.logs-row:last-child { border-bottom: none; }
+.logs-meta { display: block; font-size: 10px; color: var(--muted); margin-bottom: 3px; }
+.logs-row.level-error .logs-meta { color: var(--danger); }
+.logs-msg {
+  font-family: var(--mono); font-size: 11px; line-height: 1.45; color: var(--text);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.modal.logs .logs-copy { border-color: var(--accent); color: var(--accent); }
+

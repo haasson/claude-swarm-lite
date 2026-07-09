@@ -7,6 +7,108 @@
 
 const { Terminal } = window;                 // UMD global from xterm.js
 const { FitAddon } = window.FitAddon;        // UMD global from addon-fit
+
+// --- error capture (set up FIRST, before any risky init) ---------------------
+// Runtime errors go into a ring buffer surfaced behind the red "!" in the status
+// bar; clicking it opens a copyable log modal. The indicator + its click handler
+// are wired here, at the very top, so that even a crash DURING load (which would
+// stop the listener wiring at the end of this file from ever running) is still
+// recorded AND the "!" stays clickable — exactly the case we want to diagnose.
+const logStore = window.SWARM_LOGSTORE.createLogStore(200);
+
+function nowClock() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+function updateLogIndicator() {
+  const btn = document.getElementById('log-indicator');
+  if (!btn) return;
+  const n = logStore.errorCount();
+  btn.hidden = n === 0;
+  btn.textContent = n > 99 ? '! 99+' : '! ' + n;
+}
+
+function recordLog(source, level, msg) {
+  logStore.push({ ts: nowClock(), source, level, msg });
+  updateLogIndicator();
+}
+
+function openLogsModal() {
+  if (document.querySelector('.modal-overlay .modal.logs')) return; // already open
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal logs">
+      <div class="modal-title">Логи ошибок</div>
+      <div class="logs-body"></div>
+      <div class="modal-actions">
+        <button class="modal-cancel logs-close">Закрыть</button>
+        <button class="modal-ok neutral logs-copy">Скопировать</button>
+      </div>
+    </div>`;
+  const body = overlay.querySelector('.logs-body');
+  const entries = logStore.entries();
+  if (!entries.length) {
+    body.innerHTML = '<div class="logs-empty">Пусто — ошибок не было.</div>';
+  } else {
+    for (const e of entries) {
+      const row = document.createElement('div');
+      row.className = 'logs-row level-' + e.level;
+      const meta = document.createElement('span');
+      meta.className = 'logs-meta';
+      meta.textContent = `${e.ts} · ${e.source} · ${e.level}`;
+      const msg = document.createElement('div');
+      msg.className = 'logs-msg';
+      msg.textContent = e.msg;               // textContent — never render captured text as markup
+      row.append(meta, msg);
+      body.appendChild(row);
+    }
+  }
+  document.body.appendChild(overlay);
+  if (entries.length) body.scrollTop = body.scrollHeight; // newest at the bottom
+  const close = () => { document.removeEventListener('keydown', onKey, true); overlay.remove(); };
+  const onKey = (ev) => { if (ev.key === 'Escape') { ev.preventDefault(); close(); } };
+  overlay.querySelector('.logs-close').addEventListener('click', close);
+  overlay.querySelector('.logs-copy').addEventListener('click', () => {
+    try { window.swarm.clipboardWrite(logStore.text()); } catch (_) {}
+  });
+  overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(); });
+  document.addEventListener('keydown', onKey, true);
+}
+
+(function initErrorCapture() {
+  const btn = document.getElementById('log-indicator');
+  if (btn) btn.addEventListener('click', openLogsModal);
+  const safeStringify = (o) => { try { return JSON.stringify(o); } catch (_) { return String(o); } };
+  const fmt = (a) => (a && a.stack) || (typeof a === 'object' ? safeStringify(a) : String(a));
+  window.addEventListener('error', (e) => {
+    recordLog('ui', 'error', (e.error && e.error.stack) || e.message || 'ошибка');
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    const r = e.reason;
+    recordLog('ui', 'error', (r && r.stack) || (r && r.message) || String(r));
+  });
+  const wrap = (level, orig) => (...args) => {
+    try { recordLog('ui', level, args.map(fmt).join(' ')); } catch (_) { /* never let logging throw */ }
+    orig.apply(console, args);
+  };
+  console.error = wrap('error', console.error.bind(console));
+  console.warn = wrap('warn', console.warn.bind(console));
+  try {
+    window.swarm.onAppError((entry) => {
+      logStore.push({
+        ts: (entry && entry.ts) || nowClock(),
+        source: 'main',
+        level: (entry && entry.level) || 'error',
+        msg: (entry && entry.msg) || '',
+      });
+      updateLogIndicator();
+    });
+  } catch (_) { /* preload without onAppError — ignore */ }
+})();
+
 const APPEARANCE = window.SWARM_THEMES;       // terminal theme presets + helpers
 
 // Global terminal appearance (theme + font + cursor). One setting for all tabs,

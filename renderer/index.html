@@ -44,6 +44,8 @@
     <span id="git-msg" class="git-msg"></span>
     <!-- Action icons (VS Code style), pinned to the right of the bar. -->
     <div id="bar-actions">
+      <!-- Red "!" surfaces captured errors; click opens the logs modal. Hidden until an error occurs. -->
+      <button id="log-indicator" class="log-indicator" hidden title="Ошибки — показать логи"></button>
       <button id="cmd-menu-btn" title="Быстрые команды (⌘K)"><span class="ic">☰</span><span class="tx">команды</span></button>
       <button id="settings-btn" title="Настройки (⌘,)"><span class="ic">⚙</span><span class="tx">настройки</span></button>
       <button id="layout-toggle" title="Сменить раскладку (⌘L)"><span class="ic">⇄</span><span class="tx">layout</span></button>
@@ -62,6 +64,8 @@
   <!-- Terminal theme presets + appearance helpers (window.SWARM_THEMES). Must
        load before renderer.js, which reads it in makeXterm/applyAppearance. -->
   <script src="./themes.js"></script>
+  <!-- In-app log ring buffer (window.SWARM_LOGSTORE). Before renderer.js. -->
+  <script src="./logstore.js"></script>
   <script src="./renderer.js"></script>
 </body>
 </html>
