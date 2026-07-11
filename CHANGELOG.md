@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.10 — 2026-07-11
+
+- ci(windows): качать node-pty через curl с ретраями, без allow_failure
+
 ## 0.6.9 — 2026-07-11
 
 - fix(win): запускать asar-swap helper через cmd start — вне Job Object
