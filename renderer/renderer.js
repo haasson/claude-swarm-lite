@@ -134,7 +134,14 @@ let keybinds = loadKeybinds();
 function loadKeybinds() {
   let raw = null;
   try { raw = JSON.parse(localStorage.getItem('swarm.keybinds') || 'null'); } catch (_) {}
-  return KEYBINDS_API.normalizeKeybinds(raw);
+  const next = KEYBINDS_API.normalizeKeybinds(raw, window.swarm.platform);
+  // Persist mac→win default migration so Settings / next launch see Ctrl, not ⌘.
+  try {
+    if (JSON.stringify(raw) !== JSON.stringify(next)) {
+      localStorage.setItem('swarm.keybinds', JSON.stringify(next));
+    }
+  } catch (_) {}
+  return next;
 }
 
 function saveKeybinds() {
@@ -711,6 +718,7 @@ function showSettingsModal(tab) {
       <div class="set-panel" data-panel="updates">
         <div class="modal-msg">Версия: <b class="upd-cur">…</b></div>
         <button class="set-check-btn upd-check">Проверить обновления</button>
+        <button class="set-check-btn upd-go-btn" hidden type="button"></button>
         <div class="set-hint upd-status"></div>
       </div>
 
@@ -873,9 +881,25 @@ function showSettingsModal(tab) {
       const chordBtn = document.createElement('button');
       chordBtn.type = 'button';
       chordBtn.className = 'kb-chord' + (kbCapturing === a.id ? ' capturing' : '');
-      chordBtn.textContent = kbCapturing === a.id
-        ? 'Нажмите…'
-        : KEYBINDS_API.formatChord(kbDraft[a.id]);
+      if (kbCapturing === a.id) {
+        chordBtn.textContent = 'Нажмите…';
+      } else if (!kbDraft[a.id]) {
+        chordBtn.textContent = 'не задано';
+      } else {
+        const parts = KEYBINDS_API.chordParts(kbDraft[a.id], window.swarm.platform);
+        parts.forEach((p, i) => {
+          if (i) {
+            const sep = document.createElement('span');
+            sep.className = 'kb-sep';
+            sep.textContent = '+';
+            chordBtn.appendChild(sep);
+          }
+          const kbd = document.createElement('kbd');
+          kbd.className = 'kb-key';
+          kbd.textContent = p;
+          chordBtn.appendChild(kbd);
+        });
+      }
       chordBtn.addEventListener('click', () => {
         if (kbCapturing === a.id) stopKbCapture();
         else startKbCapture(a.id);
@@ -886,7 +910,7 @@ function showSettingsModal(tab) {
       resetBtn.title = 'Сбросить к умолчанию';
       resetBtn.textContent = '×';
       resetBtn.addEventListener('click', () => {
-        kbDraft[a.id] = { ...KEYBINDS_API.DEFAULT_KEYBINDS[a.id] };
+        kbDraft[a.id] = { ...KEYBINDS_API.defaultsFor(window.swarm.platform)[a.id] };
         if (kbCapturing === a.id) stopKbCapture();
         else renderKbList();
       });
@@ -904,12 +928,30 @@ function showSettingsModal(tab) {
   const curEl = overlay.querySelector('.upd-cur');
   window.swarm.getVersion().then((v) => { if (curEl) curEl.textContent = v; }).catch(() => {});
   const updStatus = overlay.querySelector('.upd-status');
+  const updGoBtn = overlay.querySelector('.upd-go-btn');
+
+  function syncUpdGoBtn(res) {
+    const available = res && res.kind !== 'none';
+    updGoBtn.hidden = !available;
+    if (available) {
+      updGoBtn.textContent = res.kind === 'asar'
+        ? ('Обновить до ' + res.version)
+        : ('Скачать установщик ' + res.version);
+    }
+  }
+  // If a check already found an update (pill is showing), offer the button immediately.
+  syncUpdGoBtn(updateState);
+
   overlay.querySelector('.upd-check').addEventListener('click', async () => {
+    updGoBtn.hidden = true;
     updStatus.textContent = 'Проверяю…';
     const res = await checkForUpdate(false);
-    updStatus.textContent = (res && res.kind !== 'none')
-      ? ('Доступно обновление ' + res.version)
-      : 'Установлена последняя версия.';
+    if (res && res.kind !== 'none') {
+      updStatus.textContent = 'Доступно обновление ' + res.version;
+      syncUpdGoBtn(res);
+    } else {
+      updStatus.textContent = 'Установлена последняя версия.';
+    }
   });
 
   // Tab switching.
@@ -944,7 +986,7 @@ function showSettingsModal(tab) {
     appearance = { ...draft };
     saveAppearance();
     applyAppearance();
-    keybinds = KEYBINDS_API.normalizeKeybinds(kbDraft);
+    keybinds = KEYBINDS_API.normalizeKeybinds(kbDraft, window.swarm.platform);
     saveKeybinds();
     close();
   };
@@ -957,6 +999,11 @@ function showSettingsModal(tab) {
   overlay.querySelector('.modal-ok').addEventListener('click', save);
   overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(); });
   document.addEventListener('keydown', onKey, true);
+  updGoBtn.addEventListener('click', () => {
+    if (!updateState || updateState.kind === 'none') return;
+    close();
+    openUpdateModal();
+  });
 }
 
 function activate(id) {

@@ -37,41 +37,60 @@ test('BYTES are non-empty for every input action', () => {
   assert.strictEqual(K.BYTES.lineEnd, '\x05');
 });
 
-test('normalizeKeybinds fills defaults from empty/garbage', () => {
-  const b = K.normalizeKeybinds(null);
-  assert.deepStrictEqual(b.newline, K.DEFAULT_KEYBINDS.newline);
-  assert.deepStrictEqual(b.scrollBottom, K.DEFAULT_KEYBINDS.scrollBottom);
-  const g = K.normalizeKeybinds('nope');
-  assert.deepStrictEqual(g.wordLeft, K.DEFAULT_KEYBINDS.wordLeft);
+test('normalizeKeybinds fills darwin defaults from empty/garbage', () => {
+  const b = K.normalizeKeybinds(null, 'darwin');
+  assert.deepStrictEqual(b.newline, K.DEFAULT_KEYBINDS_DARWIN.newline);
+  assert.deepStrictEqual(b.scrollBottom, K.DEFAULT_KEYBINDS_DARWIN.scrollBottom);
+  const g = K.normalizeKeybinds('nope', 'darwin');
+  assert.deepStrictEqual(g.wordLeft, K.DEFAULT_KEYBINDS_DARWIN.wordLeft);
+});
+
+test('normalizeKeybinds fills win defaults (Ctrl / Home / End)', () => {
+  const b = K.normalizeKeybinds(null, 'win32');
+  assert.deepStrictEqual(b.newline, K.DEFAULT_KEYBINDS_WIN.newline);
+  assert.deepStrictEqual(b.wordLeft, K.DEFAULT_KEYBINDS_WIN.wordLeft);
+  assert.deepStrictEqual(b.lineStart, K.DEFAULT_KEYBINDS_WIN.lineStart);
+  assert.strictEqual(b.newline.ctrl, true);
+  assert.strictEqual(b.newline.meta, false);
+  assert.strictEqual(b.lineEnd.key, 'End');
+});
+
+test('normalizeKeybinds migrates leftover mac defaults on win32', () => {
+  const b = K.normalizeKeybinds({
+    newline: { ...K.DEFAULT_KEYBINDS_DARWIN.newline },
+    wordLeft: { ...K.DEFAULT_KEYBINDS_DARWIN.wordLeft },
+  }, 'win32');
+  assert.deepStrictEqual(b.newline, K.DEFAULT_KEYBINDS_WIN.newline);
+  assert.deepStrictEqual(b.wordLeft, K.DEFAULT_KEYBINDS_WIN.wordLeft);
 });
 
 test('normalizeKeybinds keeps explicit null (cleared binding)', () => {
-  const b = K.normalizeKeybinds({ newline: null });
+  const b = K.normalizeKeybinds({ newline: null }, 'darwin');
   assert.strictEqual(b.newline, null);
-  assert.deepStrictEqual(b.wordRight, K.DEFAULT_KEYBINDS.wordRight);
+  assert.deepStrictEqual(b.wordRight, K.DEFAULT_KEYBINDS_DARWIN.wordRight);
 });
 
 test('normalizeKeybinds rejects reserved chords and falls back to default', () => {
   const b = K.normalizeKeybinds({
     newline: { key: 't', meta: true, ctrl: false, alt: false, shift: false },
-  });
-  assert.deepStrictEqual(b.newline, K.DEFAULT_KEYBINDS.newline);
+  }, 'darwin');
+  assert.deepStrictEqual(b.newline, K.DEFAULT_KEYBINDS_DARWIN.newline);
 });
 
 test('normalizeKeybinds accepts a custom valid chord', () => {
   const chord = { key: 'Enter', meta: false, ctrl: false, alt: false, shift: true };
-  const b = K.normalizeKeybinds({ newline: chord });
+  const b = K.normalizeKeybinds({ newline: chord }, 'win32');
   assert.deepStrictEqual(b.newline, chord);
 });
 
-test('chordMatches Meta+Enter for newline default', () => {
-  const b = K.normalizeKeybinds({});
+test('chordMatches Meta+Enter for darwin newline default', () => {
+  const b = K.normalizeKeybinds({}, 'darwin');
   assert.ok(K.chordMatches(b.newline, fakeEv({ key: 'Enter', meta: true })));
   assert.ok(!K.chordMatches(b.newline, fakeEv({ key: 'Enter' })));
 });
 
-test('matchInputKeybind returns action id', () => {
-  const b = K.normalizeKeybinds({});
+test('matchInputKeybind returns action id (darwin)', () => {
+  const b = K.normalizeKeybinds({}, 'darwin');
   assert.strictEqual(
     K.matchInputKeybind(b, fakeEv({ key: 'ArrowLeft', meta: true })),
     'wordLeft'
@@ -83,8 +102,24 @@ test('matchInputKeybind returns action id', () => {
   assert.strictEqual(K.matchInputKeybind(b, fakeEv({ key: 'a' })), null);
 });
 
+test('matchInputKeybind uses Ctrl/Home on win32', () => {
+  const b = K.normalizeKeybinds({}, 'win32');
+  assert.strictEqual(
+    K.matchInputKeybind(b, fakeEv({ key: 'Enter', ctrl: true })),
+    'newline'
+  );
+  assert.strictEqual(
+    K.matchInputKeybind(b, fakeEv({ key: 'ArrowLeft', ctrl: true })),
+    'wordLeft'
+  );
+  assert.strictEqual(
+    K.matchInputKeybind(b, fakeEv({ key: 'Home' })),
+    'lineStart'
+  );
+});
+
 test('matchAppKeybind matches scrollBottom', () => {
-  const b = K.normalizeKeybinds({});
+  const b = K.normalizeKeybinds({}, 'win32');
   assert.strictEqual(
     K.matchAppKeybind(b, fakeEv({ key: 'ArrowDown', shift: true })),
     'scrollBottom'
@@ -99,15 +134,27 @@ test('isReserved detects app shortcuts', () => {
   assert.ok(!K.isReserved({ key: 'Enter', meta: true, ctrl: false, alt: false, shift: false }));
 });
 
-test('formatChord renders symbols', () => {
+test('formatChord and chordParts use text modifiers + arrow glyphs', () => {
   assert.strictEqual(K.formatChord(null), 'не задано');
   assert.strictEqual(
-    K.formatChord({ key: 'Enter', meta: true, ctrl: false, alt: false, shift: false }),
-    '⌘↵'
+    K.formatChord({ key: 'Enter', meta: true, ctrl: false, alt: false, shift: false }, 'darwin'),
+    'Cmd+Enter'
   );
   assert.strictEqual(
-    K.formatChord({ key: 'ArrowDown', meta: false, ctrl: false, alt: false, shift: true }),
-    '⇧↓'
+    K.formatChord({ key: 'ArrowDown', meta: false, ctrl: false, alt: false, shift: true }, 'darwin'),
+    'Shift+↓'
+  );
+  assert.deepStrictEqual(
+    K.chordParts({ key: 'Enter', meta: false, ctrl: true, alt: false, shift: false }, 'win32'),
+    ['Ctrl', 'Enter']
+  );
+  assert.deepStrictEqual(
+    K.chordParts({ key: 'ArrowLeft', meta: false, ctrl: true, alt: false, shift: true }, 'win32'),
+    ['Ctrl', 'Shift', '←']
+  );
+  assert.strictEqual(
+    K.formatChord({ key: 'Home', meta: false, ctrl: false, alt: false, shift: false }, 'win32'),
+    'Home'
   );
 });
 

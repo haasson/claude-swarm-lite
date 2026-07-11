@@ -444,16 +444,21 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 }
 .kb-label { font-size: 13px; color: var(--text); }
 .kb-chord {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
   font-family: var(--mono);
   font-size: 12px;
-  padding: 6px 10px;
+  padding: 5px 8px;
   border-radius: 6px;
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--text);
   cursor: pointer;
-  text-align: center;
   min-height: 30px;
+  min-width: 7.5rem;
 }
 .kb-chord:hover { border-color: var(--accent); }
 .kb-chord.capturing {
@@ -462,6 +467,19 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   outline: 1px solid var(--accent);
 }
 .kb-chord.kb-err { color: #e06c75; border-color: #e06c75; }
+.kb-key {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--panel-2, var(--panel));
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.4;
+  box-shadow: 0 1px 0 var(--border);
+}
+.kb-sep { color: var(--muted); font-size: 11px; user-select: none; }
 .kb-reset {
   width: 28px;
   height: 28px;
@@ -657,4 +675,5 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   border-radius: 6px; padding: 7px 12px; font-size: 12px;
 }
 .set-check-btn:hover { border-color: var(--accent); color: var(--accent); }
+.upd-go-btn { margin-top: 10px; border-color: var(--accent); color: var(--accent); }
 .upd-status { margin-top: 8px; }

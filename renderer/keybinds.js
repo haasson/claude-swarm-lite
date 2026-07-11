@@ -27,8 +27,9 @@
     lineEnd: '\x05',     // Ctrl+E
   };
 
-  // Defaults match the mac-oriented habits from the feature brief.
-  const DEFAULT_KEYBINDS = {
+  // macOS: ⌘ vs ⌃ distinguishes word vs line. Windows has no ⌘ — use Ctrl for
+  // word/newline and Home/End for line ends (Ctrl+← would otherwise collide).
+  const DEFAULT_KEYBINDS_DARWIN = {
     newline: { key: 'Enter', meta: true, ctrl: false, alt: false, shift: false },
     wordLeft: { key: 'ArrowLeft', meta: true, ctrl: false, alt: false, shift: false },
     wordRight: { key: 'ArrowRight', meta: true, ctrl: false, alt: false, shift: false },
@@ -37,7 +38,27 @@
     scrollBottom: { key: 'ArrowDown', meta: false, ctrl: false, alt: false, shift: true },
   };
 
-  // App shortcuts that must not be stolen by remaps (⌘T new, ⌘W close, …).
+  const DEFAULT_KEYBINDS_WIN = {
+    newline: { key: 'Enter', meta: false, ctrl: true, alt: false, shift: false },
+    wordLeft: { key: 'ArrowLeft', meta: false, ctrl: true, alt: false, shift: false },
+    wordRight: { key: 'ArrowRight', meta: false, ctrl: true, alt: false, shift: false },
+    lineStart: { key: 'Home', meta: false, ctrl: false, alt: false, shift: false },
+    lineEnd: { key: 'End', meta: false, ctrl: false, alt: false, shift: false },
+    scrollBottom: { key: 'ArrowDown', meta: false, ctrl: false, alt: false, shift: true },
+  };
+
+  // Alias kept for older callers/tests — mac defaults.
+  const DEFAULT_KEYBINDS = DEFAULT_KEYBINDS_DARWIN;
+
+  function isDarwin(platform) {
+    return platform === 'darwin';
+  }
+
+  function defaultsFor(platform) {
+    return isDarwin(platform) ? DEFAULT_KEYBINDS_DARWIN : DEFAULT_KEYBINDS_WIN;
+  }
+
+  // App shortcuts that must not be stolen by remaps (⌘T / Ctrl+T new, …).
   const RESERVED = [
     { key: 't', meta: true, ctrl: false, alt: false, shift: false },
     { key: 'w', meta: true, ctrl: false, alt: false, shift: false },
@@ -112,9 +133,11 @@
   }
 
   // Coerce any stored/garbage value into a full keybinds object. Never throws.
-  // Missing / invalid action → that action's default. Explicit null stays null
-  // (user cleared the binding).
-  function normalizeKeybinds(raw) {
+  // Missing / invalid action → that action's platform default. Explicit null stays
+  // null (user cleared the binding). On win/linux, leftover mac defaults (⌘…)
+  // are rewritten to the Windows set so first-run mac-shaped storage is fixed.
+  function normalizeKeybinds(raw, platform) {
+    const defaults = defaultsFor(platform);
     const r = (raw && typeof raw === 'object') ? raw : {};
     const out = {};
     for (const a of ACTIONS) {
@@ -123,8 +146,15 @@
         continue;
       }
       const c = normalizeChord(r[a.id]);
-      if (c && !isReserved(c)) out[a.id] = c;
-      else out[a.id] = { ...DEFAULT_KEYBINDS[a.id] };
+      if (c && !isReserved(c)) {
+        if (!isDarwin(platform) && chordEqual(c, DEFAULT_KEYBINDS_DARWIN[a.id])) {
+          out[a.id] = { ...defaults[a.id] };
+        } else {
+          out[a.id] = c;
+        }
+      } else {
+        out[a.id] = { ...defaults[a.id] };
+      }
     }
     return out;
   }
@@ -150,34 +180,54 @@
   }
 
   const KEY_LABELS = {
-    Enter: '↵',
+    // Only widely recognized key glyphs; modifiers are always plain text.
     ArrowLeft: '←',
     ArrowRight: '→',
     ArrowUp: '↑',
     ArrowDown: '↓',
-    Backspace: '⌫',
-    Tab: '⇥',
+    Enter: 'Enter',
+    Backspace: 'Backspace',
+    Tab: 'Tab',
     Escape: 'Esc',
+    Home: 'Home',
+    End: 'End',
     ' ': 'Space',
   };
 
-  function formatChord(chord) {
-    if (!chord) return 'не задано';
+  // Ordered list of keycap labels for a chord (modifiers then key). Empty if unbound.
+  function chordParts(chord, platform) {
+    if (!chord) return [];
     const parts = [];
-    if (chord.ctrl) parts.push('⌃');
-    if (chord.alt) parts.push('⌥');
-    if (chord.shift) parts.push('⇧');
-    if (chord.meta) parts.push('⌘');
-    const k = KEY_LABELS[chord.key] || (chord.key.length === 1 ? chord.key.toUpperCase() : chord.key);
+    if (isDarwin(platform)) {
+      if (chord.ctrl) parts.push('Ctrl');
+      if (chord.alt) parts.push('Option');
+      if (chord.shift) parts.push('Shift');
+      if (chord.meta) parts.push('Cmd');
+    } else {
+      if (chord.ctrl) parts.push('Ctrl');
+      if (chord.alt) parts.push('Alt');
+      if (chord.shift) parts.push('Shift');
+      if (chord.meta) parts.push('Win');
+    }
+    const k = KEY_LABELS[chord.key]
+      || (chord.key.length === 1 ? chord.key.toUpperCase() : chord.key);
     parts.push(k);
-    return parts.join('');
+    return parts;
+  }
+
+  function formatChord(chord, platform) {
+    if (!chord) return 'не задано';
+    return chordParts(chord, platform).join('+');
   }
 
   return {
     ACTIONS,
     BYTES,
     DEFAULT_KEYBINDS,
+    DEFAULT_KEYBINDS_DARWIN,
+    DEFAULT_KEYBINDS_WIN,
     RESERVED,
+    defaultsFor,
     normalizeChord,
     normalizeKeybinds,
     chordFromEvent,
@@ -186,6 +236,7 @@
     isReserved,
     matchInputKeybind,
     matchAppKeybind,
+    chordParts,
     formatChord,
   };
 });
