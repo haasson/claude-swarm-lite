@@ -157,9 +157,8 @@ function scheduleWinAsarSwap({ asarPath, tmpPath, bakPath }) {
     'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'
   );
   // Tiny trampoline: `start` creates a process outside Electron's job object.
-  // Do NOT `del "%~f0"` here — deleting a running .cmd leaves ERRORLEVEL=1 and
-  // the updater aborts with "helper launch failed: 1" even when PS started fine.
-  // Always `exit /b 0` so a successful start is reported as success.
+  // Always end with exit /b 0 — cmd's ERRORLEVEL is unrelated to whether PS
+  // actually started (and a failed self-del used to abort the whole update).
   const bat = [
     '@echo off',
     `start "" /b "${psExe}" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "${ps1}"`,
@@ -169,18 +168,21 @@ function scheduleWinAsarSwap({ asarPath, tmpPath, bakPath }) {
   fs.writeFileSync(cmd, bat, 'utf8');
 
   return new Promise((resolve, reject) => {
-    // Wait for cmd to finish (start returns immediately after launching PS) so
-    // the helper is alive before we exit.
+    // Fire the trampoline; resolve as soon as cmd has returned (or after a short
+    // grace if spawn is slow). Never fail the update on cmd's exit code — by the
+    // time start returns, the helper is already running and waiting for our exit.
+    let settled = false;
+    const done = () => { if (!settled) { settled = true; resolve(); } };
     const child = spawn(
       process.env.ComSpec || 'cmd.exe',
       ['/d', '/c', cmd],
       { stdio: 'ignore', windowsHide: true }
     );
-    child.once('error', reject);
-    child.once('exit', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error('helper launch failed: ' + code));
+    child.once('error', (err) => {
+      if (!settled) { settled = true; reject(err); }
     });
+    child.once('exit', () => done());
+    setTimeout(done, 1500);
   });
 }
 
