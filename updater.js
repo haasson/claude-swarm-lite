@@ -6,11 +6,21 @@ const fs = require('fs');
 const os = require('os');
 const https = require('https');
 const crypto = require('crypto');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawn } = require('child_process');
 const core = require('./updater-core');
 
 const MANIFEST_URL =
   'https://gitlab.internal/api/v4/projects/331/packages/generic/apps/latest/manifest.json';
+
+// After a Windows deferred asar-swap, relaunch must NOT call app.relaunch() — a
+// helper script starts the exe once this process has fully exited and unlocked
+// app.asar. See applyAsar / scheduleWinAsarSwap.
+let deferredRelaunch = false;
+function consumeDeferredRelaunch() {
+  const v = deferredRelaunch;
+  deferredRelaunch = false;
+  return v;
+}
 
 // build-info.json is bundled at the app root (inside app.asar); holds this build's
 // runtimeId + the read-only registry token. Absent in dev → updater is off.
@@ -75,17 +85,64 @@ async function checkForUpdate() {
 
 function resourcesAsarPath() { return path.join(process.resourcesPath, 'app.asar'); }
 
+function psLiteral(s) {
+  // Single-quoted PowerShell string; escape embedded single quotes by doubling.
+  return "'" + String(s).replace(/'/g, "''") + "'";
+}
+
+// On Windows the running Electron process locks app.asar, so rename fails with
+// EBUSY. Download the new file, then hand off to a detached PowerShell helper
+// that waits for our PID to exit, swaps files, and starts the exe again.
+function scheduleWinAsarSwap({ asarPath, tmpPath, bakPath }) {
+  const exePath = process.execPath;
+  const pid = process.pid;
+  const ps1 = path.join(os.tmpdir(), `swarm-update-${pid}.ps1`);
+  const script = [
+    '$ErrorActionPreference = "Stop"',
+    `$targetPid = ${pid}`,
+    `while (Get-Process -Id $targetPid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 400 }`,
+    `Start-Sleep -Milliseconds 600`,
+    `$asar = ${psLiteral(asarPath)}`,
+    `$tmp  = ${psLiteral(tmpPath)}`,
+    `$bak  = ${psLiteral(bakPath)}`,
+    `$exe  = ${psLiteral(exePath)}`,
+    `if (Test-Path -LiteralPath $bak) { Remove-Item -LiteralPath $bak -Force }`,
+    `Move-Item -LiteralPath $asar -Destination $bak -Force`,
+    `Move-Item -LiteralPath $tmp  -Destination $asar -Force`,
+    `Start-Process -FilePath $exe`,
+    `Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue`,
+    '',
+  ].join('\r\n');
+  fs.writeFileSync(ps1, script, 'utf8');
+  const child = spawn(
+    'powershell.exe',
+    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', ps1],
+    { detached: true, stdio: 'ignore', windowsHide: true }
+  );
+  child.unref();
+}
+
 // Download the new asar (verified), then swap it in with a .bak backup. Throws if
 // the app dir isn't writable or the hash mismatches → renderer offers the installer.
+// On Windows the swap is deferred until process exit (see scheduleWinAsarSwap);
+// caller must then exit without app.relaunch() so the helper can start us.
 async function applyAsar(asarUrl, sha256, onProgress) {
   if (!enabled()) throw new Error('updater disabled');
   const info = readBuildInfo();
   const asarPath = resourcesAsarPath();
   const dir = path.dirname(asarPath);
   fs.accessSync(dir, fs.constants.W_OK); // throws if not writable
-  const tmp = path.join(dir, 'app.asar.download');
+  const tmp = path.join(dir, 'app.asar.new');
+  try { fs.rmSync(tmp, { force: true }); } catch (_) {}
   await download(asarUrl, info.updateToken, tmp, sha256, onProgress);
   const bak = path.join(dir, 'app.asar.bak');
+
+  if (process.platform === 'win32') {
+    scheduleWinAsarSwap({ asarPath, tmpPath: tmp, bakPath: bak });
+    deferredRelaunch = true;
+    return { ok: true, deferred: true };
+  }
+
   try { fs.rmSync(bak, { force: true }); } catch (_) {}
   fs.renameSync(asarPath, bak);   // keep old for manual rollback
   fs.renameSync(tmp, asarPath);
@@ -136,4 +193,11 @@ function maybeRelocate() {
   }
 }
 
-module.exports = { checkForUpdate, applyAsar, downloadInstaller, maybeRelocate, enabled };
+module.exports = {
+  checkForUpdate,
+  applyAsar,
+  downloadInstaller,
+  maybeRelocate,
+  enabled,
+  consumeDeferredRelaunch,
+};

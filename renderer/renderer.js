@@ -1762,9 +1762,13 @@ function openUpdateModal() {
       off();
       if (res && res.ok) { window.swarm.updateRelaunch(); }
       else {
-        prog.hidden = true; goBtn.disabled = false;
+        prog.hidden = true;
+        const err = (res && res.error) || 'ошибка';
         overlay.querySelector('.upd-notes').textContent =
-          'Не удалось обновить: ' + (res && res.error || 'ошибка') + '. Попробуйте полный установщик.';
+          'Не удалось обновить in-place: ' + err + '\n\nМожно скачать полный установщик.';
+        goBtn.textContent = 'Скачать установщик';
+        goBtn.disabled = false;
+        st.kind = 'installer'; // next click uses the installer branch
       }
     } else {
       const u = st.installers[window.swarm.platform === 'win32' ? 'exe' : 'dmg'];

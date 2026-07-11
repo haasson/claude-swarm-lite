@@ -500,15 +500,20 @@ ipcMain.handle('update:check', async () => {
 });
 ipcMain.handle('update:apply', async (_e, { url, sha256 }) => {
   try {
-    await updater.applyAsar(url, sha256, (pct) => safeSend('update:progress', pct));
-    return { ok: true };
+    const res = await updater.applyAsar(url, sha256, (pct) => safeSend('update:progress', pct));
+    return res && typeof res === 'object' ? res : { ok: true };
   } catch (e) { reportMainError(e); return { ok: false, error: String(e && e.message || e) }; }
 });
 ipcMain.handle('update:installer', async (_e, { url, filename }) => {
   try { return await updater.downloadInstaller(url, filename); }
   catch (e) { reportMainError(e); return { ok: false, error: String(e && e.message || e) }; }
 });
-ipcMain.on('update:relaunch', () => { app.relaunch(); app.exit(0); });
+ipcMain.on('update:relaunch', () => {
+  // Windows deferred asar-swap: a PowerShell helper relaunches us after exit.
+  if (updater.consumeDeferredRelaunch()) { app.exit(0); return; }
+  app.relaunch();
+  app.exit(0);
+});
 
 // Native app menu. A custom menu REPLACES Electron's default, so we must re-add
 // the standard roles (Edit gives ⌘C/⌘V/⌘A — critical in a terminal; View gives
