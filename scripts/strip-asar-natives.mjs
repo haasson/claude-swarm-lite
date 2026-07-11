@@ -1,14 +1,11 @@
 #!/usr/bin/env node
-// Strip platform-native binaries out of app.asar before publishing the
-// cross-platform in-app update payload.
+// Remove @homebridge/node-pty-prebuilt-multiarch from app.asar before publishing
+// the cross-platform in-app update payload.
 //
-// electron-builder's asarUnpack copies natives to app.asar.unpacked BUT also
-// leaves them inside app.asar. A Mac-built asar then contains darwin pty.node
-// under build/Release/. On Windows, require('../build/Release/conpty.node')
-// resolves inside that asar directory, misses conpty (Mac never had it), and
-// never falls through to the install's app.asar.unpacked — empty window after
-// asar-swap. Removing build/ + prebuilds/ from the published asar fixes it:
-// each OS keeps using its own unpacked natives from the full installer.
+// Natives must stay in each install's app.asar.unpacked (from the full
+// installer). main.js loads pty from that unpacked path when packaged. Keeping
+// any copy of the package inside the swapped asar makes require resolve there
+// and break Windows (no conpty.node in a Mac-built tree).
 import { createRequire } from 'node:module';
 import { existsSync, rmSync, mkdtempSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -26,19 +23,19 @@ if (!asarPath || !existsSync(asarPath)) {
 const staging = mkdtempSync(path.join(tmpdir(), 'swarm-asar-strip-'));
 try {
   asar.extractAll(asarPath, staging);
-  const ptyRoot = path.join(
-    staging,
-    'node_modules',
-    '@homebridge',
-    'node-pty-prebuilt-multiarch'
+  rmSync(
+    path.join(staging, 'node_modules', '@homebridge', 'node-pty-prebuilt-multiarch'),
+    { recursive: true, force: true }
   );
-  for (const rel of ['build', 'prebuilds']) {
-    rmSync(path.join(ptyRoot, rel), { recursive: true, force: true });
-  }
+  // Drop empty @homebridge dir if nothing else remains.
+  const hb = path.join(staging, 'node_modules', '@homebridge');
+  try {
+    if (existsSync(hb) && require('fs').readdirSync(hb).length === 0) rmSync(hb);
+  } catch (_) { /* ignore */ }
   const out = asarPath + '.stripped';
   await asar.createPackage(staging, out);
   renameSync(out, asarPath);
-  console.log('stripped natives from', asarPath);
+  console.log('removed node-pty from', asarPath);
 } finally {
   rmSync(staging, { recursive: true, force: true });
 }

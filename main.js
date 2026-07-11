@@ -39,7 +39,26 @@ app.setAboutPanelOptions({
 });
 // Prebuilt fork of node-pty: ships ready-made binaries for Windows/mac/Linux,
 // so users don't need a C++ compiler + Python to install. Same API as node-pty.
-const pty = require('@homebridge/node-pty-prebuilt-multiarch');
+//
+// Always load from app.asar.unpacked when packaged. The cross-platform asar-swap
+// updates only app.asar; natives (conpty.node / pty.node) live in unpacked from
+// the full installer. Requiring the copy inside app.asar breaks Windows after a
+// Mac-built asar lands (resolve looks in asar, misses conpty, never checks
+// unpacked).
+function loadPty() {
+  if (app.isPackaged) {
+    const unpacked = path.join(
+      process.resourcesPath,
+      'app.asar.unpacked',
+      'node_modules',
+      '@homebridge',
+      'node-pty-prebuilt-multiarch'
+    );
+    if (fs.existsSync(unpacked)) return require(unpacked);
+  }
+  return require('@homebridge/node-pty-prebuilt-multiarch');
+}
+const pty = loadPty();
 const git = require('./git');
 const updater = require('./updater');
 
