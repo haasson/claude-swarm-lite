@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.2 — 2026-07-11
+
+- fix(win): asar-swap после выхода процесса — без EBUSY
+
 ## 0.6.1 — 2026-07-11
 
 - fix(win): BMP-иконка для Wine/rcedit + иконка окна
