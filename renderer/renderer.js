@@ -150,7 +150,6 @@ function saveKeybinds() {
 
 function scrollSessionToBottom(s) {
   if (!s || !s.term) return;
-  s.stickBottom = true;
   s.term.scrollToBottom();
 }
 
@@ -276,11 +275,7 @@ function setStatus(id, status, detail) {
 // --- one shared subscription for pty output; route by id ---------------------
 window.swarm.onData(({ id, data }) => {
   const s = sessions.get(id);
-  if (!s) return;
-  s.term.write(data);
-  // Keep the viewport pinned to the bottom while the user hasn't scrolled up.
-  // Without this, some CSI/repaint bursts leave the view at the top of scrollback.
-  if (s.stickBottom) s.term.scrollToBottom();
+  if (s) s.term.write(data);
 });
 
 // Inferred status from main (running / ready / waiting + detail + statusline).
@@ -471,14 +466,6 @@ async function createSession(opts = {}) {
     return false;
   });
 
-  // Track whether the user is viewing the live bottom of the buffer.
-  term.onScroll(() => {
-    const s = sessions.get(id);
-    if (!s) return;
-    const buf = s.term.buffer.active;
-    s.stickBottom = buf.viewportY >= buf.baseY;
-  });
-
   // Wire terminal resize -> pty resize.
   term.onResize(({ cols, rows }) => window.swarm.resize(id, cols, rows));
 
@@ -515,7 +502,7 @@ async function createSession(opts = {}) {
   });
   attachRename(tab.querySelector('.label'));
 
-  sessions.set(id, { term, fit, holder, tab, alive: true, status: null, cwd: resolvedCwd, id, sumDot: null, stickBottom: true });
+  sessions.set(id, { term, fit, holder, tab, alive: true, status: null, cwd: resolvedCwd, id, sumDot: null });
   const okey = resolvedCwd || '';
   if (!folderOrder.includes(okey)) folderOrder.push(okey);
   if (!withinOrder.has(okey)) withinOrder.set(okey, []);
@@ -1748,8 +1735,23 @@ async function checkForUpdate(manual) {
   let res = null;
   try { res = await window.swarm.updateCheck(); } catch (_) { res = { kind: 'none' }; }
   localStorage.setItem('swarm.update.lastCheck', String(Date.now()));
-  if (res && res.kind !== 'none') { updateState = res; renderUpdatePill(); if (manual) openUpdateModal(); }
-  else if (manual) { updateState = res; alertNoUpdate(); }
+  if (res && res.kind !== 'none') {
+    const prev = updateState && updateState.kind !== 'none' ? updateState.version : '';
+    updateState = res;
+    renderUpdatePill();
+    if (manual) openUpdateModal();
+    else if (prev && prev !== res.version) {
+      // A newer release appeared after we already had a pill for an older one.
+      confirmModalInfo('Доступна более новая версия ' + res.version + ' (раньше предлагалась ' + prev + ').');
+    }
+  } else if (manual) {
+    updateState = res;
+    renderUpdatePill();
+    alertNoUpdate();
+  } else if (res && res.kind === 'none') {
+    updateState = res;
+    renderUpdatePill();
+  }
   return res;
 }
 
@@ -1770,10 +1772,26 @@ function confirmModalInfo(message) {
   overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(); });
 }
 
-function openUpdateModal() {
-  if (!updateState || updateState.kind === 'none') return;
+async function openUpdateModal() {
   if (document.querySelector('.modal-overlay .modal.update')) return;
+  // Always re-fetch so the pill/modal track latest, not a stale check.
+  let res = null;
+  try { res = await window.swarm.updateCheck(); } catch (_) { res = { kind: 'none' }; }
+  localStorage.setItem('swarm.update.lastCheck', String(Date.now()));
+  if (!res || res.kind === 'none') {
+    updateState = res;
+    renderUpdatePill();
+    alertNoUpdate();
+    return;
+  }
+  if (updateState && updateState.kind !== 'none' && updateState.version !== res.version) {
+    confirmModalInfo('Доступна более новая версия ' + res.version + ' (раньше предлагалась ' + updateState.version + ').');
+  }
+  updateState = res;
+  renderUpdatePill();
+
   const st = updateState;
+  let forceInstaller = false;
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
@@ -1800,12 +1818,35 @@ function openUpdateModal() {
 
   goBtn.addEventListener('click', async () => {
     goBtn.disabled = true;
-    if (st.kind === 'asar') {
+    // Re-check once more right before download so we never fetch a superseded build.
+    let fresh = st;
+    try {
+      const latest = await window.swarm.updateCheck();
+      if (latest && latest.kind !== 'none') {
+        if (latest.version !== st.version) {
+          confirmModalInfo('Пока решали — вышла ' + latest.version + '. Скачиваю её.');
+        }
+        fresh = latest;
+        updateState = latest;
+        renderUpdatePill();
+        overlay.querySelector('.modal-title').textContent = 'Обновление ' + latest.version;
+      } else {
+        updateState = latest;
+        renderUpdatePill();
+        close();
+        alertNoUpdate();
+        return;
+      }
+    } catch (_) { /* keep st */ }
+
+    // After a failed asar-swap we stay on the installer path for this modal.
+    const useInstaller = forceInstaller || fresh.kind !== 'asar';
+    if (!useInstaller) {
       const prog = overlay.querySelector('.upd-progress');
       const bar = overlay.querySelector('.upd-bar');
       prog.hidden = false;
       const off = window.swarm.onUpdateProgress((pct) => { bar.style.width = pct + '%'; });
-      const res = await window.swarm.updateApply(st.asar.url, st.asar.sha256);
+      const res = await window.swarm.updateApply(fresh.asar.url, fresh.asar.sha256);
       off();
       if (res && res.ok) { window.swarm.updateRelaunch(); }
       else {
@@ -1815,10 +1856,10 @@ function openUpdateModal() {
           'Не удалось обновить in-place: ' + err + '\n\nМожно скачать полный установщик.';
         goBtn.textContent = 'Скачать установщик';
         goBtn.disabled = false;
-        st.kind = 'installer'; // next click uses the installer branch
+        forceInstaller = true;
       }
     } else {
-      const u = st.installers[window.swarm.platform === 'win32' ? 'exe' : 'dmg'];
+      const u = fresh.installers[window.swarm.platform === 'win32' ? 'exe' : 'dmg'];
       const fname = (u || '').split('/').pop() || 'installer';
       const res = await window.swarm.updateDownloadInstaller(u, fname);
       close();

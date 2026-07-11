@@ -18,10 +18,17 @@
 //   just type `claude` into it. Bonus: auth "just works" because it's the same
 //   environment you log in from.
 
-const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeImage } = require('electron');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
+
+// Windows taskbar/Start Menu group by AppUserModelID. Must match package.json
+// `appId` (NSIS shortcuts use it); without this the shell often shows a generic
+// white-document icon even when the .exe has a real icon embedded.
+if (process.platform === 'win32') {
+  app.setAppUserModelId('io.swarm.claude-swarm-lite');
+}
 // Prebuilt fork of node-pty: ships ready-made binaries for Windows/mac/Linux,
 // so users don't need a C++ compiler + Python to install. Same API as node-pty.
 const pty = require('@homebridge/node-pty-prebuilt-multiarch');
@@ -218,15 +225,26 @@ setInterval(() => {
   }
 }, TICK_MS);
 
-function createWindow() {
-  // Packaged icon.png (also used to stamp the .exe via electron-builder). Helps
-  // the taskbar/window chrome on Windows when the shell still caches an old .ico.
+// Window/taskbar chrome icon. nativeImage.createFromPath does NOT work for paths
+// inside app.asar — read the bytes and build an image (fs CAN read asar).
+function loadWindowIcon() {
   const iconFile = path.join(__dirname, 'build', 'icon.png');
+  try {
+    if (!fs.existsSync(iconFile)) return undefined;
+    const img = nativeImage.createFromBuffer(fs.readFileSync(iconFile));
+    return img.isEmpty() ? undefined : img;
+  } catch (_) {
+    return undefined;
+  }
+}
+
+function createWindow() {
+  const icon = loadWindowIcon();
   win = new BrowserWindow({
     width: 1200,
     height: 780,
     backgroundColor: '#0d0f12',
-    ...(fs.existsSync(iconFile) ? { icon: iconFile } : {}),
+    ...(icon ? { icon } : {}),
     // Frameless-with-traffic-lights is a macOS affordance. On Windows/Linux we
     // keep the native window frame (min/max/close), so only opt in on darwin.
     ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' } : {}),
