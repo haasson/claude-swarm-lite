@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.13 — 2026-07-11
+
+- fix(win): helper launch — не del себя в .cmd (ERRORLEVEL 1)
+
 ## 0.6.12 — 2026-07-11
 
 - fix(status): детект «ждёт ответа» по стрелке выбора, не только ❯
