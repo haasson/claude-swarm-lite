@@ -219,10 +219,14 @@ setInterval(() => {
 }, TICK_MS);
 
 function createWindow() {
+  // Packaged icon.png (also used to stamp the .exe via electron-builder). Helps
+  // the taskbar/window chrome on Windows when the shell still caches an old .ico.
+  const iconFile = path.join(__dirname, 'build', 'icon.png');
   win = new BrowserWindow({
     width: 1200,
     height: 780,
     backgroundColor: '#0d0f12',
+    ...(fs.existsSync(iconFile) ? { icon: iconFile } : {}),
     // Frameless-with-traffic-lights is a macOS affordance. On Windows/Linux we
     // keep the native window frame (min/max/close), so only opt in on darwin.
     ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' } : {}),

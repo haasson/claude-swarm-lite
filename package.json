@@ -25,12 +25,14 @@
       "build-info.json",
       "preload.js",
       "renderer/**/*",
+      "build/icon.png",
       "package.json"
     ],
     "asarUnpack": [
       "**/node_modules/@homebridge/node-pty-prebuilt-multiarch/**"
     ],
     "afterPack": "build/afterPack.cjs",
+    "icon": "icon.ico",
     "mac": {
       "target": "dmg",
       "category": "public.app-category.developer-tools",
@@ -38,12 +40,15 @@
     },
     "win": {
       "target": "nsis",
-      "icon": "build/icon.ico"
+      "icon": "icon.ico"
     },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "icon.ico",
+      "uninstallerIcon": "icon.ico",
+      "installerHeaderIcon": "icon.ico"
     },
     "directories": {
       "output": "dist"
