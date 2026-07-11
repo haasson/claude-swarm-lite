@@ -12,9 +12,9 @@ const core = require('./updater-core');
 const MANIFEST_URL =
   'https://gitlab.internal/api/v4/projects/331/packages/generic/apps/latest/manifest.json';
 
-// After a Windows deferred asar-swap, relaunch must NOT call app.relaunch() — a
-// helper script starts the exe once this process has fully exited and unlocked
-// app.asar. See applyAsar / scheduleWinAsarSwap.
+// After a deferred asar-swap (Windows / macOS), relaunch must NOT call
+// app.relaunch() — a helper script starts the app once this process has fully
+// exited and unlocked app.asar. See applyAsar / schedule*AsarSwap.
 let deferredRelaunch = false;
 function consumeDeferredRelaunch() {
   const v = deferredRelaunch;
@@ -90,6 +90,11 @@ function psLiteral(s) {
   return "'" + String(s).replace(/'/g, "''") + "'";
 }
 
+function shLiteral(s) {
+  // Single-quoted POSIX string; escape embedded single quotes as '\'' .
+  return "'" + String(s).replace(/'/g, "'\\''") + "'";
+}
+
 // On Windows the running Electron process locks app.asar, so rename fails with
 // EBUSY. Download the new file, then hand off to a detached PowerShell helper
 // that waits for our PID to exit, swaps files, and starts the exe again.
@@ -150,9 +155,55 @@ function scheduleWinAsarSwap({ asarPath, tmpPath, bakPath }) {
   });
 }
 
+// On macOS, renaming app.asar under a live Electron process invalidates its
+// memory mapping and often SIGBUS's during quit — macOS then shows
+// "unexpectedly quit" even though relaunch succeeds. Defer the swap until
+// after a clean exit, same idea as Windows.
+function scheduleDarwinAsarSwap({ asarPath, tmpPath, bakPath }) {
+  const exePath = process.execPath;
+  const bundle = exePath.split('/Contents/')[0]; // .../Claude Swarm Lite.app
+  const pid = process.pid;
+  const scriptPath = path.join(os.tmpdir(), `swarm-update-${pid}.sh`);
+  const script = [
+    '#!/bin/sh',
+    `pid=${pid}`,
+    `asar=${shLiteral(asarPath)}`,
+    `tmp=${shLiteral(tmpPath)}`,
+    `bak=${shLiteral(bakPath)}`,
+    `bundle=${shLiteral(bundle)}`,
+    `exe=${shLiteral(exePath)}`,
+    `self=${shLiteral(scriptPath)}`,
+    'while kill -0 "$pid" 2>/dev/null; do sleep 0.4; done',
+    'sleep 1',
+    'rm -f "$bak"',
+    'if mv "$asar" "$bak" && mv "$tmp" "$asar"; then',
+    '  :',
+    'else',
+    '  # Best-effort restore if we moved asar away but failed to put the new one.',
+    '  if [ ! -e "$asar" ] && [ -e "$bak" ]; then mv "$bak" "$asar"; fi',
+    'fi',
+    'if [ -d "$bundle" ]; then',
+    '  /usr/bin/open "$bundle"',
+    'else',
+    '  "$exe" &',
+    'fi',
+    'rm -f "$self"',
+    '',
+  ].join('\n');
+  fs.writeFileSync(scriptPath, script, { mode: 0o755 });
+  return new Promise((resolve, reject) => {
+    const child = spawn('/bin/sh', [scriptPath], { detached: true, stdio: 'ignore' });
+    child.once('error', reject);
+    child.once('spawn', () => {
+      child.unref();
+      resolve();
+    });
+  });
+}
+
 // Download the new asar (verified), then swap it in with a .bak backup. Throws if
 // the app dir isn't writable or the hash mismatches → renderer offers the installer.
-// On Windows the swap is deferred until process exit (see scheduleWinAsarSwap);
+// On Windows / macOS the swap is deferred until process exit (see schedule*AsarSwap);
 // caller must then exit without app.relaunch() so the helper can start us.
 async function applyAsar(asarUrl, sha256, onProgress) {
   if (!enabled()) throw new Error('updater disabled');
@@ -167,6 +218,12 @@ async function applyAsar(asarUrl, sha256, onProgress) {
 
   if (process.platform === 'win32') {
     await scheduleWinAsarSwap({ asarPath, tmpPath: tmp, bakPath: bak });
+    deferredRelaunch = true;
+    return { ok: true, deferred: true };
+  }
+
+  if (process.platform === 'darwin') {
+    await scheduleDarwinAsarSwap({ asarPath, tmpPath: tmp, bakPath: bak });
     deferredRelaunch = true;
     return { ok: true, deferred: true };
   }

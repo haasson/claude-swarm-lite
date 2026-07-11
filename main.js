@@ -535,9 +535,9 @@ ipcMain.handle('update:installer', async (_e, { url, filename }) => {
   catch (e) { reportMainError(e); return { ok: false, error: String(e && e.message || e) }; }
 });
 ipcMain.on('update:relaunch', () => {
-  // Skip the "close app?" confirm so deferred Windows asar-swap can exit cleanly.
+  // Skip the "close app?" confirm so deferred asar-swap can exit cleanly.
   allowClose = true;
-  // Windows deferred asar-swap: a PowerShell helper relaunches us after exit.
+  // Deferred asar-swap (Windows / macOS): helper relaunches us after exit.
   if (updater.consumeDeferredRelaunch()) { app.exit(0); return; }
   app.relaunch();
   app.exit(0);
