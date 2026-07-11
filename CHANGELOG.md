@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.8 — 2026-07-11
+
+- fix(mac): отложенный asar-swap после выхода — без диалога о краше
+
 ## 0.6.7 — 2026-07-11
 
 - fix(win): надёжный deferred asar-swap — retries + EncodedCommand
