@@ -93,33 +93,61 @@ function psLiteral(s) {
 // On Windows the running Electron process locks app.asar, so rename fails with
 // EBUSY. Download the new file, then hand off to a detached PowerShell helper
 // that waits for our PID to exit, swaps files, and starts the exe again.
+//
+// Uses -EncodedCommand (UTF-16LE) so Cyrillic install paths survive Windows
+// PowerShell 5.1 (a BOM-less .ps1 would be read as ANSI and break Move-Item).
+// Retries the rename: Chromium child processes can hold the lock after main exits.
 function scheduleWinAsarSwap({ asarPath, tmpPath, bakPath }) {
   const exePath = process.execPath;
   const pid = process.pid;
-  const ps1 = path.join(os.tmpdir(), `swarm-update-${pid}.ps1`);
+  const logPath = path.join(os.tmpdir(), `swarm-update-${pid}.log`);
   const script = [
-    '$ErrorActionPreference = "Stop"',
     `$targetPid = ${pid}`,
     `while (Get-Process -Id $targetPid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 400 }`,
-    `Start-Sleep -Milliseconds 600`,
+    `Start-Sleep -Milliseconds 1000`,
     `$asar = ${psLiteral(asarPath)}`,
     `$tmp  = ${psLiteral(tmpPath)}`,
     `$bak  = ${psLiteral(bakPath)}`,
     `$exe  = ${psLiteral(exePath)}`,
-    `if (Test-Path -LiteralPath $bak) { Remove-Item -LiteralPath $bak -Force }`,
-    `Move-Item -LiteralPath $asar -Destination $bak -Force`,
-    `Move-Item -LiteralPath $tmp  -Destination $asar -Force`,
+    `$log  = ${psLiteral(logPath)}`,
+    `$ok = $false`,
+    `$lastErr = ''`,
+    `for ($i = 0; $i -lt 120; $i++) {`,
+    `  try {`,
+    `    if (Test-Path -LiteralPath $bak) { Remove-Item -LiteralPath $bak -Force }`,
+    `    Move-Item -LiteralPath $asar -Destination $bak -Force`,
+    `    Move-Item -LiteralPath $tmp  -Destination $asar -Force`,
+    `    $ok = $true`,
+    `    break`,
+    `  } catch {`,
+    `    $lastErr = $_.Exception.Message`,
+    `    Start-Sleep -Milliseconds 500`,
+    `  }`,
+    `}`,
+    `if (-not $ok) {`,
+    `  try { ("swap failed: " + $lastErr) | Out-File -FilePath $log -Encoding utf8 } catch {}`,
+    `  try {`,
+    `    if (-not (Test-Path -LiteralPath $asar) -and (Test-Path -LiteralPath $bak)) {`,
+    `      Move-Item -LiteralPath $bak -Destination $asar -Force`,
+    `    }`,
+    `  } catch {}`,
+    `}`,
     `Start-Process -FilePath $exe`,
-    `Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue`,
     '',
-  ].join('\r\n');
-  fs.writeFileSync(ps1, script, 'utf8');
-  const child = spawn(
-    'powershell.exe',
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', ps1],
-    { detached: true, stdio: 'ignore', windowsHide: true }
-  );
-  child.unref();
+  ].join('\n');
+  const encoded = Buffer.from(script, 'utf16le').toString('base64');
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      'powershell.exe',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-EncodedCommand', encoded],
+      { detached: true, stdio: 'ignore', windowsHide: true }
+    );
+    child.once('error', reject);
+    child.once('spawn', () => {
+      child.unref();
+      resolve();
+    });
+  });
 }
 
 // Download the new asar (verified), then swap it in with a .bak backup. Throws if
@@ -138,7 +166,7 @@ async function applyAsar(asarUrl, sha256, onProgress) {
   const bak = path.join(dir, 'app.asar.bak');
 
   if (process.platform === 'win32') {
-    scheduleWinAsarSwap({ asarPath, tmpPath: tmp, bakPath: bak });
+    await scheduleWinAsarSwap({ asarPath, tmpPath: tmp, bakPath: bak });
     deferredRelaunch = true;
     return { ok: true, deferred: true };
   }

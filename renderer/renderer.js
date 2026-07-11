@@ -1848,7 +1848,10 @@ async function openUpdateModal() {
       const off = window.swarm.onUpdateProgress((pct) => { bar.style.width = pct + '%'; });
       const res = await window.swarm.updateApply(fresh.asar.url, fresh.asar.sha256);
       off();
-      if (res && res.ok) { window.swarm.updateRelaunch(); }
+      if (res && res.ok) {
+        bar.style.width = '100%';
+        window.swarm.updateRelaunch();
+      }
       else {
         prog.hidden = true;
         const err = (res && res.error) || 'ошибка';
