@@ -24,6 +24,7 @@ import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const HOST = 'gitlab.internal';
 const PROJECT_ID = 331;
@@ -111,12 +112,9 @@ function cachedElectronDist() {
 // build-info.json — this build's runtimeId + read-only registry token, bundled into
 // the asar. runtimeId = sha256(electronVersion|nodePtyVersion); if it changes between
 // releases, app.asar isn't swap-safe and a full installer is required.
-const electronVer = JSON.parse(readFileSync('node_modules/electron/package.json', 'utf8')).version;
-const nodePtyVer = JSON.parse(readFileSync('node_modules/@homebridge/node-pty-prebuilt-multiarch/package.json', 'utf8')).version;
-const runtimeId = createHash('sha256').update(`${electronVer}|${nodePtyVer}`).digest('hex');
-const updateToken = process.env.UPDATE_REGISTRY_TOKEN || '';
-if (!updateToken) console.warn('⚠ UPDATE_REGISTRY_TOKEN не задан — self-update будет выключен в этой сборке');
-writeFileSync('build-info.json', JSON.stringify({ runtimeId, updateToken }) + '\n');
+const here = path.dirname(fileURLToPath(import.meta.url));
+sh('node', [path.join(here, 'write-build-info.mjs')]);
+const runtimeId = JSON.parse(readFileSync('build-info.json', 'utf8')).runtimeId;
 step(`build-info.json (runtimeId ${runtimeId.slice(0, 12)}…)`);
 step('building .dmg (npm run dist) …');
 const distDir = cachedElectronDist();

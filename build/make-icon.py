@@ -49,3 +49,9 @@ for (cx, cy, col) in dots:
 out = os.path.join(os.path.dirname(__file__), "icon.png")
 img.save(out)
 print("wrote", out)
+
+# Windows .ico (multi-size) for electron-builder / NSIS — same artwork.
+ico_path = os.path.join(os.path.dirname(__file__), "icon.ico")
+ico = img.resize((256, 256), Image.Resampling.LANCZOS)
+ico.save(ico_path, format="ICO", sizes=[(16, 16), (32, 32), (48, 48), (256, 256)])
+print("wrote", ico_path)

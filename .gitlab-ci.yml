@@ -82,6 +82,10 @@ build_windows:
     - cd node_modules/@homebridge/node-pty-prebuilt-multiarch
     - npx --yes prebuild-install --runtime electron --target "$ELECTRON_VERSION" --platform win32 --arch x64 --dist-url https://electronjs.org/headers
     - cd "$CI_PROJECT_DIR"
+    # Bake updater credentials into the asar (same as local release.mjs). Needs
+    # CI/CD variable UPDATE_REGISTRY_TOKEN (read-only registry PAT). Without it
+    # the Windows build ships with updater disabled.
+    - node scripts/write-build-info.mjs
     # --publish never: on a git tag electron-builder otherwise tries an IMPLICIT
     # publish to its default (GitHub) provider, which has no creds here and fails
     # the whole build with a TLS/socket error (seen on v0.3.0). We only ever build
