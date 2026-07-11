@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.14 — 2026-07-11
+
+- fix(win): не валить asar-апдейт из-за exit-кода cmd после start
+
 ## 0.6.13 — 2026-07-11
 
 - fix(win): helper launch — не del себя в .cmd (ERRORLEVEL 1)
