@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.0 — 2026-07-11
+
+- feat(клавиши): настраиваемые хоткеи ввода + sticky scroll
+
 ## 0.4.0 — 2026-07-09
 
 - feat(апдейт): релиз публикует app.asar + manifest.json, build-info с runtimeId
