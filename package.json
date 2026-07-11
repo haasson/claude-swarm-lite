@@ -29,6 +29,8 @@
       "package.json"
     ],
     "asarUnpack": [
+      "**/*.node",
+      "**/spawn-helper",
       "**/node_modules/@homebridge/node-pty-prebuilt-multiarch/**"
     ],
     "afterPack": "build/afterPack.cjs",

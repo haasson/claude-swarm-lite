@@ -137,6 +137,9 @@ step('dmg uploaded');
 // Publish the platform-independent app.asar + a stable manifest for the in-app updater.
 const asarPath = path.join('dist', 'mac-arm64', 'Claude Swarm Lite.app', 'Contents', 'Resources', 'app.asar');
 if (!existsSync(asarPath)) fail('app.asar not found at ' + asarPath);
+// Drop darwin natives packed into the asar — Windows must keep using its own
+// app.asar.unpacked/conpty.node after an asar-swap (see scripts/strip-asar-natives.mjs).
+sh('node', [path.join(here, 'strip-asar-natives.mjs'), asarPath]);
 const asarBytes = readFileSync(asarPath);
 const asarSha = createHash('sha256').update(asarBytes).digest('hex');
 step(`uploading app.asar (${(asarBytes.length / 1e6).toFixed(1)} MB) …`);
