@@ -122,6 +122,7 @@ function scheduleWinAsarSwap({ asarPath, tmpPath, bakPath }) {
     `$bak  = ${psLiteral(bakPath)}`,
     `$exe  = ${psLiteral(exePath)}`,
     `$log  = ${psLiteral(logPath)}`,
+    `$cmd  = ${psLiteral(cmd)}`,
     `$ok = $false`,
     `$lastErr = ''`,
     `for ($i = 0; $i -lt 120; $i++) {`,
@@ -146,6 +147,7 @@ function scheduleWinAsarSwap({ asarPath, tmpPath, bakPath }) {
     `}`,
     `Start-Process -FilePath $exe`,
     `Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue`,
+    `Remove-Item -LiteralPath $cmd -Force -ErrorAction SilentlyContinue`,
     '',
   ].join('\r\n');
   fs.writeFileSync(ps1, '\uFEFF' + script, 'utf8');
@@ -155,11 +157,13 @@ function scheduleWinAsarSwap({ asarPath, tmpPath, bakPath }) {
     'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'
   );
   // Tiny trampoline: `start` creates a process outside Electron's job object.
-  // Quote paths for cmd.exe; empty title ("") is required when the command is quoted.
+  // Do NOT `del "%~f0"` here — deleting a running .cmd leaves ERRORLEVEL=1 and
+  // the updater aborts with "helper launch failed: 1" even when PS started fine.
+  // Always `exit /b 0` so a successful start is reported as success.
   const bat = [
     '@echo off',
     `start "" /b "${psExe}" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "${ps1}"`,
-    `del "%~f0" >nul 2>&1`,
+    'exit /b 0',
     '',
   ].join('\r\n');
   fs.writeFileSync(cmd, bat, 'utf8');
