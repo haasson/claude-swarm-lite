@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1 — 2026-07-11
+
+- fix(win): BMP-иконка для Wine/rcedit + иконка окна
+
 ## 0.6.0 — 2026-07-11
 
 - fix(win): иконка .ico + build-info в CI для апдейтера
