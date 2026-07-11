@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.19 — 2026-07-11
+
+- fix(win): грузить node-pty из app.asar.unpacked после asar-swap
+
 ## 0.6.18 — 2026-07-11
 
 - fix(update): убрать native из публикуемого asar — Win снова видит conpty

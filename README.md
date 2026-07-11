@@ -10,10 +10,10 @@ Electron + node-pty + xterm.js.
 ## Скачать
 
 <!--DL-->
-**Последняя версия: 0.6.18** · [все релизы](https://gitlab.internal/ai-public/claude-swarm-lite/-/releases)
+**Последняя версия: 0.6.19** · [все релизы](https://gitlab.internal/ai-public/claude-swarm-lite/-/releases)
 
-- **macOS** (Apple Silicon): [`claude-swarm-lite-0.6.18-arm64.dmg`](https://gitlab.internal/api/v4/projects/331/packages/generic/apps/0.6.18/claude-swarm-lite-0.6.18-arm64.dmg)
-- **Windows**: [`claude-swarm-lite-0.6.18-x64.exe`](https://gitlab.internal/api/v4/projects/331/packages/generic/apps/0.6.18/claude-swarm-lite-0.6.18-x64.exe) — собирается в CI после тега
+- **macOS** (Apple Silicon): [`claude-swarm-lite-0.6.19-arm64.dmg`](https://gitlab.internal/api/v4/projects/331/packages/generic/apps/0.6.19/claude-swarm-lite-0.6.19-arm64.dmg)
+- **Windows**: [`claude-swarm-lite-0.6.19-x64.exe`](https://gitlab.internal/api/v4/projects/331/packages/generic/apps/0.6.19/claude-swarm-lite-0.6.19-x64.exe) — собирается в CI после тега
 
 > Ссылки ведут в приватный GitLab — нужен доступ к репозиторию.
 <!--/DL-->
