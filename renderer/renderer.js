@@ -703,7 +703,7 @@ function showSettingsModal(tab) {
       </div>
 
       <div class="set-panel" data-panel="updates">
-        <div class="modal-msg">Версия: <b class="upd-cur">…</b> · in-place ok</div>
+        <div class="modal-msg">Версия: <b class="upd-cur">…</b> · in-place ok ✓</div>
         <button class="set-check-btn upd-check">Проверить обновления</button>
         <button class="set-check-btn upd-go-btn" hidden type="button"></button>
         <div class="set-hint upd-status"></div>
