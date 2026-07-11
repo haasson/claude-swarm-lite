@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.9 — 2026-07-11
+
+- fix(win): запускать asar-swap helper через cmd start — вне Job Object
+
 ## 0.6.8 — 2026-07-11
 
 - fix(mac): отложенный asar-swap после выхода — без диалога о краше
