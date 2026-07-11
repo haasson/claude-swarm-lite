@@ -112,13 +112,16 @@ const RESIZE_GRACE_MS = 700; // after a resize, ignore the repaint burst as "act
 const INPUT_GRACE_MS = 700;  // after a keystroke, ignore the echo/redraw as "activity"
 
 // Waiting on me: a permission / confirm prompt sits on screen.
-const RE_WAIT = /Esc to cancel|Do you want|Enter to confirm|[❯>]\s*\d+\.\s|No, and tell Claude|don'?t ask again|Yes, allow|Allow this|wants to (?:edit|run|write|use)/i;
+// Selection cursor before "1. Yes / 2. No": Claude Code often paints ❯ (heavy
+// angle), but Cursor / some terminals use an arrow (→ ▸ ▶) or plain ">".
+// Without those glyphs the tab never flips to «ждёт ответа».
+const RE_WAIT = /Esc to cancel|Do you want|Enter to confirm|[❯>→➜▸►▶]\s*\d+\.\s|No, and tell Claude/i;
 // Strong subset — prompt UI chrome that never appears in normal streamed output
 // (numbered options, "Esc to cancel"). We trust these EVERY tick, even while bytes
 // are still flowing, so a prompt is caught the instant it renders. The full RE_WAIT
 // (with the looser "Do you want") stays gated behind the quiet window to avoid
 // matching that phrase mid-sentence in streamed prose.
-const RE_WAIT_NOW = /Esc to cancel|Enter to confirm|[❯>]\s*\d+\.\s|No, and tell Claude|don'?t ask again|Yes, allow|wants to (?:edit|run|write|use)/i;
+const RE_WAIT_NOW = /Esc to cancel|Enter to confirm|[❯>→➜▸►▶]\s*\d+\.\s|No, and tell Claude/i;
 
 // Working but momentarily quiet. While Claude thinks or runs a tool it can go
 // >ACTIVE_MS without emitting a byte (model call with no repaint, a slow tool),
