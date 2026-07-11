@@ -62,11 +62,8 @@ build_windows:
   needs: [prepare]
   rules:
     - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
-  # A Windows-build hiccup must never block the macOS release below.
-  allow_failure: true
-  # The win32 node-pty prebuild + Electron headers are fetched over the network,
-  # which occasionally times out (seen on v0.3.0). Auto-retry so a flaky download
-  # doesn't leave the Release advertising a .exe link that 404s.
+  # The win32 node-pty prebuild is fetched from GitHub; retry on flaky network so
+  # the Release never advertises a .exe that 404s.
   retry:
     max: 2
     when:
@@ -76,12 +73,26 @@ build_windows:
   variables:
     # We don't run Electron here, only package it — skip the dev-binary download.
     ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    # Electron 29.4.6 → NODE_MODULE_VERSION / prebuild ABI 121
+    ELECTRON_ABI: "121"
   script:
     - npm ci --no-audit --no-fund
-    # host npm ci fetched the linux node-pty; grab the win32 build for packaging
-    - cd node_modules/@homebridge/node-pty-prebuilt-multiarch
-    - npx --yes prebuild-install --runtime electron --target "$ELECTRON_VERSION" --platform win32 --arch x64 --dist-url https://electronjs.org/headers
-    - cd "$CI_PROJECT_DIR"
+    # host npm ci fetched the linux node-pty; grab the win32 Electron build for
+    # packaging. Prefer curl over prebuild-install: the latter's short timeout
+    # routinely fails from this runner (Request timed out → no .exe → 404).
+    - |
+      set -e
+      PTY_DIR=node_modules/@homebridge/node-pty-prebuilt-multiarch
+      PTY_VER=$(node -p "require('./${PTY_DIR}/package.json').version")
+      ASSET="node-pty-prebuilt-multiarch-v${PTY_VER}-electron-v${ELECTRON_ABI}-win32-x64.tar.gz"
+      URL="https://github.com/homebridge/node-pty-prebuilt-multiarch/releases/download/v${PTY_VER}/${ASSET}"
+      echo "Downloading ${ASSET} …"
+      curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
+        --connect-timeout 30 --max-time 180 \
+        -o /tmp/pty-win.tgz "$URL"
+      tar -xzf /tmp/pty-win.tgz -C "$PTY_DIR"
+      test -f "$PTY_DIR/build/Release/pty.node"
+      echo "win32 node-pty ready ($(du -h "$PTY_DIR/build/Release/pty.node" | cut -f1))"
     # Bake updater credentials into the asar (same as local release.mjs). Needs
     # CI/CD variable UPDATE_REGISTRY_TOKEN (read-only registry PAT). Without it
     # the Windows build ships with updater disabled.
