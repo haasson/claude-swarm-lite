@@ -29,6 +29,14 @@ const fs = require('fs');
 if (process.platform === 'win32') {
   app.setAppUserModelId('io.swarm.claude-swarm-lite');
 }
+// Native macOS About reads CFBundleShortVersionString from the outer .app
+// (installer shell). After an asar-swap that stays stale — pin About to the
+// version inside package.json (same source as Settings / updater).
+app.setAboutPanelOptions({
+  applicationName: 'Claude Swarm Lite',
+  applicationVersion: app.getVersion(),
+  version: app.getVersion(),
+});
 // Prebuilt fork of node-pty: ships ready-made binaries for Windows/mac/Linux,
 // so users don't need a C++ compiler + Python to install. Same API as node-pty.
 const pty = require('@homebridge/node-pty-prebuilt-multiarch');
