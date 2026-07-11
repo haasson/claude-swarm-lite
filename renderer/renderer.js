@@ -110,7 +110,7 @@ function openLogsModal() {
 })();
 
 const APPEARANCE = window.SWARM_THEMES;       // terminal theme presets + helpers
-const KEYBINDS_API = window.SWARM_KEYBINDS;   // input remaps + app hotkeys
+const KEYBINDS_API = window.SWARM_KEYBINDS;   // newline chord + word/line scopes
 
 // Global terminal appearance (theme + font + cursor). One setting for all tabs,
 // persisted as a single JSON blob in localStorage (see swarm.appearance). Read by
@@ -127,7 +127,7 @@ function saveAppearance() {
   localStorage.setItem('swarm.appearance', JSON.stringify(appearance));
 }
 
-// Custom keybinds (newline / word / line / scroll-to-bottom). Handlers read this
+// Custom keybinds (newline chord + word/line scope modifiers). Handlers read this
 // live object, so Save in Settings takes effect without recreating terminals.
 let keybinds = loadKeybinds();
 
@@ -135,7 +135,7 @@ function loadKeybinds() {
   let raw = null;
   try { raw = JSON.parse(localStorage.getItem('swarm.keybinds') || 'null'); } catch (_) {}
   const next = KEYBINDS_API.normalizeKeybinds(raw, window.swarm.platform);
-  // Persist mac→win default migration so Settings / next launch see Ctrl, not ⌘.
+  // Persist mac→win / legacy→scope migration so Settings / next launch see new shape.
   try {
     if (JSON.stringify(raw) !== JSON.stringify(next)) {
       localStorage.setItem('swarm.keybinds', JSON.stringify(next));
@@ -146,11 +146,6 @@ function loadKeybinds() {
 
 function saveKeybinds() {
   localStorage.setItem('swarm.keybinds', JSON.stringify(keybinds));
-}
-
-function scrollSessionToBottom(s) {
-  if (!s || !s.term) return;
-  s.term.scrollToBottom();
 }
 
 // Restyle every LIVE terminal in place, then refit — a font-size change alters the
@@ -450,16 +445,7 @@ async function createSession(opts = {}) {
   // return false stops xterm from also emitting its own sequence for that key.
   term.attachCustomKeyEventHandler((ev) => {
     if (ev.type !== 'keydown') return true;
-    const appAction = KEYBINDS_API.matchAppKeybind(keybinds, ev);
-    if (appAction === 'scrollBottom') {
-      ev.preventDefault();
-      const s = sessions.get(id);
-      scrollSessionToBottom(s);
-      return false;
-    }
-    const action = KEYBINDS_API.matchInputKeybind(keybinds, ev);
-    if (!action) return true;
-    const bytes = KEYBINDS_API.BYTES[action];
+    const bytes = KEYBINDS_API.matchInputBytes(keybinds, ev);
     if (!bytes) return true;
     ev.preventDefault();
     window.swarm.sendInput(id, bytes);
@@ -697,9 +683,9 @@ function showSettingsModal(tab) {
       </div>
 
       <div class="set-panel" data-panel="keys">
-        <div class="modal-msg">Хоткеи для ввода в агента и прокрутки терминала. Клик по сочетанию — назначить новое.</div>
+        <div class="modal-msg">Модификатор «Слово» / «До края» + ←→ / Backspace / Delete. Перенос строки — отдельный хоткей.</div>
         <div class="kb-list" id="set-kb-list"></div>
-        <span class="set-hint">Перенос и навигация шлют в агент стандартные последовательности (Ctrl+J, Esc+b/f, Ctrl+A/E).</span>
+        <span class="set-hint">Стрелки перемещают, Backspace/Delete удаляют в выбранной единице (слово или до края строки).</span>
       </div>
 
       <div class="set-panel" data-panel="updates">
@@ -821,7 +807,7 @@ function showSettingsModal(tab) {
   cursorSel.addEventListener('change', () => { draft.cursorStyle = cursorSel.value; renderTermPreview(); });
   blinkI.addEventListener('change', () => { draft.cursorBlink = blinkI.checked; });
 
-  // Keys panel: draft copy of keybinds; capture mode records a new chord.
+  // Keys panel: draft copy of keybinds; capture mode records a new chord/scope.
   const kbDraft = { ...keybinds };
   const kbList = overlay.querySelector('#set-kb-list');
   let kbCapturing = null; // action id while waiting for a key, or null
@@ -842,10 +828,27 @@ function showSettingsModal(tab) {
     kbCapturing = actionId;
     overlay.classList.add('kb-capturing');
     renderKbList();
+    const action = KEYBINDS_API.ACTIONS.find((a) => a.id === actionId);
     kbCaptureHandler = (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
       if (ev.key === 'Escape') { stopKbCapture(); return; }
+
+      if (action && action.kind === 'scope') {
+        const scope = KEYBINDS_API.scopeFromEvent(ev);
+        if (!scope) return; // need at least one modifier
+        // Reject if it would collide with the other scope.
+        const otherId = actionId === 'word' ? 'line' : 'word';
+        if (kbDraft[otherId] && KEYBINDS_API.modsEqual(scope, kbDraft[otherId])) {
+          const btn = kbList.querySelector(`[data-kb="${actionId}"] .kb-chord`);
+          if (btn) { btn.textContent = 'совпадает с другим'; btn.classList.add('kb-err'); }
+          return;
+        }
+        kbDraft[actionId] = scope;
+        stopKbCapture();
+        return;
+      }
+
       const chord = KEYBINDS_API.chordFromEvent(ev);
       if (!chord) return; // modifier-only
       if (KEYBINDS_API.isReserved(chord)) {
@@ -869,11 +872,11 @@ function showSettingsModal(tab) {
       chordBtn.type = 'button';
       chordBtn.className = 'kb-chord' + (kbCapturing === a.id ? ' capturing' : '');
       if (kbCapturing === a.id) {
-        chordBtn.textContent = 'Нажмите…';
+        chordBtn.textContent = a.kind === 'scope' ? 'Модификатор…' : 'Нажмите…';
       } else if (!kbDraft[a.id]) {
         chordBtn.textContent = 'не задано';
       } else {
-        const parts = KEYBINDS_API.chordParts(kbDraft[a.id], window.swarm.platform);
+        const parts = KEYBINDS_API.bindingParts(a.id, kbDraft[a.id], window.swarm.platform);
         parts.forEach((p, i) => {
           if (i) {
             const sep = document.createElement('span');
@@ -1686,19 +1689,11 @@ window.addEventListener('dragover', (e) => e.preventDefault());
 window.addEventListener('drop', (e) => e.preventDefault());
 
 // Shortcuts: ⌘T new, ⌘W close, ⌘L toggle layout, ⌘1..9 jump.
-// Also app keybinds (scroll-to-bottom) which may use Shift alone.
 window.addEventListener('keydown', (e) => {
   // Don't steal keys while typing in a form field or capturing a chord in Settings.
   const tag = (e.target && e.target.tagName) || '';
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target && e.target.isContentEditable)) return;
   if (document.querySelector('.kb-capturing')) return;
-
-  const appAction = KEYBINDS_API.matchAppKeybind(keybinds, e);
-  if (appAction === 'scrollBottom') {
-    e.preventDefault();
-    scrollSessionToBottom(sessions.get(activeId));
-    return;
-  }
 
   if (!(e.metaKey || e.ctrlKey)) return;
   if (e.key === 't') { e.preventDefault(); createSession(); }
