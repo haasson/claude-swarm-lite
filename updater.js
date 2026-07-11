@@ -96,16 +96,23 @@ function shLiteral(s) {
 }
 
 // On Windows the running Electron process locks app.asar, so rename fails with
-// EBUSY. Download the new file, then hand off to a detached PowerShell helper
-// that waits for our PID to exit, swaps files, and starts the exe again.
+// EBUSY. Download the new file, then hand off to a PowerShell helper that waits
+// for our PID to exit, swaps files, and starts the exe again.
 //
-// Uses -EncodedCommand (UTF-16LE) so Cyrillic install paths survive Windows
-// PowerShell 5.1 (a BOM-less .ps1 would be read as ANSI and break Move-Item).
+// Critical: Chromium puts children in a Job Object with KILL_ON_JOB_CLOSE.
+// `spawn(..., { detached: true })` does NOT break out of that job, so a plain
+// detached powershell dies the moment we `app.exit` — app closes, never
+// relaunches, version stays old. Launch via `cmd /c start "" /b ...` so the
+// helper is a job-breakaway process that outlives us.
+//
+// UTF-8 BOM on the .ps1 so PowerShell 5.1 reads Cyrillic install paths.
 // Retries the rename: Chromium child processes can hold the lock after main exits.
 function scheduleWinAsarSwap({ asarPath, tmpPath, bakPath }) {
   const exePath = process.execPath;
   const pid = process.pid;
   const logPath = path.join(os.tmpdir(), `swarm-update-${pid}.log`);
+  const ps1 = path.join(os.tmpdir(), `swarm-update-${pid}.ps1`);
+  const cmd = path.join(os.tmpdir(), `swarm-update-${pid}.cmd`);
   const script = [
     `$targetPid = ${pid}`,
     `while (Get-Process -Id $targetPid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 400 }`,
@@ -129,8 +136,8 @@ function scheduleWinAsarSwap({ asarPath, tmpPath, bakPath }) {
     `    Start-Sleep -Milliseconds 500`,
     `  }`,
     `}`,
+    `try { ("ok=$ok err=$lastErr") | Out-File -FilePath $log -Encoding utf8 } catch {}`,
     `if (-not $ok) {`,
-    `  try { ("swap failed: " + $lastErr) | Out-File -FilePath $log -Encoding utf8 } catch {}`,
     `  try {`,
     `    if (-not (Test-Path -LiteralPath $asar) -and (Test-Path -LiteralPath $bak)) {`,
     `      Move-Item -LiteralPath $bak -Destination $asar -Force`,
@@ -138,19 +145,37 @@ function scheduleWinAsarSwap({ asarPath, tmpPath, bakPath }) {
     `  } catch {}`,
     `}`,
     `Start-Process -FilePath $exe`,
+    `Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue`,
     '',
-  ].join('\n');
-  const encoded = Buffer.from(script, 'utf16le').toString('base64');
+  ].join('\r\n');
+  fs.writeFileSync(ps1, '\uFEFF' + script, 'utf8');
+
+  const psExe = path.join(
+    process.env.SystemRoot || 'C:\\Windows',
+    'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'
+  );
+  // Tiny trampoline: `start` creates a process outside Electron's job object.
+  // Quote paths for cmd.exe; empty title ("") is required when the command is quoted.
+  const bat = [
+    '@echo off',
+    `start "" /b "${psExe}" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "${ps1}"`,
+    `del "%~f0" >nul 2>&1`,
+    '',
+  ].join('\r\n');
+  fs.writeFileSync(cmd, bat, 'utf8');
+
   return new Promise((resolve, reject) => {
+    // Wait for cmd to finish (start returns immediately after launching PS) so
+    // the helper is alive before we exit.
     const child = spawn(
-      'powershell.exe',
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-EncodedCommand', encoded],
-      { detached: true, stdio: 'ignore', windowsHide: true }
+      process.env.ComSpec || 'cmd.exe',
+      ['/d', '/c', cmd],
+      { stdio: 'ignore', windowsHide: true }
     );
     child.once('error', reject);
-    child.once('spawn', () => {
-      child.unref();
-      resolve();
+    child.once('exit', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error('helper launch failed: ' + code));
     });
   });
 }
