@@ -434,6 +434,47 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 }
 .set-preview .set-preview-cmd { color: var(--accent); }
 
+/* Keybinds panel — label + chord capture button + reset. */
+.kb-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.kb-row {
+  display: grid;
+  grid-template-columns: 1fr minmax(7.5rem, auto) 1.75rem;
+  align-items: center;
+  gap: 8px;
+}
+.kb-label { font-size: 13px; color: var(--text); }
+.kb-chord {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  text-align: center;
+  min-height: 30px;
+}
+.kb-chord:hover { border-color: var(--accent); }
+.kb-chord.capturing {
+  border-color: var(--accent);
+  color: var(--accent);
+  outline: 1px solid var(--accent);
+}
+.kb-chord.kb-err { color: #e06c75; border-color: #e06c75; }
+.kb-reset {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.kb-reset:hover { color: var(--text); background: var(--panel); }
+
 /* Help modal — wider, scrollable, neutral (not the destructive-red confirm). */
 .modal.help { width: min(640px, 92vw); padding: 0; }
 .help-body {

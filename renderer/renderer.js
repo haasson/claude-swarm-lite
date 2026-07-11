@@ -110,6 +110,7 @@ function openLogsModal() {
 })();
 
 const APPEARANCE = window.SWARM_THEMES;       // terminal theme presets + helpers
+const KEYBINDS_API = window.SWARM_KEYBINDS;   // input remaps + app hotkeys
 
 // Global terminal appearance (theme + font + cursor). One setting for all tabs,
 // persisted as a single JSON blob in localStorage (see swarm.appearance). Read by
@@ -124,6 +125,26 @@ function loadAppearance() {
 
 function saveAppearance() {
   localStorage.setItem('swarm.appearance', JSON.stringify(appearance));
+}
+
+// Custom keybinds (newline / word / line / scroll-to-bottom). Handlers read this
+// live object, so Save in Settings takes effect without recreating terminals.
+let keybinds = loadKeybinds();
+
+function loadKeybinds() {
+  let raw = null;
+  try { raw = JSON.parse(localStorage.getItem('swarm.keybinds') || 'null'); } catch (_) {}
+  return KEYBINDS_API.normalizeKeybinds(raw);
+}
+
+function saveKeybinds() {
+  localStorage.setItem('swarm.keybinds', JSON.stringify(keybinds));
+}
+
+function scrollSessionToBottom(s) {
+  if (!s || !s.term) return;
+  s.stickBottom = true;
+  s.term.scrollToBottom();
 }
 
 // Restyle every LIVE terminal in place, then refit — a font-size change alters the
@@ -248,7 +269,11 @@ function setStatus(id, status, detail) {
 // --- one shared subscription for pty output; route by id ---------------------
 window.swarm.onData(({ id, data }) => {
   const s = sessions.get(id);
-  if (s) s.term.write(data);
+  if (!s) return;
+  s.term.write(data);
+  // Keep the viewport pinned to the bottom while the user hasn't scrolled up.
+  // Without this, some CSI/repaint bursts leave the view at the top of scrollback.
+  if (s.stickBottom) s.term.scrollToBottom();
 });
 
 // Inferred status from main (running / ready / waiting + detail + statusline).
@@ -418,6 +443,35 @@ async function createSession(opts = {}) {
     window.swarm.sendInput(id, clean);
   });
 
+  // Remap configured chords → canonical bytes Claude/readline understand.
+  // Also intercept app actions (scroll-to-bottom) so xterm doesn't eat the key first.
+  // return false stops xterm from also emitting its own sequence for that key.
+  term.attachCustomKeyEventHandler((ev) => {
+    if (ev.type !== 'keydown') return true;
+    const appAction = KEYBINDS_API.matchAppKeybind(keybinds, ev);
+    if (appAction === 'scrollBottom') {
+      ev.preventDefault();
+      const s = sessions.get(id);
+      scrollSessionToBottom(s);
+      return false;
+    }
+    const action = KEYBINDS_API.matchInputKeybind(keybinds, ev);
+    if (!action) return true;
+    const bytes = KEYBINDS_API.BYTES[action];
+    if (!bytes) return true;
+    ev.preventDefault();
+    window.swarm.sendInput(id, bytes);
+    return false;
+  });
+
+  // Track whether the user is viewing the live bottom of the buffer.
+  term.onScroll(() => {
+    const s = sessions.get(id);
+    if (!s) return;
+    const buf = s.term.buffer.active;
+    s.stickBottom = buf.viewportY >= buf.baseY;
+  });
+
   // Wire terminal resize -> pty resize.
   term.onResize(({ cols, rows }) => window.swarm.resize(id, cols, rows));
 
@@ -454,7 +508,7 @@ async function createSession(opts = {}) {
   });
   attachRename(tab.querySelector('.label'));
 
-  sessions.set(id, { term, fit, holder, tab, alive: true, status: null, cwd: resolvedCwd, id, sumDot: null });
+  sessions.set(id, { term, fit, holder, tab, alive: true, status: null, cwd: resolvedCwd, id, sumDot: null, stickBottom: true });
   const okey = resolvedCwd || '';
   if (!folderOrder.includes(okey)) folderOrder.push(okey);
   if (!withinOrder.has(okey)) withinOrder.set(okey, []);
@@ -568,6 +622,7 @@ function showSettingsModal(tab) {
         <button class="set-tab" data-tab="launch">Запуск</button>
         <button class="set-tab" data-tab="notify">Уведомления</button>
         <button class="set-tab" data-tab="appearance">Вид</button>
+        <button class="set-tab" data-tab="keys">Клавиши</button>
         <button class="set-tab" data-tab="updates">Обновления</button>
       </div>
 
@@ -645,6 +700,12 @@ function showSettingsModal(tab) {
           <span class="set-label">Предпросмотр</span>
           <div class="term-preview" id="set-term-preview"></div>
         </div>
+      </div>
+
+      <div class="set-panel" data-panel="keys">
+        <div class="modal-msg">Хоткеи для ввода в агента и прокрутки терминала. Клик по сочетанию — назначить новое.</div>
+        <div class="kb-list" id="set-kb-list"></div>
+        <span class="set-hint">Перенос и навигация шлют в агент стандартные последовательности (Ctrl+J, Esc+b/f, Ctrl+A/E).</span>
       </div>
 
       <div class="set-panel" data-panel="updates">
@@ -765,6 +826,81 @@ function showSettingsModal(tab) {
   cursorSel.addEventListener('change', () => { draft.cursorStyle = cursorSel.value; renderTermPreview(); });
   blinkI.addEventListener('change', () => { draft.cursorBlink = blinkI.checked; });
 
+  // Keys panel: draft copy of keybinds; capture mode records a new chord.
+  const kbDraft = { ...keybinds };
+  const kbList = overlay.querySelector('#set-kb-list');
+  let kbCapturing = null; // action id while waiting for a key, or null
+  let kbCaptureHandler = null;
+
+  function stopKbCapture() {
+    if (kbCaptureHandler) {
+      document.removeEventListener('keydown', kbCaptureHandler, true);
+      kbCaptureHandler = null;
+    }
+    kbCapturing = null;
+    overlay.classList.remove('kb-capturing');
+    renderKbList();
+  }
+
+  function startKbCapture(actionId) {
+    stopKbCapture();
+    kbCapturing = actionId;
+    overlay.classList.add('kb-capturing');
+    renderKbList();
+    kbCaptureHandler = (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (ev.key === 'Escape') { stopKbCapture(); return; }
+      const chord = KEYBINDS_API.chordFromEvent(ev);
+      if (!chord) return; // modifier-only
+      if (KEYBINDS_API.isReserved(chord)) {
+        const btn = kbList.querySelector(`[data-kb="${actionId}"] .kb-chord`);
+        if (btn) { btn.textContent = 'занято приложением'; btn.classList.add('kb-err'); }
+        return;
+      }
+      kbDraft[actionId] = chord;
+      stopKbCapture();
+    };
+    document.addEventListener('keydown', kbCaptureHandler, true);
+  }
+
+  function renderKbList() {
+    kbList.innerHTML = '';
+    for (const a of KEYBINDS_API.ACTIONS) {
+      const row = document.createElement('div');
+      row.className = 'kb-row';
+      row.dataset.kb = a.id;
+      const chordBtn = document.createElement('button');
+      chordBtn.type = 'button';
+      chordBtn.className = 'kb-chord' + (kbCapturing === a.id ? ' capturing' : '');
+      chordBtn.textContent = kbCapturing === a.id
+        ? 'Нажмите…'
+        : KEYBINDS_API.formatChord(kbDraft[a.id]);
+      chordBtn.addEventListener('click', () => {
+        if (kbCapturing === a.id) stopKbCapture();
+        else startKbCapture(a.id);
+      });
+      const resetBtn = document.createElement('button');
+      resetBtn.type = 'button';
+      resetBtn.className = 'kb-reset';
+      resetBtn.title = 'Сбросить к умолчанию';
+      resetBtn.textContent = '×';
+      resetBtn.addEventListener('click', () => {
+        kbDraft[a.id] = { ...KEYBINDS_API.DEFAULT_KEYBINDS[a.id] };
+        if (kbCapturing === a.id) stopKbCapture();
+        else renderKbList();
+      });
+      const label = document.createElement('span');
+      label.className = 'kb-label';
+      label.textContent = a.label;
+      row.appendChild(label);
+      row.appendChild(chordBtn);
+      row.appendChild(resetBtn);
+      kbList.appendChild(row);
+    }
+  }
+  renderKbList();
+
   const curEl = overlay.querySelector('.upd-cur');
   window.swarm.getVersion().then((v) => { if (curEl) curEl.textContent = v; }).catch(() => {});
   const updStatus = overlay.querySelector('.upd-status');
@@ -780,14 +916,19 @@ function showSettingsModal(tab) {
   const panels = overlay.querySelectorAll('.set-panel');
   const tabs = overlay.querySelectorAll('.set-tab');
   const showTab = (name) => {
+    if (kbCapturing) stopKbCapture();
     tabs.forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
     panels.forEach((p) => p.classList.toggle('hidden', p.dataset.panel !== name));
     if (name === 'launch') { cmdI.focus(); cmdI.select(); }
   };
   tabs.forEach((t) => t.addEventListener('click', () => showTab(t.dataset.tab)));
-  showTab(['notify', 'appearance', 'updates'].includes(tab) ? tab : 'launch');
+  showTab(['notify', 'appearance', 'keys', 'updates'].includes(tab) ? tab : 'launch');
 
-  const close = () => { document.removeEventListener('keydown', onKey, true); overlay.remove(); };
+  const close = () => {
+    stopKbCapture();
+    document.removeEventListener('keydown', onKey, true);
+    overlay.remove();
+  };
   const save = () => {
     launch = { cmd: cmdI.value.trim() || 'claude', flags: flagsI.value.trim() };
     saveLaunch();
@@ -803,9 +944,12 @@ function showSettingsModal(tab) {
     appearance = { ...draft };
     saveAppearance();
     applyAppearance();
+    keybinds = KEYBINDS_API.normalizeKeybinds(kbDraft);
+    saveKeybinds();
     close();
   };
   const onKey = (ev) => {
+    if (kbCapturing) return; // capture handler owns Escape / keys
     if (ev.key === 'Escape') { ev.preventDefault(); close(); }
     else if (ev.key === 'Enter') { ev.preventDefault(); save(); }
   };
@@ -1508,7 +1652,20 @@ window.addEventListener('dragover', (e) => e.preventDefault());
 window.addEventListener('drop', (e) => e.preventDefault());
 
 // Shortcuts: ⌘T new, ⌘W close, ⌘L toggle layout, ⌘1..9 jump.
+// Also app keybinds (scroll-to-bottom) which may use Shift alone.
 window.addEventListener('keydown', (e) => {
+  // Don't steal keys while typing in a form field or capturing a chord in Settings.
+  const tag = (e.target && e.target.tagName) || '';
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target && e.target.isContentEditable)) return;
+  if (document.querySelector('.kb-capturing')) return;
+
+  const appAction = KEYBINDS_API.matchAppKeybind(keybinds, e);
+  if (appAction === 'scrollBottom') {
+    e.preventDefault();
+    scrollSessionToBottom(sessions.get(activeId));
+    return;
+  }
+
   if (!(e.metaKey || e.ctrlKey)) return;
   if (e.key === 't') { e.preventDefault(); createSession(); }
   else if (e.key === 'o') { e.preventDefault(); createSessionInFolder(); }
