@@ -1864,9 +1864,28 @@ async function openUpdateModal() {
     } else {
       const u = fresh.installers[window.swarm.platform === 'win32' ? 'exe' : 'dmg'];
       const fname = (u || '').split('/').pop() || 'installer';
+      const prog = overlay.querySelector('.upd-progress');
+      const bar = overlay.querySelector('.upd-bar');
+      const laterBtn = overlay.querySelector('.upd-later');
+      goBtn.textContent = 'Скачиваю…';
+      laterBtn.disabled = true;
+      prog.hidden = false;
+      bar.style.width = '0%';
+      const off = window.swarm.onUpdateProgress((pct) => { bar.style.width = pct + '%'; });
       const res = await window.swarm.updateDownloadInstaller(u, fname);
-      close();
-      confirmModalInfo(res && res.ok ? 'Установщик скачан в «Загрузки».' : 'Не удалось скачать установщик.');
+      off();
+      if (res && res.ok) {
+        bar.style.width = '100%';
+        close();
+        confirmModalInfo('Установщик скачан в «Загрузки».');
+      } else {
+        prog.hidden = true;
+        laterBtn.disabled = false;
+        goBtn.textContent = 'Скачать установщик';
+        goBtn.disabled = false;
+        overlay.querySelector('.upd-notes').textContent =
+          'Не удалось скачать установщик: ' + ((res && res.error) || 'ошибка');
+      }
     }
   });
 }

@@ -534,8 +534,9 @@ ipcMain.handle('update:apply', async (_e, { url, sha256 }) => {
   } catch (e) { reportMainError(e); return { ok: false, error: String(e && e.message || e) }; }
 });
 ipcMain.handle('update:installer', async (_e, { url, filename }) => {
-  try { return await updater.downloadInstaller(url, filename); }
-  catch (e) { reportMainError(e); return { ok: false, error: String(e && e.message || e) }; }
+  try {
+    return await updater.downloadInstaller(url, filename, (pct) => safeSend('update:progress', pct));
+  } catch (e) { reportMainError(e); return { ok: false, error: String(e && e.message || e) }; }
 });
 ipcMain.on('update:relaunch', () => {
   // Skip the "close app?" confirm so deferred asar-swap can exit cleanly.

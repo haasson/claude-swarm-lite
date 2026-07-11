@@ -265,11 +265,11 @@ async function applyAsar(asarUrl, sha256, onProgress) {
   return { ok: true };
 }
 
-async function downloadInstaller(url, filename) {
+async function downloadInstaller(url, filename, onProgress) {
   if (!enabled()) throw new Error('updater disabled');
   const info = readBuildInfo();
   const dest = path.join(app.getPath('downloads'), filename);
-  await download(url, info.updateToken, dest, null, null);
+  await download(url, info.updateToken, dest, null, onProgress || null);
   shell.showItemInFolder(dest);
   return { ok: true, path: dest };
 }
