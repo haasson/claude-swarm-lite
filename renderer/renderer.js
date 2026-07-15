@@ -111,6 +111,7 @@ function openLogsModal() {
 
 const APPEARANCE = window.SWARM_THEMES;       // terminal theme presets + helpers
 const KEYBINDS_API = window.SWARM_KEYBINDS;   // newline chord + word/line scopes
+const RESUME_API = window.SWARM_RESUME;       // Claude -n / --resume per tab
 
 // Global terminal appearance (theme + font + cursor). One setting for all tabs,
 // persisted as a single JSON blob in localStorage (see swarm.appearance). Read by
@@ -347,8 +348,11 @@ function makeXterm() {
 // new session. A new tab types `${cmd} ${flags}` once its shell is ready.
 //   cmd   — 'claude', or an alias like 'cld'/'claude-glm' (your own shell alias
 //           that points claude-code at a different config / ANTHROPIC_BASE_URL).
-//   flags — e.g. '--dangerously-skip-permissions', '--resume', '--model sonnet'.
+//   flags — e.g. '--dangerously-skip-permissions', '--model sonnet'.
+// When resume-on-relaunch is on and the cmd is Claude-family, we also pin each
+// tab with `-n swarm-…` and restore via `--resume swarm-…` (see RESUME_API).
 let launch = loadLaunch();
+let resumeSessions = localStorage.getItem('swarm.resumeSessions') === '1';
 
 function loadLaunch() {
   let cmd = localStorage.getItem('swarm.launchCmd');
@@ -364,28 +368,41 @@ function loadLaunch() {
   return { cmd: (cmd || '').trim() || 'claude', flags: (flags || '').trim() };
 }
 
-// The full launch line for a new tab, e.g. 'cld --dangerously-skip-permissions'.
-function launchCommand() {
-  return (launch.cmd + ' ' + launch.flags).trim();
-}
-
 function saveLaunch() {
   localStorage.setItem('swarm.launchCmd', launch.cmd);
   localStorage.setItem('swarm.launchFlags', launch.flags);
 }
 
-// Convenience: also LEARN the launcher from what you actually type at a shell
-// prompt, so switching to e.g. `claude-corp` by hand becomes the default for new
-// tabs without opening Settings. We match a known launcher STEM (not any word) so
-// `ls`/`git commit -m claude`/chat messages aren't mistaken for a launch command.
-// We only adopt the STEM (first token), never the flags — flags are a deliberate
-// Settings choice and typing a bare `claude` in some tab must not wipe them. An
-// alias outside this list (e.g. `cld`) won't auto-learn — set it once in Settings.
-const AGENT_CMD_RE = /^\s*(?:claude|glm|deepseek|codex|gemini|aider|qwen|kimi|opencode|crush|amp|droid)[\w-]*(?:\s+--?[\w-]+(?:=\S+)?)*\s*$/i;
-function rememberStartCommand(line) {
+function saveResumeSessions() {
+  localStorage.setItem('swarm.resumeSessions', resumeSessions ? '1' : '0');
+}
+
+// Build the line typed into a new/restored tab: optional Claude -n / --resume.
+function sessionLaunchCommand({ cmd, flags, sessionKey, resume } = {}) {
+  return RESUME_API.buildCommand({
+    cmd: cmd || launch.cmd,
+    flags: flags != null ? flags : launch.flags,
+    sessionKey: sessionKey || null,
+    mode: resume ? 'resume' : 'start',
+  });
+}
+
+// Learn the launcher from what you type at a shell prompt:
+//   1) bind THIS tab to that cmd (so restore relaunches the same alias/account);
+//   2) also adopt it as the global default for NEW tabs.
+// Match a known launcher STEM (not any word) so `ls`/`git commit` aren't mistaken
+// for a launch. Only the STEM is adopted — flags stay a deliberate Settings choice
+// (typing bare `claude` must not wipe `--dangerously-skip-permissions`).
+const AGENT_CMD_RE = /^\s*(?:claude|cld|glm|deepseek|codex|gemini|aider|qwen|kimi|opencode|crush|amp|droid)[\w-]*(?:\s+--?[\w-]+(?:=\S+)?)*\s*$/i;
+function rememberStartCommand(line, sessionId) {
   const t = line.trim();
   if (!AGENT_CMD_RE.test(t)) return;
   const cmd = t.split(/\s+/)[0];
+  const s = sessions.get(sessionId);
+  if (s && s.cmd !== cmd) {
+    s.cmd = cmd;
+    persistTabs();
+  }
   if (cmd === launch.cmd) return;
   launch = { cmd, flags: launch.flags };
   saveLaunch();
@@ -410,11 +427,27 @@ async function createSession(opts = {}) {
   // A plain new session inherits the folder of the one you're currently on;
   // opts.cwd (folder picker) overrides. Main falls back to the default folder.
   const cwd = opts.cwd || sessions.get(activeId)?.cwd;
+  const cmd = opts.cmd || launch.cmd;
+  const flags = opts.flags != null ? opts.flags : launch.flags;
+  // Pin Claude tabs with a stable swarm-* name so relaunch can --resume the same
+  // conversation (not "last in cwd"). Other agents: no pin yet.
+  let sessionKey = opts.sessionKey || null;
+  const canPin = resumeSessions && RESUME_API.supports(cmd);
+  if (canPin && !sessionKey) sessionKey = RESUME_API.newSessionKey();
+  const doResume = !!(opts.resume && canPin && sessionKey);
+  const command = opts.command != null
+    ? opts.command
+    : sessionLaunchCommand({
+      cmd,
+      flags,
+      sessionKey: canPin ? sessionKey : null,
+      resume: doResume,
+    });
   const { id, cwd: resolvedCwd } = await window.swarm.createSession({
     cols: term.cols,
     rows: term.rows,
     cwd,
-    command: opts.command != null ? opts.command : launchCommand(),
+    command,
   });
 
   // Wire keystrokes -> pty. Strip focus in/out reports (CSI I / CSI O): with
@@ -433,7 +466,7 @@ async function createSession(opts = {}) {
     for (const ch of clean) {
       if (inEsc) { if (/[a-zA-Z~]/.test(ch)) inEsc = false; continue; }
       if (ch === '\x1b') { inEsc = true; cmdBuf = ''; }
-      else if (ch === '\r' || ch === '\n') { rememberStartCommand(cmdBuf); cmdBuf = ''; }
+      else if (ch === '\r' || ch === '\n') { rememberStartCommand(cmdBuf, id); cmdBuf = ''; }
       else if (ch === '\x7f' || ch === '\b') cmdBuf = cmdBuf.slice(0, -1);
       else if (ch >= ' ') cmdBuf += ch;
     }
@@ -488,7 +521,10 @@ async function createSession(opts = {}) {
   });
   attachRename(tab.querySelector('.label'));
 
-  sessions.set(id, { term, fit, holder, tab, alive: true, status: null, cwd: resolvedCwd, id, sumDot: null });
+  sessions.set(id, {
+    term, fit, holder, tab, alive: true, status: null, cwd: resolvedCwd, id, sumDot: null,
+    cmd, flags, sessionKey: sessionKey || null,
+  });
   const okey = resolvedCwd || '';
   if (!folderOrder.includes(okey)) folderOrder.push(okey);
   if (!withinOrder.has(okey)) withinOrder.set(okey, []);
@@ -590,7 +626,7 @@ function showGitLoginModal() {
 
 // --- settings (⚙) ------------------------------------------------------------
 // Tabbed modal. "Запуск": which agent CLI + flags a NEW tab runs (global; open
-// tabs untouched — see loadLaunch/launchCommand/saveLaunch). "Уведомления": the
+// tabs untouched — see loadLaunch/sessionLaunchCommand/saveLaunch). "Уведомления": the
 // system-notification prefs (mirrors the 🔔 quick-mute; see maybeNotify).
 function showSettingsModal(tab) {
   if (document.querySelector('.modal-overlay .modal.settings')) return; // already open
@@ -618,7 +654,12 @@ function showSettingsModal(tab) {
           <span class="set-label">Доп. флаги</span>
           <input class="set-input" id="set-flags" type="text" spellcheck="false"
                  autocapitalize="off" autocorrect="off" placeholder="напр. --dangerously-skip-permissions" />
-          <span class="set-hint">Дописываются к команде: <code>--dangerously-skip-permissions</code>, <code>--resume</code>, <code>--model sonnet</code>…</span>
+          <span class="set-hint">Дописываются к команде: <code>--dangerously-skip-permissions</code>, <code>--model sonnet</code>…</span>
+        </label>
+        <label class="set-check">
+          <input type="checkbox" id="set-resume" />
+          <span class="set-check-tx">Восстанавливать диалоги после перезапуска
+            <span class="set-check-sub">сейчас только Claude Code</span></span>
         </label>
         <div class="set-preview">Новая вкладка запустит: <code class="set-preview-cmd"></code></div>
       </div>
@@ -705,15 +746,26 @@ function showSettingsModal(tab) {
   // Launch panel wiring + live preview.
   const cmdI = overlay.querySelector('#set-cmd');
   const flagsI = overlay.querySelector('#set-flags');
+  const resumeI = overlay.querySelector('#set-resume');
   const preview = overlay.querySelector('.set-preview-cmd');
   cmdI.value = launch.cmd;
   flagsI.value = launch.flags;
+  resumeI.checked = resumeSessions;
   const renderPreview = () => {
-    preview.textContent = ((cmdI.value.trim() || 'claude') + ' ' + flagsI.value.trim()).trim();
+    const cmd = cmdI.value.trim() || 'claude';
+    const flags = flagsI.value.trim();
+    if (resumeI.checked && RESUME_API.supports(cmd)) {
+      preview.textContent = RESUME_API.buildCommand({
+        cmd, flags, sessionKey: 'swarm-…', mode: 'start',
+      });
+    } else {
+      preview.textContent = (cmd + (flags ? ' ' + flags : '')).trim();
+    }
   };
-  renderPreview();
   cmdI.addEventListener('input', renderPreview);
   flagsI.addEventListener('input', renderPreview);
+  resumeI.addEventListener('change', renderPreview);
+  renderPreview();
 
   // Notify panel wiring: the sub-options grey out when the master is off.
   const onI = overlay.querySelector('#set-notify-on');
@@ -964,6 +1016,8 @@ function showSettingsModal(tab) {
   const save = () => {
     launch = { cmd: cmdI.value.trim() || 'claude', flags: flagsI.value.trim() };
     saveLaunch();
+    resumeSessions = resumeI.checked;
+    saveResumeSessions();
     notifyOnReady = readyI.checked;
     notifyOnWaiting = waitingI.checked;
     notifyActive = activeI.checked;
@@ -1051,12 +1105,20 @@ async function requestCloseSession(id) {
   if (await confirmModal(`Закрыть «${name}»? Сессия агента завершится.`, 'Закрыть')) closeSession(id);
 }
 
-// Save the open tabs (folder + name) so they can be restored next launch.
-// Session content isn't persisted — each restored tab spawns a fresh claude.
+// Save open tabs so they restore next launch. For Claude we also keep sessionKey
+// (+ cmd/flags) to --resume that exact conversation — not "last in cwd".
 function persistTabs() {
   const out = [];
   for (const u of orderedUnits()) {
-    for (const s of u.list) out.push({ cwd: s.cwd || null, name: s.tab.querySelector('.label').textContent });
+    for (const s of u.list) {
+      out.push({
+        cwd: s.cwd || null,
+        name: s.tab.querySelector('.label').textContent,
+        cmd: s.cmd || null,
+        flags: s.flags != null ? s.flags : null,
+        sessionKey: s.sessionKey || null,
+      });
+    }
   }
   localStorage.setItem('swarm.tabs', JSON.stringify(out));
 }
@@ -1572,6 +1634,9 @@ const HELP_HTML = `
     <li>Если папка вкладки — не git-репозиторий, панель ветки пустая.</li>
   </ul>
 
+  <h4>После перезапуска</h4>
+  <p>Вкладки (папка + имя) запоминаются всегда. Восстановление диалогов — опция в <b>Настройки → Запуск</b> (выкл. по умолчанию); сейчас только для Claude Code.</p>
+
   <h4>Горячие клавиши</h4>
   <ul>
     <li><code>⌘T</code> — новая вкладка (папка по умолчанию) · <code>⌘O</code> — с выбором папки</li>
@@ -1591,7 +1656,7 @@ const HELP_HTML = `
   <p>Если модель подключена через <code>ANTHROPIC_BASE_URL</code> — это <b>тот же Claude Code</b>, просто другой бэкенд. Всё работает без изменений: команды (<code>/compact</code>, <code>/clear</code>, <code>/usage</code>) — это фичи CLI, а не модели. Токен и base URL держи в <code>~/.zshrc</code>, <b>не в аппе</b>.</p>
 
   <h4>Запоминание команды запуска</h4>
-  <p>Вбей в терминал вкладки нужный лончер <b>руками</b> (<code>claude-my</code>, <code>claude-glm</code>, <code>glm</code>…) — аппа запомнит его и будет открывать новые вкладки им (переживает перезапуск). Ловится только набранное/вставленное: команда, поднятая из истории стрелкой ↑, не запомнится — набери разок целиком.</p>
+  <p>Вбей в терминал вкладки нужный лончер <b>руками</b> (<code>claude-my</code>, <code>claude-glm</code>, <code>glm</code>…) — аппа привяжет его к <b>этой</b> вкладке (при перезапуске снова откроет им) и сделает дефолтом для новых. Ловится только набранное/вставленное: команда из истории стрелкой ↑ не считается — набери разок целиком.</p>
 `;
 
 function openHelp() {
@@ -1906,14 +1971,23 @@ document.querySelector('#cmd-menu-btn .ic').innerHTML = ICONS.command;
 document.querySelector('#layout-toggle .ic').innerHTML = ICONS.layout;
 document.querySelector('#settings-btn .ic').innerHTML = ICONS.gear;
 
-// Restore the previous session's tabs (folders + names), or start with one.
-// Content isn't restored — each tab spawns a fresh claude in its folder.
+// Restore previous tabs (folders + names + Claude session keys). With resume on,
+// each Claude tab runs `--resume swarm-…`; otherwise a fresh agent in that folder.
 async function restoreOrStart() {
   let saved = [];
   try { saved = JSON.parse(localStorage.getItem('swarm.tabs') || '[]'); } catch (_) {}
   saved = Array.isArray(saved) ? saved.filter((t) => t && t.cwd) : [];
   if (!saved.length) { createSession(); return; }
-  for (const t of saved) await createSession({ cwd: t.cwd, name: t.name });
+  for (const t of saved) {
+    await createSession({
+      cwd: t.cwd,
+      name: t.name,
+      cmd: t.cmd || undefined,
+      flags: t.flags != null ? t.flags : undefined,
+      sessionKey: t.sessionKey || undefined,
+      resume: !!(resumeSessions && t.sessionKey),
+    });
+  }
   const first = sessions.keys().next();
   if (!first.done) activate(first.value);
 }
