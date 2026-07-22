@@ -343,23 +343,32 @@ function makeXterm() {
   return { term, fit };
 }
 
-// Launch config for NEW tabs: which agent CLI to run (`cmd`) + extra flags
-// (`flags`). Both are user-editable in Settings (⚙) and applied globally to every
-// new session. A new tab types `${cmd} ${flags}` once its shell is ready.
-//   cmd   — 'claude', or an alias like 'cld'/'claude-glm' (your own shell alias
-//           that points claude-code at a different config / ANTHROPIC_BASE_URL).
-//   flags — e.g. '--dangerously-skip-permissions', '--model sonnet'.
-// When resume-on-relaunch is on and the cmd is Claude-family, we also pin each
-// tab with `-n swarm-…` and restore via `--resume swarm-…` (see RESUME_API).
-// The list of saved agents a NEW tab can launch (each is { cmd, flags }). The
-// first entry is the default; `launch` mirrors it for the many call sites that
-// want a single fallback. When the list has >1 agent, opening a tab asks which
-// one to run (see pickAgent / the resolver in createSession) — how often it asks
-// is controlled by launchPick ('always' vs 'folder', see resolveLaunch).
+// Launch config for NEW tabs. Two top-level modes (launchMode):
+//   'agent' — auto-run an agent CLI. launchList holds the saved agents (each a
+//             { cmd, flags }; the UI edits them as one "cmd flags" line). One agent
+//             → run it silently; several → a picker on tab open (see pickAgent /
+//             resolveLaunch), how often controlled by launchPick ('always'/'folder').
+//             The picker always offers a "clean terminal" as the last option too.
+//   'blank' — always open a clean shell with NO command; you type it yourself.
+// `launch` mirrors launchList[0] for the call sites that want a single fallback.
+// When resume-on-relaunch is on and the cmd is Claude-family, we pin each tab with
+// `-n swarm-…` and restore via `--resume swarm-…` (see RESUME_API). Clean terminals
+// (blank) are never pinned.
 let launchList = loadLaunchList();
 let launch = launchList[0];
+let launchMode = localStorage.getItem('swarm.launchMode') || 'agent';
 let launchPick = localStorage.getItem('swarm.launchPick') || 'folder';
 let resumeSessions = localStorage.getItem('swarm.resumeSessions') === '1';
+
+// Split a "cmd --flags" line into { cmd, flags }: first token = launcher, rest = flags.
+function parseAgentLine(line) {
+  const t = (line || '').trim();
+  const sp = t.indexOf(' ');
+  return {
+    cmd: (sp === -1 ? t : t.slice(0, sp)).trim(),
+    flags: (sp === -1 ? '' : t.slice(sp + 1)).trim(),
+  };
+}
 
 function loadLaunch() {
   let cmd = localStorage.getItem('swarm.launchCmd');
@@ -404,6 +413,10 @@ function saveLaunchPick() {
   localStorage.setItem('swarm.launchPick', launchPick);
 }
 
+function saveLaunchMode() {
+  localStorage.setItem('swarm.launchMode', launchMode);
+}
+
 function saveResumeSessions() {
   localStorage.setItem('swarm.resumeSessions', resumeSessions ? '1' : '0');
 }
@@ -413,8 +426,9 @@ function agentLabel(a) {
   return (a.cmd + (a.flags ? ' ' + a.flags : '')).trim();
 }
 
-// Ask which saved agent a new tab should launch. Resolves the chosen { cmd, flags }
-// or null on cancel (Esc / click-away / "Отмена") — the caller then skips the tab.
+// Ask which saved agent a new tab should launch. Resolves the chosen { cmd, flags },
+// { blank: true } for a clean terminal (always the last option), or null on cancel
+// (Esc / click-away / "Отмена") — the caller then skips the tab.
 function pickAgent() {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
@@ -433,6 +447,12 @@ function pickAgent() {
       b.addEventListener('click', () => close(launchList[i]));
       list.appendChild(b);
     });
+    // A clean shell (no command) is always available as the last option.
+    const blankBtn = document.createElement('button');
+    blankBtn.className = 'pick-item pick-blank';
+    blankBtn.textContent = 'Чистый терминал';
+    blankBtn.addEventListener('click', () => close({ blank: true }));
+    list.appendChild(blankBtn);
     document.body.appendChild(overlay);
 
     const close = (val) => {
@@ -450,22 +470,28 @@ function pickAgent() {
   });
 }
 
-// Decide the { cmd, flags } for a NEW tab. Never prompts on restore (opts.cmd set)
-// or with a single saved agent. With several agents the launchPick mode decides:
-//   'always' — ask every time;
-//   'folder' — reuse the agent of the first tab already open in this folder, and
-//              only ask when the folder has none yet (its first tab).
-// Returns null if the user cancels the picker (abort the tab).
+// Decide what a NEW tab launches: { cmd, flags }, { blank: true } for a clean
+// terminal, or null to abort (picker cancelled). Never prompts on restore
+// (opts carries the saved choice) or with a single saved agent in 'agent' mode.
+//   launchMode 'blank' — always a clean terminal;
+//   launchMode 'agent' with several agents — the launchPick mode decides:
+//     'always' — ask every time;
+//     'folder' — reuse the choice of the first tab already open in this folder,
+//                only asking when the folder has none yet (its first tab).
 async function resolveLaunch(opts, cwd) {
+  if (opts.blank) return { blank: true };
   if (opts.cmd != null) {
     return { cmd: opts.cmd, flags: opts.flags != null ? opts.flags : launch.flags };
   }
+  if (launchMode === 'blank') return { blank: true };
   if (launchList.length <= 1) return { cmd: launch.cmd, flags: launch.flags };
   if (launchPick === 'folder') {
     const ids = withinOrder.get(cwd) || [];
     for (const sid of ids) {
       const s = sessions.get(sid);
-      if (s && s.cmd) return { cmd: s.cmd, flags: s.flags != null ? s.flags : '' };
+      if (!s) continue;
+      if (s.blank) return { blank: true };
+      if (s.cmd) return { cmd: s.cmd, flags: s.flags != null ? s.flags : '' };
     }
   }
   return pickAgent();
@@ -493,7 +519,9 @@ function rememberStartCommand(line, sessionId) {
   if (!AGENT_CMD_RE.test(t)) return;
   const cmd = t.split(/\s+/)[0];
   const s = sessions.get(sessionId);
-  if (s && s.cmd !== cmd) {
+  // Don't bind a clean terminal to a cmd: it restores empty regardless, so the
+  // learned cmd would be dead data.
+  if (s && !s.blank && s.cmd !== cmd) {
     s.cmd = cmd;
     persistTabs();
   }
@@ -507,7 +535,11 @@ async function createSession(opts = {}) {
   // the whole tab, so resolve it before we build any xterm/DOM to clean up.
   const chosen = await resolveLaunch(opts, cwd || '');
   if (!chosen) return;
-  const { cmd, flags } = chosen;
+  // A clean terminal runs no command (empty string → main.js types nothing) and is
+  // never pinned/resumed. Otherwise it's a normal agent launch.
+  const blank = !!chosen.blank;
+  const cmd = blank ? '' : chosen.cmd;
+  const flags = blank ? '' : chosen.flags;
 
   const { term, fit } = makeXterm();
 
@@ -527,17 +559,20 @@ async function createSession(opts = {}) {
   // Pin Claude tabs with a stable swarm-* name so relaunch can --resume the same
   // conversation (not "last in cwd"). Other agents: no pin yet.
   let sessionKey = opts.sessionKey || null;
-  const canPin = resumeSessions && RESUME_API.supports(cmd);
+  const canPin = !blank && resumeSessions && RESUME_API.supports(cmd);
   if (canPin && !sessionKey) sessionKey = RESUME_API.newSessionKey();
   const doResume = !!(opts.resume && canPin && sessionKey);
-  const command = opts.command != null
-    ? opts.command
-    : sessionLaunchCommand({
-      cmd,
-      flags,
-      sessionKey: canPin ? sessionKey : null,
-      resume: doResume,
-    });
+  // Blank tab → empty command (never fall back to the default agent).
+  const command = blank
+    ? ''
+    : opts.command != null
+      ? opts.command
+      : sessionLaunchCommand({
+        cmd,
+        flags,
+        sessionKey: canPin ? sessionKey : null,
+        resume: doResume,
+      });
   const { id, cwd: resolvedCwd } = await window.swarm.createSession({
     cols: term.cols,
     rows: term.rows,
@@ -618,7 +653,7 @@ async function createSession(opts = {}) {
 
   sessions.set(id, {
     term, fit, holder, tab, alive: true, status: null, cwd: resolvedCwd, id, sumDot: null,
-    cmd, flags, sessionKey: sessionKey || null,
+    cmd, flags, blank, sessionKey: sessionKey || null,
   });
   const okey = resolvedCwd || '';
   if (!folderOrder.includes(okey)) folderOrder.push(okey);
@@ -739,31 +774,45 @@ function showSettingsModal(tab) {
       </div>
 
       <div class="set-panel" data-panel="launch">
-        <div class="modal-msg">Список агентов для <b>новых</b> вкладок. Уже открытые сессии не трогаем.</div>
+        <div class="modal-msg">Что запускать в <b>новых</b> вкладках. Уже открытые сессии не трогаем.</div>
         <div class="set-field">
-          <span class="set-label">Агенты</span>
-          <div class="agent-list" id="set-agent-list"></div>
-          <button type="button" class="set-check-btn agent-add" id="set-agent-add">+ Добавить агента</button>
-          <span class="set-hint">Команда + доп. флаги: <code>claude</code>, <code>cld --model sonnet</code>,
-            <code>claude-glm --dangerously-skip-permissions</code>…</span>
-        </div>
-        <div class="set-field" id="set-pick-field">
-          <span class="set-label">Если агентов несколько</span>
           <label class="set-radio">
-            <input type="radio" name="set-pick" value="always" />
-            <span class="set-check-tx">Спрашивать каждый раз при открытии вкладки</span>
+            <input type="radio" name="set-mode" value="agent" />
+            <span class="set-check-tx">Запускать агента автоматически</span>
           </label>
           <label class="set-radio">
-            <input type="radio" name="set-pick" value="folder" />
-            <span class="set-check-tx">Как в первой вкладке папки
-              <span class="set-check-sub">спросим только на первой вкладке папки, дальше — тот же агент</span></span>
+            <input type="radio" name="set-mode" value="blank" />
+            <span class="set-check-tx">Всегда открывать чистый терминал
+              <span class="set-check-sub">без команды — вводите её сами</span></span>
           </label>
         </div>
-        <label class="set-check">
-          <input type="checkbox" id="set-resume" />
-          <span class="set-check-tx">Восстанавливать диалоги после перезапуска
-            <span class="set-check-sub">сейчас только Claude Code</span></span>
-        </label>
+        <div id="set-agent-block">
+          <div class="set-field">
+            <span class="set-label">Команды</span>
+            <div class="agent-list" id="set-agent-list"></div>
+            <button type="button" class="set-check-btn agent-add" id="set-agent-add">+ Добавить команду</button>
+            <span class="set-hint">Команда вместе с флагами: <code>claude</code>, <code>cld --model sonnet</code>,
+              <code>claude-glm --dangerously-skip-permissions</code>… При нескольких — спросим при открытии
+              вкладки (в списке будет и «Чистый терминал»).</span>
+          </div>
+          <div class="set-field" id="set-pick-field">
+            <span class="set-label">Если команд несколько</span>
+            <label class="set-radio">
+              <input type="radio" name="set-pick" value="always" />
+              <span class="set-check-tx">Спрашивать каждый раз при открытии вкладки</span>
+            </label>
+            <label class="set-radio">
+              <input type="radio" name="set-pick" value="folder" />
+              <span class="set-check-tx">Как в первой вкладке папки
+                <span class="set-check-sub">спросим только на первой вкладке папки, дальше — тот же выбор</span></span>
+            </label>
+          </div>
+          <label class="set-check">
+            <input type="checkbox" id="set-resume" />
+            <span class="set-check-tx">Восстанавливать диалоги после перезапуска
+              <span class="set-check-sub">сейчас только Claude Code</span></span>
+          </label>
+        </div>
       </div>
 
       <div class="set-panel" data-panel="notify">
@@ -845,34 +894,33 @@ function showSettingsModal(tab) {
     </div>`;
   document.body.appendChild(overlay);
 
-  // Launch panel wiring: an editable list of agents + the pick-mode choice.
+  // Launch panel wiring: mode (agent/blank) + an editable list of commands.
+  const agentBlockEl = overlay.querySelector('#set-agent-block');
   const agentListEl = overlay.querySelector('#set-agent-list');
   const pickFieldEl = overlay.querySelector('#set-pick-field');
   const resumeI = overlay.querySelector('#set-resume');
   resumeI.checked = resumeSessions;
 
-  // The pick-mode choice only matters with more than one agent — hide otherwise.
+  // The pick-mode choice only matters with more than one command — hide otherwise.
   const countAgents = () => [...agentListEl.querySelectorAll('.agent-cmd')]
     .filter((i) => i.value.trim()).length;
   const syncPickVisibility = () => {
     pickFieldEl.classList.toggle('hidden', countAgents() <= 1);
   };
+  // One line per command ("cmd --flags"); split on save.
   const addAgentRow = (agent = { cmd: '', flags: '' }) => {
     const row = document.createElement('div');
     row.className = 'agent-row';
     row.innerHTML = `
       <input class="set-input agent-cmd" type="text" spellcheck="false"
-             autocapitalize="off" autocorrect="off" placeholder="claude" />
-      <input class="set-input agent-flags" type="text" spellcheck="false"
-             autocapitalize="off" autocorrect="off" placeholder="флаги (необязательно)" />
+             autocapitalize="off" autocorrect="off" placeholder="claude --model sonnet" />
       <button type="button" class="agent-del" title="Удалить" aria-label="удалить">×</button>`;
-    row.querySelector('.agent-cmd').value = agent.cmd || '';
-    row.querySelector('.agent-flags').value = agent.flags || '';
+    row.querySelector('.agent-cmd').value = agentLabel(agent);
     row.querySelector('.agent-del').addEventListener('click', () => {
       row.remove();
       syncPickVisibility();
     });
-    row.querySelectorAll('input').forEach((i) => i.addEventListener('input', syncPickVisibility));
+    row.querySelector('.agent-cmd').addEventListener('input', syncPickVisibility);
     agentListEl.appendChild(row);
     return row;
   };
@@ -883,6 +931,17 @@ function showSettingsModal(tab) {
   });
   overlay.querySelectorAll('input[name="set-pick"]').forEach((r) => { r.checked = r.value === launchPick; });
   syncPickVisibility();
+
+  // Mode radios: the whole agent block is irrelevant in "clean terminal" mode.
+  const syncModeVisibility = () => {
+    const blank = overlay.querySelector('input[name="set-mode"]:checked')?.value === 'blank';
+    agentBlockEl.classList.toggle('hidden', blank);
+  };
+  overlay.querySelectorAll('input[name="set-mode"]').forEach((r) => {
+    r.checked = r.value === launchMode;
+    r.addEventListener('change', syncModeVisibility);
+  });
+  syncModeVisibility();
 
   // Notify panel wiring: the sub-options grey out when the master is off.
   const onI = overlay.querySelector('#set-notify-on');
@@ -1131,14 +1190,13 @@ function showSettingsModal(tab) {
     overlay.remove();
   };
   const save = () => {
-    const agents = [...agentListEl.querySelectorAll('.agent-row')]
-      .map((row) => ({
-        cmd: row.querySelector('.agent-cmd').value.trim(),
-        flags: row.querySelector('.agent-flags').value.trim(),
-      }))
+    const agents = [...agentListEl.querySelectorAll('.agent-cmd')]
+      .map((i) => parseAgentLine(i.value))
       .filter((a) => a.cmd);
     launchList = agents.length ? agents : [{ cmd: 'claude', flags: '' }];
     saveLaunchList(); // also syncs `launch` + legacy keys to launchList[0]
+    launchMode = overlay.querySelector('input[name="set-mode"]:checked')?.value || 'agent';
+    saveLaunchMode();
     launchPick = overlay.querySelector('input[name="set-pick"]:checked')?.value || 'folder';
     saveLaunchPick();
     resumeSessions = resumeI.checked;
@@ -1241,6 +1299,7 @@ function persistTabs() {
         name: s.tab.querySelector('.label').textContent,
         cmd: s.cmd || null,
         flags: s.flags != null ? s.flags : null,
+        blank: s.blank || false,
         sessionKey: s.sessionKey || null,
       });
     }
@@ -2107,10 +2166,12 @@ async function restoreOrStart() {
     await createSession({
       cwd: t.cwd,
       name: t.name,
-      // Always pass a cmd so restore never pops the agent picker — legacy saved
-      // tabs may lack `cmd`; fall back to the default agent, as before.
-      cmd: t.cmd || launch.cmd,
-      flags: t.flags != null ? t.flags : undefined,
+      // A clean terminal restores as clean (no command). Otherwise always pass a
+      // cmd so restore never pops the picker — legacy saved tabs may lack `cmd`;
+      // fall back to the default agent, as before.
+      blank: t.blank || undefined,
+      cmd: t.blank ? undefined : (t.cmd || launch.cmd),
+      flags: t.blank ? undefined : (t.flags != null ? t.flags : undefined),
       sessionKey: t.sessionKey || undefined,
       resume: !!(resumeSessions && t.sessionKey),
     });

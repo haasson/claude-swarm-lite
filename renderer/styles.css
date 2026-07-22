@@ -433,11 +433,11 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   border: 1px dashed var(--border);
 }
 .set-preview .set-preview-cmd { color: var(--accent); }
-.set-field.hidden { display: none; }
+.set-field.hidden, #set-agent-block.hidden { display: none; }
 
 /* Launch panel — editable list of agents (cmd + flags + delete). */
 .agent-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
-.agent-row { display: grid; grid-template-columns: minmax(6rem, 1fr) minmax(6rem, 1.4fr) 1.75rem; gap: 8px; align-items: center; }
+.agent-row { display: grid; grid-template-columns: 1fr 1.75rem; gap: 8px; align-items: center; }
 .agent-row .set-input { margin: 0; }
 .agent-del {
   -webkit-app-region: no-drag; cursor: pointer;
@@ -459,6 +459,8 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   border-radius: 6px; padding: 10px 12px; font-family: var(--mono); font-size: 13px;
 }
 .pick-item:hover, .pick-item:focus { border-color: var(--accent); color: var(--accent); outline: none; }
+.pick-item.pick-blank { border-style: dashed; color: var(--muted); }
+.pick-item.pick-blank:hover, .pick-item.pick-blank:focus { border-color: var(--accent); color: var(--accent); }
 
 /* Keybinds panel — label + chord capture button + reset. */
 .kb-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
