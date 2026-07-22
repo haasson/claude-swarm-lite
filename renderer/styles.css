@@ -433,6 +433,32 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   border: 1px dashed var(--border);
 }
 .set-preview .set-preview-cmd { color: var(--accent); }
+.set-field.hidden { display: none; }
+
+/* Launch panel — editable list of agents (cmd + flags + delete). */
+.agent-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.agent-row { display: grid; grid-template-columns: minmax(6rem, 1fr) minmax(6rem, 1.4fr) 1.75rem; gap: 8px; align-items: center; }
+.agent-row .set-input { margin: 0; }
+.agent-del {
+  -webkit-app-region: no-drag; cursor: pointer;
+  border: 1px solid var(--border); background: transparent; color: var(--muted);
+  border-radius: 6px; height: 34px; font-size: 16px; line-height: 1;
+}
+.agent-del:hover { border-color: var(--danger); color: var(--danger); }
+.agent-add { margin-top: 2px; }
+
+/* Radio rows in the launch panel — reuse .set-check spacing. */
+.set-radio { display: flex; align-items: flex-start; gap: 9px; padding: 6px 0; cursor: pointer; color: var(--text); font-size: 13px; line-height: 1.4; }
+.set-radio input { margin-top: 1px; accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+
+/* Agent picker shown when opening a tab with several saved agents. */
+.pick-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
+.pick-item {
+  -webkit-app-region: no-drag; cursor: pointer; text-align: left;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text);
+  border-radius: 6px; padding: 10px 12px; font-family: var(--mono); font-size: 13px;
+}
+.pick-item:hover, .pick-item:focus { border-color: var(--accent); color: var(--accent); outline: none; }
 
 /* Keybinds panel — label + chord capture button + reset. */
 .kb-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }

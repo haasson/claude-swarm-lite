@@ -351,7 +351,14 @@ function makeXterm() {
 //   flags — e.g. '--dangerously-skip-permissions', '--model sonnet'.
 // When resume-on-relaunch is on and the cmd is Claude-family, we also pin each
 // tab with `-n swarm-…` and restore via `--resume swarm-…` (see RESUME_API).
-let launch = loadLaunch();
+// The list of saved agents a NEW tab can launch (each is { cmd, flags }). The
+// first entry is the default; `launch` mirrors it for the many call sites that
+// want a single fallback. When the list has >1 agent, opening a tab asks which
+// one to run (see pickAgent / the resolver in createSession) — how often it asks
+// is controlled by launchPick ('always' vs 'folder', see resolveLaunch).
+let launchList = loadLaunchList();
+let launch = launchList[0];
+let launchPick = localStorage.getItem('swarm.launchPick') || 'folder';
 let resumeSessions = localStorage.getItem('swarm.resumeSessions') === '1';
 
 function loadLaunch() {
@@ -368,13 +375,100 @@ function loadLaunch() {
   return { cmd: (cmd || '').trim() || 'claude', flags: (flags || '').trim() };
 }
 
+// Read the saved agent list. Absent → migrate from the single legacy launch, so
+// existing users keep their one command untouched. Always non-empty.
+function loadLaunchList() {
+  let raw = null;
+  try { raw = JSON.parse(localStorage.getItem('swarm.launchList') || 'null'); } catch (_) {}
+  const list = Array.isArray(raw)
+    ? raw
+      .map((a) => ({ cmd: (a && a.cmd || '').trim(), flags: (a && a.flags || '').trim() }))
+      .filter((a) => a.cmd)
+    : [loadLaunch()];
+  return list.length ? list : [{ cmd: 'claude', flags: '' }];
+}
+
 function saveLaunch() {
   localStorage.setItem('swarm.launchCmd', launch.cmd);
   localStorage.setItem('swarm.launchFlags', launch.flags);
 }
 
+function saveLaunchList() {
+  localStorage.setItem('swarm.launchList', JSON.stringify(launchList));
+  // Keep the single-agent fallback + legacy keys in sync with the first entry.
+  launch = launchList[0];
+  saveLaunch();
+}
+
+function saveLaunchPick() {
+  localStorage.setItem('swarm.launchPick', launchPick);
+}
+
 function saveResumeSessions() {
   localStorage.setItem('swarm.resumeSessions', resumeSessions ? '1' : '0');
+}
+
+// Human label for a saved agent in the picker: `cmd` plus its flags.
+function agentLabel(a) {
+  return (a.cmd + (a.flags ? ' ' + a.flags : '')).trim();
+}
+
+// Ask which saved agent a new tab should launch. Resolves the chosen { cmd, flags }
+// or null on cancel (Esc / click-away / "Отмена") — the caller then skips the tab.
+function pickAgent() {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal pick-agent">
+        <div class="modal-msg">Какого агента запустить?</div>
+        <div class="pick-list"></div>
+        <div class="modal-actions"><button class="modal-cancel">Отмена</button></div>
+      </div>`;
+    const list = overlay.querySelector('.pick-list');
+    launchList.forEach((a, i) => {
+      const b = document.createElement('button');
+      b.className = 'pick-item';
+      b.textContent = agentLabel(a);
+      b.addEventListener('click', () => close(launchList[i]));
+      list.appendChild(b);
+    });
+    document.body.appendChild(overlay);
+
+    const close = (val) => {
+      document.removeEventListener('keydown', onKey, true);
+      overlay.remove();
+      resolve(val || null);
+    };
+    const onKey = (ev) => {
+      if (ev.key === 'Escape') { ev.preventDefault(); close(null); }
+    };
+    overlay.querySelector('.modal-cancel').addEventListener('click', () => close(null));
+    overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(null); });
+    document.addEventListener('keydown', onKey, true);
+    list.querySelector('.pick-item')?.focus();
+  });
+}
+
+// Decide the { cmd, flags } for a NEW tab. Never prompts on restore (opts.cmd set)
+// or with a single saved agent. With several agents the launchPick mode decides:
+//   'always' — ask every time;
+//   'folder' — reuse the agent of the first tab already open in this folder, and
+//              only ask when the folder has none yet (its first tab).
+// Returns null if the user cancels the picker (abort the tab).
+async function resolveLaunch(opts, cwd) {
+  if (opts.cmd != null) {
+    return { cmd: opts.cmd, flags: opts.flags != null ? opts.flags : launch.flags };
+  }
+  if (launchList.length <= 1) return { cmd: launch.cmd, flags: launch.flags };
+  if (launchPick === 'folder') {
+    const ids = withinOrder.get(cwd) || [];
+    for (const sid of ids) {
+      const s = sessions.get(sid);
+      if (s && s.cmd) return { cmd: s.cmd, flags: s.flags != null ? s.flags : '' };
+    }
+  }
+  return pickAgent();
 }
 
 // Build the line typed into a new/restored tab: optional Claude -n / --resume.
@@ -387,12 +481,12 @@ function sessionLaunchCommand({ cmd, flags, sessionKey, resume } = {}) {
   });
 }
 
-// Learn the launcher from what you type at a shell prompt:
-//   1) bind THIS tab to that cmd (so restore relaunches the same alias/account);
-//   2) also adopt it as the global default for NEW tabs.
+// Learn the launcher from what you type at a shell prompt and bind THIS tab to
+// that cmd, so a restore relaunches the same alias/account. The global agent list
+// is now curated in Settings, so we no longer silently adopt a typed cmd as the
+// default for new tabs — that would mutate a user-managed list behind their back.
 // Match a known launcher STEM (not any word) so `ls`/`git commit` aren't mistaken
-// for a launch. Only the STEM is adopted — flags stay a deliberate Settings choice
-// (typing bare `claude` must not wipe `--dangerously-skip-permissions`).
+// for a launch.
 const AGENT_CMD_RE = /^\s*(?:claude|cld|glm|deepseek|codex|gemini|aider|qwen|kimi|opencode|crush|amp|droid)[\w-]*(?:\s+--?[\w-]+(?:=\S+)?)*\s*$/i;
 function rememberStartCommand(line, sessionId) {
   const t = line.trim();
@@ -403,12 +497,18 @@ function rememberStartCommand(line, sessionId) {
     s.cmd = cmd;
     persistTabs();
   }
-  if (cmd === launch.cmd) return;
-  launch = { cmd, flags: launch.flags };
-  saveLaunch();
 }
 
 async function createSession(opts = {}) {
+  // A plain new session inherits the folder of the one you're currently on;
+  // opts.cwd (folder picker) overrides. Main falls back to the default folder.
+  const cwd = opts.cwd || sessions.get(activeId)?.cwd;
+  // Which agent to launch. May pop a picker when several are saved; cancel aborts
+  // the whole tab, so resolve it before we build any xterm/DOM to clean up.
+  const chosen = await resolveLaunch(opts, cwd || '');
+  if (!chosen) return;
+  const { cmd, flags } = chosen;
+
   const { term, fit } = makeXterm();
 
   const holder = document.createElement('div');
@@ -424,11 +524,6 @@ async function createSession(opts = {}) {
   if (term._core && term._core.viewport) term._core.viewport.scrollBarWidth = 0;
   fit.fit();
 
-  // A plain new session inherits the folder of the one you're currently on;
-  // opts.cwd (folder picker) overrides. Main falls back to the default folder.
-  const cwd = opts.cwd || sessions.get(activeId)?.cwd;
-  const cmd = opts.cmd || launch.cmd;
-  const flags = opts.flags != null ? opts.flags : launch.flags;
   // Pin Claude tabs with a stable swarm-* name so relaunch can --resume the same
   // conversation (not "last in cwd"). Other agents: no pin yet.
   let sessionKey = opts.sessionKey || null;
@@ -625,9 +720,10 @@ function showGitLoginModal() {
 }
 
 // --- settings (⚙) ------------------------------------------------------------
-// Tabbed modal. "Запуск": which agent CLI + flags a NEW tab runs (global; open
-// tabs untouched — see loadLaunch/sessionLaunchCommand/saveLaunch). "Уведомления": the
-// system-notification prefs (mirrors the 🔔 quick-mute; see maybeNotify).
+// Tabbed modal. "Запуск": the list of agents (cmd + flags) a NEW tab can run and
+// the pick mode when there's more than one (global; open tabs untouched — see
+// loadLaunchList/resolveLaunch/saveLaunchList). "Уведомления": the system-notification
+// prefs (mirrors the 🔔 quick-mute; see maybeNotify).
 function showSettingsModal(tab) {
   if (document.querySelector('.modal-overlay .modal.settings')) return; // already open
   const overlay = document.createElement('div');
@@ -643,25 +739,31 @@ function showSettingsModal(tab) {
       </div>
 
       <div class="set-panel" data-panel="launch">
-        <div class="modal-msg">Применяется ко всем <b>новым</b> вкладкам. Уже открытые сессии не трогаем.</div>
-        <label class="set-field">
-          <span class="set-label">Команда запуска</span>
-          <input class="set-input" id="set-cmd" type="text" spellcheck="false"
-                 autocapitalize="off" autocorrect="off" placeholder="claude" />
-          <span class="set-hint">Какой агент запускать: <code>claude</code>, <code>cld</code>, <code>claude-glm</code>…</span>
-        </label>
-        <label class="set-field">
-          <span class="set-label">Доп. флаги</span>
-          <input class="set-input" id="set-flags" type="text" spellcheck="false"
-                 autocapitalize="off" autocorrect="off" placeholder="напр. --dangerously-skip-permissions" />
-          <span class="set-hint">Дописываются к команде: <code>--dangerously-skip-permissions</code>, <code>--model sonnet</code>…</span>
-        </label>
+        <div class="modal-msg">Список агентов для <b>новых</b> вкладок. Уже открытые сессии не трогаем.</div>
+        <div class="set-field">
+          <span class="set-label">Агенты</span>
+          <div class="agent-list" id="set-agent-list"></div>
+          <button type="button" class="set-check-btn agent-add" id="set-agent-add">+ Добавить агента</button>
+          <span class="set-hint">Команда + доп. флаги: <code>claude</code>, <code>cld --model sonnet</code>,
+            <code>claude-glm --dangerously-skip-permissions</code>…</span>
+        </div>
+        <div class="set-field" id="set-pick-field">
+          <span class="set-label">Если агентов несколько</span>
+          <label class="set-radio">
+            <input type="radio" name="set-pick" value="always" />
+            <span class="set-check-tx">Спрашивать каждый раз при открытии вкладки</span>
+          </label>
+          <label class="set-radio">
+            <input type="radio" name="set-pick" value="folder" />
+            <span class="set-check-tx">Как в первой вкладке папки
+              <span class="set-check-sub">спросим только на первой вкладке папки, дальше — тот же агент</span></span>
+          </label>
+        </div>
         <label class="set-check">
           <input type="checkbox" id="set-resume" />
           <span class="set-check-tx">Восстанавливать диалоги после перезапуска
             <span class="set-check-sub">сейчас только Claude Code</span></span>
         </label>
-        <div class="set-preview">Новая вкладка запустит: <code class="set-preview-cmd"></code></div>
       </div>
 
       <div class="set-panel" data-panel="notify">
@@ -743,29 +845,44 @@ function showSettingsModal(tab) {
     </div>`;
   document.body.appendChild(overlay);
 
-  // Launch panel wiring + live preview.
-  const cmdI = overlay.querySelector('#set-cmd');
-  const flagsI = overlay.querySelector('#set-flags');
+  // Launch panel wiring: an editable list of agents + the pick-mode choice.
+  const agentListEl = overlay.querySelector('#set-agent-list');
+  const pickFieldEl = overlay.querySelector('#set-pick-field');
   const resumeI = overlay.querySelector('#set-resume');
-  const preview = overlay.querySelector('.set-preview-cmd');
-  cmdI.value = launch.cmd;
-  flagsI.value = launch.flags;
   resumeI.checked = resumeSessions;
-  const renderPreview = () => {
-    const cmd = cmdI.value.trim() || 'claude';
-    const flags = flagsI.value.trim();
-    if (resumeI.checked && RESUME_API.supports(cmd)) {
-      preview.textContent = RESUME_API.buildCommand({
-        cmd, flags, sessionKey: 'swarm-…', mode: 'start',
-      });
-    } else {
-      preview.textContent = (cmd + (flags ? ' ' + flags : '')).trim();
-    }
+
+  // The pick-mode choice only matters with more than one agent — hide otherwise.
+  const countAgents = () => [...agentListEl.querySelectorAll('.agent-cmd')]
+    .filter((i) => i.value.trim()).length;
+  const syncPickVisibility = () => {
+    pickFieldEl.classList.toggle('hidden', countAgents() <= 1);
   };
-  cmdI.addEventListener('input', renderPreview);
-  flagsI.addEventListener('input', renderPreview);
-  resumeI.addEventListener('change', renderPreview);
-  renderPreview();
+  const addAgentRow = (agent = { cmd: '', flags: '' }) => {
+    const row = document.createElement('div');
+    row.className = 'agent-row';
+    row.innerHTML = `
+      <input class="set-input agent-cmd" type="text" spellcheck="false"
+             autocapitalize="off" autocorrect="off" placeholder="claude" />
+      <input class="set-input agent-flags" type="text" spellcheck="false"
+             autocapitalize="off" autocorrect="off" placeholder="флаги (необязательно)" />
+      <button type="button" class="agent-del" title="Удалить" aria-label="удалить">×</button>`;
+    row.querySelector('.agent-cmd').value = agent.cmd || '';
+    row.querySelector('.agent-flags').value = agent.flags || '';
+    row.querySelector('.agent-del').addEventListener('click', () => {
+      row.remove();
+      syncPickVisibility();
+    });
+    row.querySelectorAll('input').forEach((i) => i.addEventListener('input', syncPickVisibility));
+    agentListEl.appendChild(row);
+    return row;
+  };
+
+  launchList.forEach((a) => addAgentRow(a));
+  overlay.querySelector('#set-agent-add').addEventListener('click', () => {
+    addAgentRow().querySelector('.agent-cmd').focus();
+  });
+  overlay.querySelectorAll('input[name="set-pick"]').forEach((r) => { r.checked = r.value === launchPick; });
+  syncPickVisibility();
 
   // Notify panel wiring: the sub-options grey out when the master is off.
   const onI = overlay.querySelector('#set-notify-on');
@@ -1003,7 +1120,7 @@ function showSettingsModal(tab) {
     if (kbCapturing) stopKbCapture();
     tabs.forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
     panels.forEach((p) => p.classList.toggle('hidden', p.dataset.panel !== name));
-    if (name === 'launch') { cmdI.focus(); cmdI.select(); }
+    if (name === 'launch') { const f = agentListEl.querySelector('.agent-cmd'); if (f) { f.focus(); f.select(); } }
   };
   tabs.forEach((t) => t.addEventListener('click', () => showTab(t.dataset.tab)));
   showTab(['notify', 'appearance', 'keys', 'updates'].includes(tab) ? tab : 'launch');
@@ -1014,8 +1131,16 @@ function showSettingsModal(tab) {
     overlay.remove();
   };
   const save = () => {
-    launch = { cmd: cmdI.value.trim() || 'claude', flags: flagsI.value.trim() };
-    saveLaunch();
+    const agents = [...agentListEl.querySelectorAll('.agent-row')]
+      .map((row) => ({
+        cmd: row.querySelector('.agent-cmd').value.trim(),
+        flags: row.querySelector('.agent-flags').value.trim(),
+      }))
+      .filter((a) => a.cmd);
+    launchList = agents.length ? agents : [{ cmd: 'claude', flags: '' }];
+    saveLaunchList(); // also syncs `launch` + legacy keys to launchList[0]
+    launchPick = overlay.querySelector('input[name="set-pick"]:checked')?.value || 'folder';
+    saveLaunchPick();
     resumeSessions = resumeI.checked;
     saveResumeSessions();
     notifyOnReady = readyI.checked;
@@ -1982,7 +2107,9 @@ async function restoreOrStart() {
     await createSession({
       cwd: t.cwd,
       name: t.name,
-      cmd: t.cmd || undefined,
+      // Always pass a cmd so restore never pops the agent picker — legacy saved
+      // tabs may lack `cmd`; fall back to the default agent, as before.
+      cmd: t.cmd || launch.cmd,
       flags: t.flags != null ? t.flags : undefined,
       sessionKey: t.sessionKey || undefined,
       resume: !!(resumeSessions && t.sessionKey),
