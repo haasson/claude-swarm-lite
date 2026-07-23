@@ -39,6 +39,33 @@ function extractQuestion(snapshot) {
   return null;
 }
 
+// Permission prompts carry phrasing that AskUserQuestion / prose questions never
+// do: Claude asks to run a tool or edit ("Do you want to proceed?") and always
+// offers the "No, and tell Claude what to do differently" escape. That's the tell.
+const PERMISSION_RE = /No, and tell Claude|Do you want\b/i;
+// A selection cursor immediately before a numbered option ("❯ 1. …"). Mirrors the
+// detector's RE_WAIT_NOW option pattern; used here to spot an AskUserQuestion list.
+// Not anchored — we scan the whole snapshot, not one line.
+const OPTIONS_RE = /[❯>→➜▸►▶]\s*\d+\.\s/;
+const RE_ASK = /Сейчас от тебя/i;
+
+// WHY a waiting agent is calling — for the pult chip, tab sub-label and notify.
+// Only sensible once status is already «waiting». Returns:
+//   'permission' — a tool/edit approval prompt (act fast: yes/no)
+//   'question'   — AskUserQuestion options, a prose "Сейчас от тебя", or any
+//                  extractable question line
+//   null         — nothing confident to say; caller keeps the generic «ждёт ответа»
+// Order matters: permission phrasing must be checked before options, or a
+// permission prompt (which also has "❯ 1. Yes") would misread as a question.
+function inferWaitingKind(snapshot) {
+  const text = String(snapshot == null ? '' : snapshot);
+  if (PERMISSION_RE.test(text)) return 'permission';
+  if (OPTIONS_RE.test(text)) return 'question';
+  if (RE_ASK.test(text)) return 'question';
+  if (extractQuestion(text)) return 'question';
+  return null;
+}
+
 // Sub-agents (Claude Code's Task/agent tool). Claude runs them in the background
 // by default and pins a status line just above the input box:
 //   "✻ Waiting for N background agents to finish"
@@ -64,4 +91,4 @@ function countSubagents(snapshot) {
   return rows;
 }
 
-module.exports = { extractQuestion, countSubagents };
+module.exports = { extractQuestion, inferWaitingKind, countSubagents };

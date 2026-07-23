@@ -66,6 +66,49 @@ test('returns null when nothing on screen qualifies', () => {
   assert.strictEqual(S.extractQuestion(null), null);
 });
 
+// --- inferWaitingKind: разрешение vs вопрос ---------------------------------
+// Only meaningful once the detector already decided «waiting»; it labels WHY.
+
+test('permission chrome → permission', () => {
+  // The PERMISSION fixture has numbered options too, but the permission phrasing
+  // must win — so it's «разрешение», not «вопрос».
+  assert.strictEqual(S.inferWaitingKind(PERMISSION), 'permission');
+});
+
+test('"Do you want" alone → permission', () => {
+  const snap = ['│ Do you want to make this edit? │', '│ ❯ 1. Yes │', '│   2. No │'].join('\n');
+  assert.strictEqual(S.inferWaitingKind(snap), 'permission');
+});
+
+test('numbered question without permission phrasing → question', () => {
+  const snap = [
+    'Какой цвет иконки?',
+    '❯ 1. Синий',
+    '  2. Серый',
+    'model │ ~/p │ ██░ 40%',
+  ].join('\n');
+  assert.strictEqual(S.inferWaitingKind(snap), 'question');
+});
+
+test('plain > and arrow option cursors → question', () => {
+  assert.strictEqual(S.inferWaitingKind(['Pick one', '> 1. Blue', '  2. Grey'].join('\n')), 'question');
+  assert.strictEqual(S.inferWaitingKind(['Pick one', '▸ 1. Blue', '  2. Grey'].join('\n')), 'question');
+});
+
+test('«Сейчас от тебя» prose question → question', () => {
+  assert.strictEqual(S.inferWaitingKind('Сейчас от тебя: путь к схеме'), 'question');
+});
+
+test('a bare prose question line → question', () => {
+  assert.strictEqual(S.inferWaitingKind(['│ Какой выбрать вариант? │', 'model │ ~/p │ ██░ 40%'].join('\n')), 'question');
+});
+
+test('quiet screen with nothing to ask → null (generic «ждёт»)', () => {
+  assert.strictEqual(S.inferWaitingKind('>\n'), null);
+  assert.strictEqual(S.inferWaitingKind(''), null);
+  assert.strictEqual(S.inferWaitingKind(null), null);
+});
+
 // The sub-agent status line Claude pins above the input box (real capture). It
 // stays whether the main turn is busy or the prompt is idle.
 const WAITING4 = [
