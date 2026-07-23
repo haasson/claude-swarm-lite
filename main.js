@@ -140,6 +140,15 @@ const RE_WAIT_NOW = /Esc to cancel|Enter to confirm|[❯>→➜▸►▶]\s*\d+\
 // return to running by ~2.5s, so each false idle lingers.
 const RE_RUNNING = /(?:…|\.\.\.)\s*\(\d+\s*[smh]\b|\besc to interrupt\b/i;
 
+// Waiting on me WITHOUT prompt chrome: the agent asked in prose and stopped. The
+// task skills close every such message with the line «Сейчас от тебя: …» (see
+// fastio CLAUDE.md), so that phrase — not a glyph — is the marker. Without this
+// the tab paints «готов», identical to a tab that simply finished, and a question
+// can sit unseen in a background tab.
+// Checked LAST, only on the path that would otherwise return «готов»: a stale
+// marker still on screen must never outvote real activity or the spinner.
+const RE_WAIT_ASK = /Сейчас от тебя/i;
+
 /** @type {Map<string, any>} id -> detector state */
 const det = new Map();
 
@@ -216,6 +225,10 @@ function decide(d, now) {
   // false "готов" flash. See RE_RUNNING above for why we match the timer text.
   if (RE_RUNNING.test(snap)) {
     return { status: 'running', detail: 'работает' };
+  }
+  // Quiet, no spinner, no prompt box — but the agent signed off with a question.
+  if (RE_WAIT_ASK.test(snap)) {
+    return { status: 'waiting', detail: 'ждёт ответа' };
   }
 
   return { status: 'ready', detail: 'готов' };
