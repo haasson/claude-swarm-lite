@@ -211,7 +211,11 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .tab .folder { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
 .tab .folder:empty { display: none; }
 .tab .folder svg, .group-head svg { width: 11px; height: 11px; flex: none; }
-.tab .sub { color: var(--muted); font-size: var(--tab-sub-size); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Bottom row of the card: status text on the left, sub-agent badge pushed to the
+   right on the SAME line — the badge used to sit on its own row and inflate the
+   card height. */
+.tab .foot { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.tab .sub { flex: 1 1 auto; min-width: 0; color: var(--muted); font-size: var(--tab-sub-size); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* per-card context meter (parsed from the session's Claude statusline) */
 .tab .ctx { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
@@ -223,7 +227,7 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .tab .ctx.ctx-mid .ctx-fill { background: var(--run); }
 .tab .ctx.ctx-hi  .ctx-fill { background: var(--danger); }
 /* sub-agent badge: bot icon + count (count shown only when >1) */
-.tab .agents { display: flex; align-items: center; gap: 2px; margin-top: 2px; color: var(--run); font-size: 10px; font-variant-numeric: tabular-nums; }
+.tab .agents { flex: none; margin-left: auto; display: flex; align-items: center; gap: 2px; color: var(--run); font-size: 10px; font-variant-numeric: tabular-nums; }
 .tab .agents[hidden] { display: none; }
 .tab .agents svg { width: 12px; height: 12px; flex: none; }
 
@@ -314,7 +318,7 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 }
 :where(body, #set-tab-preview).tabs-compact .tab .ctx { flex: 0 0 auto; margin-top: 0; }
 :where(body, #set-tab-preview).tabs-compact .tab .ctx-track { min-width: 20px; }
-:where(body, #set-tab-preview).tabs-compact .tab .sub { flex: 1 0 100%; }
+:where(body, #set-tab-preview).tabs-compact .tab .foot { flex: 1 0 100%; }
 
 /* Видимость элементов. У .ctx !important обязателен: updateCtx() снимает атрибут
    hidden, а правило .tab .ctx[hidden] имеет ту же специфичность, что это. */
@@ -349,11 +353,12 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 /* --- controls ------------------------------------------------------------- */
 /* "+ new session" — the one primary action, kept right under the session list
    (rail) or at the end of the card row (top). Everything else moved to the bar. */
-#chrome-actions { display: flex; -webkit-app-region: no-drag; }
-.layout-rail #chrome-actions { flex-direction: column; padding: 4px 8px 8px; }
-.layout-top  #chrome-actions { align-items: center; padding: 0 8px 0 4px; }
+/* "+" new-session button. Lives in the #tabs flow (relayoutTabs appends it last),
+   so it scrolls with the list instead of being pinned. flex:none keeps it its own
+   size; it never stretches to a neighbour's height. */
 #new-session-folder {
   -webkit-app-region: no-drag;
+  flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -370,7 +375,7 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 /* В top-раскладке кнопка съедала ~140px горизонтали ради текста, который
    дублируется тултипом. Оставляем иконку: ⌘O работает, у каждой группы есть
    свой «+» (.group-add). В rail текст остаётся — там она под списком, место есть. */
-.layout-top #new-session-folder { padding: 8px; }
+.layout-top #new-session-folder { padding: 8px; align-self: flex-start; }
 .layout-top #new-session-folder .tx { display: none; }
 #new-session-folder:hover { color: var(--text); border-color: var(--accent); }
 #new-session-folder .ic { color: var(--accent); display: inline-flex; align-items: center; }
@@ -478,9 +483,29 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .modal-ok { border-color: var(--danger); color: var(--danger); }
 .modal-ok:hover { background: color-mix(in srgb, var(--danger) 16%, var(--panel-2)); }
 
-/* Settings modal — tabbed: launch config + notification prefs. */
-.modal.settings { width: min(460px, 92vw); }
-.set-tabs { display: flex; gap: 4px; margin: -4px 0 16px; border-bottom: 1px solid var(--border); }
+/* Settings modal — tabbed: launch config + notification prefs. Capped height with
+   a scrollable body; the tab bar + Save/Cancel stay pinned while a tall panel
+   (many launch commands, the keys list) scrolls inside .set-body. */
+.modal.settings {
+  width: min(460px, 92vw);
+  display: flex;
+  flex-direction: column;
+  max-height: min(88vh, 720px);
+}
+.set-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overflow-wrap: break-word;
+  /* room for the scrollbar so content doesn't sit under it */
+  margin-right: -8px;
+  padding-right: 8px;
+}
+/* Wrap to a second row instead of overflowing the modal width when the labels
+   don't fit (narrow window / long localisation). */
+.set-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: -4px 0 16px; border-bottom: 1px solid var(--border); }
+.modal.settings .modal-actions { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
 .set-tab {
   -webkit-app-region: no-drag;
   background: transparent;
@@ -708,6 +733,11 @@ body.no-sessions #stage::after {
   color: var(--muted);
   overflow: hidden;
 }
+/* On the pult you're not looking at any single session, so the branch/diff of
+   "the active session" is misleading — hide them (id beats the [hidden] rule). */
+body.pult-on #git-branch,
+body.pult-on #git-diff,
+body.pult-on #git-msg { display: none; }
 .git-branch {
   display: inline-flex;
   align-items: center;
@@ -992,7 +1022,6 @@ body.pult-on.pult-empty #pult-empty { display: flex; }
 .pult-chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--waiting); flex: none; }
 .pult-chip .pult-name { font-weight: 600; }
 .pult-chip .pult-time { color: var(--muted); font-variant-numeric: tabular-nums; }
-.pult-chip .pult-q { color: var(--muted); max-width: 26ch; overflow: hidden; text-overflow: ellipsis; }
 
 /* Pinned first in #tabs, above every folder group. Not a .tab — that class is a
    grid with dot/label/ctx/sub slots this doesn't have. */
@@ -1000,7 +1029,8 @@ body.pult-on.pult-empty #pult-empty { display: flex; }
   display: flex;
   align-items: center;
   gap: 7px;
-  margin-bottom: 8px;
+  /* No own margin: spacing comes from #tabs' gap, and in the top layout an extra
+     bottom margin left the Пульт box short of the stretched folder cards. */
   padding: 7px 9px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1012,8 +1042,8 @@ body.pult-on.pult-empty #pult-empty { display: flex; }
 }
 .pult-tab:hover { border-color: var(--accent); }
 .pult-tab.active { border-color: var(--accent); background: var(--panel); }
-.pult-tab .pult-key { margin-left: auto; color: var(--muted); font-size: 10px; font-weight: 400; }
 .pult-tab .pult-count {
+  margin-left: auto;
   min-width: 16px;
   padding: 0 4px;
   border-radius: 999px;

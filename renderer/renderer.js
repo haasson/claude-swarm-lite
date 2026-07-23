@@ -203,7 +203,7 @@ document.body.classList.add('platform-' + (window.swarm.platform || 'unknown'));
 
 const tabsEl     = document.getElementById('tabs');
 const stageEl    = document.getElementById('stage');
-const layoutBtn  = document.getElementById('layout-toggle');
+const newTabBtn  = document.getElementById('new-session-folder');
 const cmdBtn     = document.getElementById('cmd-menu-btn');
 const cmdMenu    = document.getElementById('cmd-menu');
 const gitBtn      = document.getElementById('git-branch');
@@ -254,7 +254,6 @@ const SVG = (body) =>
 const ICONS = {
   plus: SVG('<path d="M5 12h14"/><path d="M12 5v14"/>'),
   command: SVG('<path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/>'),
-  layout: SVG('<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>'),
   folder: SVG('<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>'),
   chevron: SVG('<path d="m6 9 6 6 6-6"/>'),
   branch: SVG('<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>'),
@@ -759,8 +758,10 @@ async function createSession(opts = {}) {
         <span class="ctx-track"><span class="ctx-fill"></span></span>
         <span class="ctx-num"></span>
       </span>
-      <span class="agents" hidden title="работающие сабагенты">${ICONS.agents}<span class="agents-num"></span></span>
-      <span class="sub">готов</span>
+      <span class="foot">
+        <span class="sub">готов</span>
+        <span class="agents" hidden title="работающие сабагенты">${ICONS.agents}<span class="agents-num"></span></span>
+      </span>
     </span>
     <span class="close" title="Close">×</span>
   `;
@@ -937,6 +938,7 @@ function showSettingsModal(tab) {
         <button class="set-tab" data-tab="updates">Обновления</button>
       </div>
 
+      <div class="set-body">
       <div class="set-panel" data-panel="launch">
         <div class="modal-msg">Что запускать в <b>новых</b> вкладках. Уже открытые сессии не трогаем.</div>
         <div class="set-field">
@@ -1047,6 +1049,11 @@ function showSettingsModal(tab) {
       <div class="set-panel" data-panel="tabs">
         <div class="modal-msg">Как выглядят карточки сессий. Заголовок показывается всегда.</div>
         <label class="set-field">
+          <span class="set-label">Раскладка</span>
+          <select class="set-input" id="set-layout"></select>
+          <span class="set-hint">Где живут вкладки — списком слева или карточками сверху (⌘L).</span>
+        </label>
+        <label class="set-field">
           <span class="set-label">Плотность</span>
           <select class="set-input" id="set-tab-density"></select>
         </label>
@@ -1113,6 +1120,7 @@ function showSettingsModal(tab) {
         <button class="set-check-btn upd-check">Проверить обновления</button>
         <button class="set-check-btn upd-go-btn" hidden type="button"></button>
         <div class="set-hint upd-status"></div>
+      </div>
       </div>
 
       <div class="modal-actions">
@@ -1291,6 +1299,19 @@ function showSettingsModal(tab) {
   });
   densitySel.value = tabDraft.density;
 
+  // Layout applies LIVE (like ⌘L), not on Save: layout is a body-class preference
+  // with no draft/undo anywhere else, and applying on Save would fight a ⌘L press
+  // made while the modal is open (Save would revert it). So no Cancel-revert here.
+  const layoutSel = overlay.querySelector('#set-layout');
+  LAYOUT_LABELS.forEach(({ id, name }) => {
+    const o = document.createElement('option');
+    o.value = id;
+    o.textContent = name;
+    layoutSel.appendChild(o);
+  });
+  layoutSel.value = currentLayout();
+  layoutSel.addEventListener('change', () => applyLayout(layoutSel.value));
+
   Object.keys(showInputs).forEach((k) => { showInputs[k].checked = tabDraft.show[k]; });
 
   // Two sample cards cover the whole surface: an active/running one (accent ring
@@ -1301,8 +1322,10 @@ function showSettingsModal(tab) {
        <span class="body">
          <span class="label">api</span>
          <span class="ctx ctx-mid"><span class="ctx-track"><span class="ctx-fill" style="width:62%"></span></span><span class="ctx-num">62%</span></span>
-         <span class="agents">${ICONS.agents}<span class="agents-num">3</span></span>
-         <span class="sub">работает</span>
+         <span class="foot">
+           <span class="sub">работает</span>
+           <span class="agents">${ICONS.agents}<span class="agents-num">3</span></span>
+         </span>
        </span>
      </div>
      <div class="tab status-ready">
@@ -1310,7 +1333,9 @@ function showSettingsModal(tab) {
        <span class="body">
          <span class="label">web</span>
          <span class="ctx ctx-lo"><span class="ctx-track"><span class="ctx-fill" style="width:14%"></span></span><span class="ctx-num">14%</span></span>
-         <span class="sub">готов</span>
+         <span class="foot">
+           <span class="sub">готов</span>
+         </span>
        </span>
      </div>`;
 
@@ -1740,15 +1765,9 @@ function renderPult() {
     tm.textContent = fmtWait(now - (s.waitingSince || now));
     chip.append(dot, nm, tm);
 
-    // Best effort — main sends null when the screen didn't parse. Then the chip
-    // is just name + timer, which still works.
-    if (s.question) {
-      const q1 = document.createElement('span');
-      q1.className = 'pult-q';
-      q1.textContent = s.question;
-      chip.appendChild(q1);
-      chip.title = s.question;
-    }
+    // The parsed question still makes a useful tooltip, but we don't print it on
+    // the chip — the chip is just name + timer.
+    if (s.question) chip.title = s.question;
     chip.addEventListener('click', () => { pultPick = s.id; renderPult(); });
     strip.appendChild(chip);
   }
@@ -1787,8 +1806,7 @@ function relayoutTabs() {
     pt.className = 'pult-tab' + (pultOn ? ' active' : '');
     pt.title = 'Пульт — кто ждёт ответа (⌘0)';
     pt.innerHTML = '<span class="pult-name">Пульт</span>'
-      + '<span class="pult-count" hidden>0</span>'
-      + '<span class="pult-key">⌘0</span>';
+      + '<span class="pult-count" hidden>0</span>';
     pt.addEventListener('click', () => setPult(true));
     tabsEl.appendChild(pt);
   }
@@ -1845,6 +1863,9 @@ function relayoutTabs() {
     grp.append(head, inner);
     tabsEl.appendChild(grp);
   }
+  // "+" flows right after the last group, scrolling with the list. If it runs off
+  // the edge with many tabs — fine, that beats a pinned button clipping the row.
+  tabsEl.appendChild(newTabBtn);
   renderPult(); // the chip count lives on the freshly rebuilt Пульт tab
 }
 
@@ -1953,6 +1974,15 @@ function attachRename(labelEl) {
 
 // --- layout switching (rail <-> top dashboard) -------------------------------
 const LAYOUTS = ['layout-rail', 'layout-top'];
+// Human labels for the layout picker in Settings → Вкладки (order = dropdown order).
+const LAYOUT_LABELS = [
+  { id: 'layout-rail', name: 'Список слева' },
+  { id: 'layout-top', name: 'Карточки сверху' },
+];
+
+function currentLayout() {
+  return document.body.classList.contains('layout-top') ? 'layout-top' : 'layout-rail';
+}
 
 function applyLayout(name) {
   if (!LAYOUTS.includes(name)) name = 'layout-rail';
@@ -1968,8 +1998,7 @@ function applyLayout(name) {
 }
 
 function toggleLayout() {
-  const cur = document.body.classList.contains('layout-top') ? 'layout-top' : 'layout-rail';
-  applyLayout(cur === 'layout-top' ? 'layout-rail' : 'layout-top');
+  applyLayout(currentLayout() === 'layout-top' ? 'layout-rail' : 'layout-top');
 }
 
 // --- notifications -----------------------------------------------------------
@@ -2803,7 +2832,6 @@ setInterval(() => {
 document.getElementById('update-pill').addEventListener('click', openUpdateModal);
 
 document.getElementById('new-session-folder').addEventListener('click', createSessionInFolder);
-layoutBtn.addEventListener('click', toggleLayout);
 document.getElementById('settings-btn').addEventListener('click', () => showSettingsModal());
 cmdBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleCmdMenu(); });
 gitBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleGitMenu(); });
@@ -2812,7 +2840,6 @@ gitDiffBtn.addEventListener('click', (e) => { e.stopPropagation(); openDiffOverl
 // Set the button icons (Lucide SVGs).
 document.querySelector('#new-session-folder .ic').innerHTML = ICONS.plus;
 document.querySelector('#cmd-menu-btn .ic').innerHTML = ICONS.command;
-document.querySelector('#layout-toggle .ic').innerHTML = ICONS.layout;
 document.querySelector('#settings-btn .ic').innerHTML = ICONS.gear;
 
 // Restore previous tabs (folders + names + Claude session keys). With resume on,
