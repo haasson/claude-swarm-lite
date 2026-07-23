@@ -20,6 +20,19 @@
   --waiting:   #3fd0c9;  /* session waiting for my input */
   --danger:    #e05a5a;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Menlo", monospace;
+
+  /* Габариты карточки вкладки. Значения = "обычная" плотность; body.tabs-*
+     переопределяет их пачкой, а --tab-label-size / --tab-sub-size ставит JS
+     (applyTabStyle) из настроек. См. renderer/tabstyle.js. */
+  --tab-pad-y:      8px;
+  --tab-pad-x:      10px;
+  --tab-gap:        8px;
+  --tab-min-w:      120px;
+  --tab-max-w:      210px;
+  --tab-dot-size:   8px;
+  --tab-ctx-h:      4px;
+  --tab-label-size: 12px;
+  --tab-sub-size:   10px;
 }
 
 * { box-sizing: border-box; }
@@ -177,33 +190,33 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .tab {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: var(--tab-gap);
   cursor: pointer;
   user-select: none;
   border: 1px solid transparent;
   border-radius: 8px;
-  padding: 8px 10px;
+  padding: var(--tab-pad-y) var(--tab-pad-x);
 }
 .layout-top .tab {
   flex: 0 0 auto;
   width: auto;
-  min-width: 120px;
-  max-width: 210px;
+  min-width: var(--tab-min-w);
+  max-width: var(--tab-max-w);
   background: var(--panel-2);
   border: 1px solid var(--border);
 }
-.tab .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ready); flex: none; margin-top: 3px; }
+.tab .dot { width: var(--tab-dot-size); height: var(--tab-dot-size); border-radius: 50%; background: var(--ready); flex: none; margin-top: 3px; }
 .tab .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.tab .label { color: var(--text); font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.tab .label { color: var(--text); font-size: var(--tab-label-size); font-weight: 600; overflow-wrap: anywhere; }
 .tab .folder { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
 .tab .folder:empty { display: none; }
 .tab .folder svg, .group-head svg { width: 11px; height: 11px; flex: none; }
-.tab .sub { color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab .sub { color: var(--muted); font-size: var(--tab-sub-size); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* per-card context meter (parsed from the session's Claude statusline) */
 .tab .ctx { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
 .tab .ctx[hidden] { display: none; }
-.tab .ctx-track { flex: 1; min-width: 26px; height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.tab .ctx-track { flex: 1; min-width: 26px; height: var(--tab-ctx-h); border-radius: 2px; background: var(--border); overflow: hidden; }
 .tab .ctx-fill { display: block; height: 100%; width: 0; background: var(--ready); transition: width 0.3s ease; }
 .tab .ctx-num { font-size: 9px; color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
 .tab .ctx.ctx-lo  .ctx-fill { background: var(--ready); }
