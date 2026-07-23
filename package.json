@@ -23,6 +23,7 @@
       "updater.js",
       "updater-core.js",
       "pty-loader.js",
+      "swarm-statusline.js",
       "build-info.json",
       "preload.js",
       "renderer/**/*",

@@ -47,6 +47,7 @@ const pty = require('./pty-loader').loadPty({
 });
 const git = require('./git');
 const updater = require('./updater');
+const resume = require('./renderer/resume'); // UMD: exports { supports, stemOf, ... } under Node
 
 /** @type {BrowserWindow | null} */
 let win = null;
@@ -77,6 +78,58 @@ function defaultWorkdir() {
   try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {}
 
   return dir;
+}
+
+// --- context progress bar, out of the box -----------------------------------
+// The per-tab context bar is scraped from a "NN%" in Claude's statusline (see
+// renderer updateCtx). Stock Claude prints no such line, so a fresh install would
+// show no bar. Rather than ask every user to configure `statusLine` by hand, we
+// SHIP one (swarm-statusline.js) and inject it into each Claude launch via
+// `--settings`. That touches no file in the user's own config and needs no
+// separately-installed Node — the script runs under Electron-as-node.
+//
+// Path to the JSON settings file we hand to `claude --settings`. null if
+// provisioning failed (then we simply skip injection and behave as before).
+let STATUSLINE_SETTINGS = null;
+
+function provisionStatusline() {
+  const dir = app.getPath('userData');
+  // fs CAN read inside app.asar, so this copies the bundled script onto a real
+  // path Electron-as-node can exec. Rewritten every launch so upgrades take.
+  const scriptDst = path.join(dir, 'swarm-statusline.js');
+  fs.copyFileSync(path.join(__dirname, 'swarm-statusline.js'), scriptDst);
+
+  // A tiny launcher sets ELECTRON_RUN_AS_NODE and runs our own binary as Node.
+  // Per-OS because inline `VAR=1 cmd` is POSIX-only; cmd.exe needs `set`.
+  const exe = process.execPath;
+  let command;
+  if (os.platform() === 'win32') {
+    const launcher = path.join(dir, 'swarm-statusline.cmd');
+    fs.writeFileSync(launcher, `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${exe}" "${scriptDst}"\r\n`);
+    command = `"${launcher}"`;
+  } else {
+    const launcher = path.join(dir, 'swarm-statusline.sh');
+    fs.writeFileSync(launcher, `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "${exe}" "${scriptDst}"\n`, { mode: 0o755 });
+    command = `sh "${launcher}"`;
+  }
+
+  const settingsPath = path.join(dir, 'swarm-settings.json');
+  fs.writeFileSync(settingsPath, JSON.stringify({
+    statusLine: { type: 'command', command, padding: 0 },
+  }, null, 2));
+  STATUSLINE_SETTINGS = settingsPath;
+}
+
+// Append `--settings <ours>` so a launched Claude prints the context statusline.
+// Only for Claude launchers (never for aider/codex/… which don't take the flag),
+// and never when the command already carries an explicit --settings of its own.
+function injectStatusline(cmd) {
+  if (!STATUSLINE_SETTINGS || !cmd) return cmd;
+  if (/(^|\s)--settings(\s|=)/.test(cmd)) return cmd;
+  // First real token, skipping any leading `VAR=value` env assignments.
+  const first = cmd.trim().split(/\s+/).find((t) => !/^\w+=/.test(t)) || '';
+  if (!resume.supports(first)) return cmd;
+  return `${cmd} --settings "${STATUSLINE_SETTINGS}"`;
 }
 
 // Send to the renderer only if the window/frame is still alive. Late pty chunks
@@ -491,7 +544,7 @@ ipcMain.handle('session:create', (_event, opts = {}) => {
   });
 
   // Give the login shell a moment to finish sourcing the profile, then run claude.
-  const cmd = opts.command != null ? opts.command : START_COMMAND;
+  const cmd = injectStatusline(opts.command != null ? opts.command : START_COMMAND);
   if (cmd) {
     setTimeout(() => {
       const p = sessions.get(id);
@@ -642,6 +695,7 @@ app.whenReady().then(() => {
   // Offer to move into ~/Applications on macOS so a later asar-swap can write.
   // If it relocates, it exits — don't open a window in that case.
   if (updater.maybeRelocate()) return;
+  try { provisionStatusline(); } catch (e) { reportMainError(e); } // bar is best-effort
   buildMenu();
   createWindow();
 });
