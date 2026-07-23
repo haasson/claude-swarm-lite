@@ -735,6 +735,31 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .theme-swatch.active .theme-name { color: var(--accent); }
 
 .set-stepper { display: flex; align-items: center; gap: 12px; }
+
+/* Предпросмотр карточек в настройках. Id-специфичность здесь нужна, чтобы
+   перебить .layout-top .tab: превью само носит класс layout-top, но карточки в
+   нём должны делить ширину поровну, а не жить по --tab-min-w/--tab-max-w. */
+.tab-preview {
+  display: flex;
+  gap: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+}
+#set-tab-preview .tab { flex: 1 1 0; min-width: 0; max-width: none; cursor: default; }
+
+.color-row { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+.color-cell { display: inline-flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10px; color: var(--muted); cursor: pointer; }
+.color-cell input[type="color"] {
+  width: 38px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  cursor: pointer;
+}
 .step-btn {
   width: 28px; height: 28px; border: 1px solid var(--border); border-radius: 6px;
   background: var(--panel-2); color: var(--text); font-size: 16px; line-height: 1;

@@ -803,6 +803,7 @@ function showSettingsModal(tab) {
         <button class="set-tab" data-tab="launch">Запуск</button>
         <button class="set-tab" data-tab="notify">Уведомления</button>
         <button class="set-tab" data-tab="appearance">Вид</button>
+        <button class="set-tab" data-tab="tabs">Вкладки</button>
         <button class="set-tab" data-tab="keys">Клавиши</button>
         <button class="set-tab" data-tab="updates">Обновления</button>
       </div>
@@ -905,6 +906,56 @@ function showSettingsModal(tab) {
         <div class="set-field">
           <span class="set-label">Предпросмотр</span>
           <div class="term-preview" id="set-term-preview"></div>
+        </div>
+      </div>
+
+      <div class="set-panel" data-panel="tabs">
+        <div class="modal-msg">Как выглядят карточки сессий. Заголовок показывается всегда.</div>
+        <label class="set-field">
+          <span class="set-label">Плотность</span>
+          <select class="set-input" id="set-tab-density"></select>
+        </label>
+        <label class="set-check">
+          <input type="checkbox" id="set-tab-dot" />
+          <span class="set-check-tx">Точка статуса</span>
+        </label>
+        <label class="set-check">
+          <input type="checkbox" id="set-tab-ctx" />
+          <span class="set-check-tx">Метр контекста<span class="set-check-sub">Полоска и процент заполнения контекста Claude</span></span>
+        </label>
+        <label class="set-check">
+          <input type="checkbox" id="set-tab-sub" />
+          <span class="set-check-tx">Подпись статуса<span class="set-check-sub">готов / работает / завис?</span></span>
+        </label>
+        <label class="set-check">
+          <input type="checkbox" id="set-tab-fill" />
+          <span class="set-check-tx">Заливка карточки по статусу</span>
+        </label>
+        <div class="set-field">
+          <span class="set-label">Размер заголовка</span>
+          <div class="set-stepper">
+            <button type="button" class="step-btn" id="set-tab-label-dec" aria-label="меньше">−</button>
+            <span class="step-val" id="set-tab-label-val"></span>
+            <button type="button" class="step-btn" id="set-tab-label-inc" aria-label="больше">+</button>
+          </div>
+        </div>
+        <div class="set-field">
+          <span class="set-label">Размер подписи</span>
+          <div class="set-stepper">
+            <button type="button" class="step-btn" id="set-tab-sub-dec" aria-label="меньше">−</button>
+            <span class="step-val" id="set-tab-sub-val"></span>
+            <button type="button" class="step-btn" id="set-tab-sub-inc" aria-label="больше">+</button>
+          </div>
+        </div>
+        <div class="set-field">
+          <span class="set-label">Цвета статусов</span>
+          <div class="color-row" id="set-tab-colors"></div>
+          <button type="button" class="set-check-btn" id="set-tab-colors-reset">Сбросить цвета</button>
+          <span class="set-hint">Эти же цвета красят статус-бар и кнопки — палитра в приложении одна.</span>
+        </div>
+        <div class="set-field">
+          <span class="set-label">Предпросмотр</span>
+          <div class="tab-preview" id="set-tab-preview"></div>
         </div>
       </div>
 
@@ -1069,6 +1120,107 @@ function showSettingsModal(tab) {
   cursorSel.addEventListener('change', () => { draft.cursorStyle = cursorSel.value; renderTermPreview(); });
   blinkI.addEventListener('change', () => { draft.cursorBlink = blinkI.checked; });
 
+  // Tabs panel. Same draft pattern as appearance: edits land in tabDraft and only
+  // commit on Save. normalizeTabStyle doubles as the deep copy — a spread would
+  // share the nested show/colors objects with the live tabstyle and leak edits.
+  const tabDraft = TABSTYLE.normalizeTabStyle(tabstyle);
+  const densitySel = overlay.querySelector('#set-tab-density');
+  const showInputs = {
+    dot: overlay.querySelector('#set-tab-dot'),
+    ctx: overlay.querySelector('#set-tab-ctx'),
+    sub: overlay.querySelector('#set-tab-sub'),
+    statusFill: overlay.querySelector('#set-tab-fill'),
+  };
+  const tabLabelVal = overlay.querySelector('#set-tab-label-val');
+  const tabSubVal = overlay.querySelector('#set-tab-sub-val');
+  const colorRow = overlay.querySelector('#set-tab-colors');
+  const tabPreviewEl = overlay.querySelector('#set-tab-preview');
+
+  TABSTYLE.DENSITIES.forEach((d) => {
+    const o = document.createElement('option');
+    o.value = d.id;
+    o.textContent = d.name;
+    densitySel.appendChild(o);
+  });
+  densitySel.value = tabDraft.density;
+
+  Object.keys(showInputs).forEach((k) => { showInputs[k].checked = tabDraft.show[k]; });
+
+  // Two sample cards cover the whole surface: an active/running one (accent ring
+  // + run fill) and an idle one. Written once — renderTabPreview only restyles.
+  tabPreviewEl.innerHTML =
+    `<div class="tab active status-running">
+       <span class="dot"></span>
+       <span class="body">
+         <span class="label">api</span>
+         <span class="ctx ctx-mid"><span class="ctx-track"><span class="ctx-fill" style="width:62%"></span></span><span class="ctx-num">62%</span></span>
+         <span class="sub">работает</span>
+       </span>
+     </div>
+     <div class="tab status-ready">
+       <span class="dot"></span>
+       <span class="body">
+         <span class="label">web</span>
+         <span class="ctx ctx-lo"><span class="ctx-track"><span class="ctx-fill" style="width:14%"></span></span><span class="ctx-num">14%</span></span>
+         <span class="sub">готов</span>
+       </span>
+     </div>`;
+
+  function renderTabPreview() {
+    const vars = TABSTYLE.toCssVars(tabDraft);
+    for (const k of Object.keys(vars)) tabPreviewEl.style.setProperty(k, vars[k]);
+    // layout-top pins the card look regardless of the app's current layout —
+    // .layout-top .tab is what gives a tab its border/background.
+    tabPreviewEl.className = 'tab-preview layout-top ' + TABSTYLE.bodyClasses(tabDraft).join(' ');
+    tabLabelVal.textContent = tabDraft.labelSize;
+    tabSubVal.textContent = tabDraft.subSize;
+  }
+
+  function renderColorPickers() {
+    colorRow.innerHTML = '';
+    TABSTYLE.COLORS.forEach((c) => {
+      const cell = document.createElement('label');
+      cell.className = 'color-cell';
+      const inp = document.createElement('input');
+      inp.type = 'color';
+      inp.value = tabDraft.colors[c.key];
+      inp.addEventListener('input', () => {
+        tabDraft.colors[c.key] = inp.value;
+        renderTabPreview();
+      });
+      const name = document.createElement('span');
+      name.textContent = c.name;
+      cell.appendChild(inp);
+      cell.appendChild(name);
+      colorRow.appendChild(cell);
+    });
+  }
+
+  renderColorPickers();
+  renderTabPreview();
+
+  densitySel.addEventListener('change', () => {
+    tabDraft.density = densitySel.value;
+    renderTabPreview();
+  });
+  Object.keys(showInputs).forEach((k) => {
+    showInputs[k].addEventListener('change', () => {
+      tabDraft.show[k] = showInputs[k].checked;
+      renderTabPreview();
+    });
+  });
+  const setTabLabel = (n) => { tabDraft.labelSize = Math.max(9, Math.min(18, n)); renderTabPreview(); };
+  const setTabSub = (n) => { tabDraft.subSize = Math.max(8, Math.min(14, n)); renderTabPreview(); };
+  overlay.querySelector('#set-tab-label-dec').addEventListener('click', () => setTabLabel(tabDraft.labelSize - 1));
+  overlay.querySelector('#set-tab-label-inc').addEventListener('click', () => setTabLabel(tabDraft.labelSize + 1));
+  overlay.querySelector('#set-tab-sub-dec').addEventListener('click', () => setTabSub(tabDraft.subSize - 1));
+  overlay.querySelector('#set-tab-sub-inc').addEventListener('click', () => setTabSub(tabDraft.subSize + 1));
+  overlay.querySelector('#set-tab-colors-reset').addEventListener('click', () => {
+    tabDraft.colors = { ...TABSTYLE.DEFAULT_TABSTYLE.colors };
+    renderColorPickers();
+    renderTabPreview();
+  });
+
   // Keys panel: draft copy of keybinds; capture mode records a new chord/scope.
   const kbDraft = { ...keybinds };
   const kbList = overlay.querySelector('#set-kb-list');
@@ -1216,7 +1368,7 @@ function showSettingsModal(tab) {
     if (name === 'launch') { const f = agentListEl.querySelector('.agent-cmd'); if (f) { f.focus(); f.select(); } }
   };
   tabs.forEach((t) => t.addEventListener('click', () => showTab(t.dataset.tab)));
-  showTab(['notify', 'appearance', 'keys', 'updates'].includes(tab) ? tab : 'launch');
+  showTab(['notify', 'appearance', 'tabs', 'keys', 'updates'].includes(tab) ? tab : 'launch');
 
   const close = () => {
     stopKbCapture();
@@ -1247,6 +1399,9 @@ function showSettingsModal(tab) {
     appearance = { ...draft };
     saveAppearance();
     applyAppearance();
+    tabstyle = TABSTYLE.normalizeTabStyle(tabDraft);
+    saveTabStyle();
+    applyTabStyle();
     keybinds = KEYBINDS_API.normalizeKeybinds(kbDraft, window.swarm.platform);
     saveKeybinds();
     close();
