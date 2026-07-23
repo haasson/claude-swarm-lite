@@ -199,8 +199,11 @@ async function gitDiffStat(cwd) {
 
   const files = parseNumstatZ(res.stdout);
 
+  const seen = new Set();
   for (const rel of await untrackedFiles(cwd)) {
-    const info = statUntracked(path.join(cwd, rel));
+    const abs = path.join(cwd, rel);
+    seen.add(abs);
+    const info = statUntracked(abs);
     if (!info) continue;
     files.push({
       path: rel,
@@ -211,6 +214,14 @@ async function gitDiffStat(cwd) {
       binary: info.binary,
       big: info.big,
     });
+  }
+  // Evict cache entries for THIS repo that are no longer untracked (committed,
+  // deleted, or newly .gitignored) — otherwise the map grows unbounded over a
+  // long session. Scoped by cwd prefix so other repos' entries survive; the
+  // trailing sep keeps /a from matching a sibling /a-b.
+  const prefix = cwd.endsWith(path.sep) ? cwd : cwd + path.sep;
+  for (const abs of untrackedCache.keys()) {
+    if (abs.startsWith(prefix) && !seen.has(abs)) untrackedCache.delete(abs);
   }
 
   let added = 0, removed = 0;

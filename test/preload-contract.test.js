@@ -14,10 +14,17 @@ let passed = 0;
 const tests = [];
 function test(name, fn) { tests.push([name, fn]); }
 
-// Top-level swarm methods the renderer invokes (window.swarm.<name>...).
-const called = new Set(
-  [...renderer.matchAll(/window\.swarm\.([a-zA-Z_$][\w$]*)/g)].map((m) => m[1]),
-);
+// Swarm methods the renderer invokes. We capture BOTH levels of access:
+// window.swarm.<name> and one nested hop window.swarm.<ns>.<name> (e.g.
+// window.swarm.git.diffstat), so a nested method preload forgot to expose — or a
+// nested rename — is caught, not just top-level ones.
+const called = new Set();
+for (const m of renderer.matchAll(
+  /window\.swarm\.([a-zA-Z_$][\w$]*)(?:\.([a-zA-Z_$][\w$]*))?/g,
+)) {
+  called.add(m[1]);
+  if (m[2]) called.add(m[2]);
+}
 // Keys exposed by preload (top-level of the exposeInMainWorld object + nested).
 // A superset is fine: we only assert that every called name appears somewhere.
 const defined = new Set(

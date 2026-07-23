@@ -1534,6 +1534,11 @@ function activate(id, opts) {
   // `leave` — drop any stale tip so it doesn't float over the new terminal.
   hideLinkTip();
   if (!(opts && opts.pult) && pultOn) setPult(false);
+  // The diff overlay is a snapshot of the PREVIOUS active folder. Switching to a
+  // different session — a tab click, ⌘1–⌘9, or the pult auto-advancing its queue
+  // — would leave it showing the wrong folder's files. Drop it; the user reopens
+  // it fresh for the new folder from the status-bar counter.
+  if (activeId !== id) closeDiffOverlay();
   // Switching focus makes both the old and new terminals repaint — grace all
   // detectors so that burst isn't read as activity (would flash "работает").
   window.swarm.uiRepaint();
