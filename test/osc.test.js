@@ -7,7 +7,7 @@ const tests = [];
 function test(name, fn) { tests.push([name, fn]); }
 
 const BEL = '\x07';
-const mk = (token, sid) => `\x1b]777;swarm;${token}${sid != null ? ';' + sid : ''}${BEL}`;
+const mk = (token, sid) => `\x1b]777;notify;swarm;${token}${sid != null ? ';' + sid : ''}${BEL}`;
 
 test('parses a single marker with a session id', () => {
   const { signals } = extractHookSignals('output' + mk('perm', 'abc123') + 'more');
@@ -20,7 +20,7 @@ test('parses a marker without a session id', () => {
 });
 
 test('accepts an ST terminator (ESC \\) as well as BEL', () => {
-  const { signals } = extractHookSignals('\x1b]777;swarm;busy;s1\x1b\\');
+  const { signals } = extractHookSignals('\x1b]777;notify;swarm;busy;s1\x1b\\');
   assert.deepStrictEqual(signals, [{ token: 'busy', sessionId: 's1' }]);
 });
 

@@ -4,14 +4,16 @@
 // xterm (real and headless) consumes it — the user never sees it — and we sniff it
 // out of the raw pty chunk here. Kept pure so it's unit-testable in plain node.
 //
-// Marker format (see hooks/swarm-signal.mjs, added in the hooks task):
-//   ESC ] 777 ; swarm ; <token> ; <sessionId> BEL
-// token ∈ busy | idle | perm | ask — the hook normalises Claude's events to these;
-// their meaning (→ status/kind) lives in detector.js. sessionId is optional and
-// only a cross-check: routing is by pty, since each agent has its own.
+// Marker format (see hooks/swarm-signal.mjs):
+//   ESC ] 777 ; notify ; swarm ; <token> ; <sessionId> BEL
+// It's a valid OSC 777 «notify» (title = "swarm") so Claude Code's terminalSequence
+// allowlist passes it; xterm doesn't implement 777 and just consumes it, so nothing
+// shows. token ∈ busy | idle | perm | ask — the hook normalises Claude's events to
+// these; their meaning (→ status/kind) lives in detector.js. sessionId is optional
+// and only a cross-check: routing is by pty, since each agent has its own.
 //
 // Terminated by BEL (\x07) or ST (ESC \). Not anchored — a chunk may hold several.
-const MARKER_RE = /\x1b\]777;swarm;([a-z]+)(?:;([^\x07\x1b]*))?(?:\x07|\x1b\\)/g;
+const MARKER_RE = /\x1b\]777;notify;swarm;([a-z]+)(?:;([^\x07\x1b]*))?(?:\x07|\x1b\\)/g;
 const CARRY_CAP = 128; // enough to reassemble a marker split across two chunks
 
 // Extract every complete marker from `buf` (a chunk, optionally prefixed with the
