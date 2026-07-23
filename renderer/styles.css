@@ -20,6 +20,19 @@
   --waiting:   #3fd0c9;  /* session waiting for my input */
   --danger:    #e05a5a;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Menlo", monospace;
+
+  /* Габариты карточки вкладки. Значения = "обычная" плотность; body.tabs-*
+     переопределяет их пачкой, а --tab-label-size / --tab-sub-size ставит JS
+     (applyTabStyle) из настроек. См. renderer/tabstyle.js. */
+  --tab-pad-y:      8px;
+  --tab-pad-x:      10px;
+  --tab-gap:        8px;
+  --tab-min-w:      120px;
+  --tab-max-w:      210px;
+  --tab-dot-size:   8px;
+  --tab-ctx-h:      4px;
+  --tab-label-size: 12px;
+  --tab-sub-size:   10px;
 }
 
 * { box-sizing: border-box; }
@@ -162,6 +175,11 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .tab-group.collapsed .group-dots { margin-left: auto; }
 .tab-group.collapsed .group-dots { display: inline-flex; }
 .tab-group.collapsed .group-tabs { display: none; }
+/* Свёрнутая группа ужимается до своей шапки. Развёрнутые продолжают
+   выравниваться по высоте друг с другом — за это отвечает align-items:stretch
+   на .layout-top #tabs, и трогать его нельзя: тот же stretch выравнивает
+   карточки разной высоты внутри .group-tabs. */
+.layout-top .tab-group.collapsed { align-self: flex-start; }
 .sum-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ready); cursor: pointer; flex: none; }
 .sum-dot.status-ready   { background: var(--ready); }
 .sum-dot.status-running { background: var(--run); }
@@ -172,33 +190,33 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .tab {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: var(--tab-gap);
   cursor: pointer;
   user-select: none;
   border: 1px solid transparent;
   border-radius: 8px;
-  padding: 8px 10px;
+  padding: var(--tab-pad-y) var(--tab-pad-x);
 }
 .layout-top .tab {
   flex: 0 0 auto;
   width: auto;
-  min-width: 120px;
-  max-width: 210px;
+  min-width: var(--tab-min-w);
+  max-width: var(--tab-max-w);
   background: var(--panel-2);
   border: 1px solid var(--border);
 }
-.tab .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ready); flex: none; margin-top: 3px; }
+.tab .dot { width: var(--tab-dot-size); height: var(--tab-dot-size); border-radius: 50%; background: var(--ready); flex: none; margin-top: 3px; }
 .tab .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.tab .label { color: var(--text); font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.tab .label { color: var(--text); font-size: var(--tab-label-size); font-weight: 600; overflow-wrap: anywhere; }
 .tab .folder { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
 .tab .folder:empty { display: none; }
 .tab .folder svg, .group-head svg { width: 11px; height: 11px; flex: none; }
-.tab .sub { color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab .sub { color: var(--muted); font-size: var(--tab-sub-size); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* per-card context meter (parsed from the session's Claude statusline) */
 .tab .ctx { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
 .tab .ctx[hidden] { display: none; }
-.tab .ctx-track { flex: 1; min-width: 26px; height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.tab .ctx-track { flex: 1; min-width: 26px; height: var(--tab-ctx-h); border-radius: 2px; background: var(--border); overflow: hidden; }
 .tab .ctx-fill { display: block; height: 100%; width: 0; background: var(--ready); transition: width 0.3s ease; }
 .tab .ctx-num { font-size: 9px; color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
 .tab .ctx.ctx-lo  .ctx-fill { background: var(--ready); }
@@ -233,6 +251,82 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .tab.active { box-shadow: 0 0 0 1px var(--accent), 0 0 10px -3px var(--accent); }
 .tab:hover  { filter: brightness(1.12); opacity: 1; } /* hovering un-dims */
 
+/* --- настраиваемый вид карточек (см. renderer/tabstyle.js) ---------------- */
+/* Класс плотности вешается на <body> (applyTabStyle) и на #set-tab-preview
+   (предпросмотр в настройках), поэтому селекторы перечисляют оба через
+   :where() — он не добавляет специфичности, так что id превью не выигрывает у
+   body. tabs-normal объявлен явно, а не наследует :root: иначе превью с
+   "обычной" плотностью внутри body.tabs-compact унаследовало бы компактные
+   значения. Размеры шрифта пресеты не трогают — их задаёт пользователь. */
+:where(body, #set-tab-preview).tabs-compact {
+  --tab-pad-y: 4px;
+  --tab-pad-x: 8px;
+  --tab-gap: 6px;
+  --tab-min-w: 90px;
+  --tab-max-w: 150px;
+  --tab-dot-size: 6px;
+  --tab-ctx-h: 3px;
+}
+:where(body, #set-tab-preview).tabs-normal {
+  --tab-pad-y: 8px;
+  --tab-pad-x: 10px;
+  --tab-gap: 8px;
+  --tab-min-w: 120px;
+  --tab-max-w: 210px;
+  --tab-dot-size: 8px;
+  --tab-ctx-h: 4px;
+}
+:where(body, #set-tab-preview).tabs-roomy {
+  --tab-pad-y: 11px;
+  --tab-pad-x: 13px;
+  --tab-gap: 9px;
+  --tab-min-w: 150px;
+  --tab-max-w: 260px;
+  --tab-dot-size: 9px;
+  --tab-ctx-h: 5px;
+}
+
+/* Компактный режим кладёт содержимое карточки в строку: имя, метр контекста и
+   (если включена) подпись, которую flex: 1 0 100% уносит на вторую строку. С
+   выключенной подписью карточка становится однострочной — ~28px вместо ~52px.
+   Размен: длинное имя обрезается многоточием вместо переноса. Полное имя
+   остаётся в title карточки. */
+:where(body, #set-tab-preview).tabs-compact .tab { align-items: center; }
+:where(body, #set-tab-preview).tabs-compact .tab .dot { margin-top: 0; }
+:where(body, #set-tab-preview).tabs-compact .tab .body {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+:where(body, #set-tab-preview).tabs-compact .tab .label {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  overflow-wrap: normal;
+}
+:where(body, #set-tab-preview).tabs-compact .tab .ctx { flex: 0 0 auto; margin-top: 0; }
+:where(body, #set-tab-preview).tabs-compact .tab .ctx-track { min-width: 20px; }
+:where(body, #set-tab-preview).tabs-compact .tab .sub { flex: 1 0 100%; }
+
+/* Видимость элементов. У .ctx !important обязателен: updateCtx() снимает атрибут
+   hidden, а правило .tab .ctx[hidden] имеет ту же специфичность, что это. */
+:where(body, #set-tab-preview).tab-no-dot .tab .dot { display: none; }
+:where(body, #set-tab-preview).tab-no-ctx .tab .ctx { display: none !important; }
+:where(body, #set-tab-preview).tab-no-sub .tab .sub { display: none; }
+
+/* Заливка/бордер по статусу гасятся, но точка и акцентная рамка активной
+   вкладки остаются — иначе активную нечем отличить. */
+:where(body, #set-tab-preview).tab-no-fill .tab.status-ready,
+:where(body, #set-tab-preview).tab-no-fill .tab.status-running,
+:where(body, #set-tab-preview).tab-no-fill .tab.status-waiting,
+:where(body, #set-tab-preview).tab-no-fill .tab.status-dead {
+  background: var(--panel-2);
+  border-color: var(--border);
+}
+
 /* drag & drop — the moved item becomes a faint dashed slot; others reflow around it */
 .tab.dragging {
   opacity: 0.5;
@@ -251,7 +345,7 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
    (rail) or at the end of the card row (top). Everything else moved to the bar. */
 #chrome-actions { display: flex; -webkit-app-region: no-drag; }
 .layout-rail #chrome-actions { flex-direction: column; padding: 4px 8px 8px; }
-.layout-top  #chrome-actions { align-items: center; padding: 0 10px 0 4px; }
+.layout-top  #chrome-actions { align-items: center; padding: 0 8px 0 4px; }
 #new-session-folder {
   -webkit-app-region: no-drag;
   display: inline-flex;
@@ -267,7 +361,11 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   white-space: nowrap;
   padding: 9px 10px;
 }
-.layout-top #new-session-folder { padding: 8px 12px; }
+/* В top-раскладке кнопка съедала ~140px горизонтали ради текста, который
+   дублируется тултипом. Оставляем иконку: ⌘O работает, у каждой группы есть
+   свой «+» (.group-add). В rail текст остаётся — там она под списком, место есть. */
+.layout-top #new-session-folder { padding: 8px; }
+.layout-top #new-session-folder .tx { display: none; }
 #new-session-folder:hover { color: var(--text); border-color: var(--accent); }
 #new-session-folder .ic { color: var(--accent); display: inline-flex; align-items: center; }
 #new-session-folder .ic svg { width: 15px; height: 15px; }
@@ -637,6 +735,31 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .theme-swatch.active .theme-name { color: var(--accent); }
 
 .set-stepper { display: flex; align-items: center; gap: 12px; }
+
+/* Предпросмотр карточек в настройках. Id-специфичность здесь нужна, чтобы
+   перебить .layout-top .tab: превью само носит класс layout-top, но карточки в
+   нём должны делить ширину поровну, а не жить по --tab-min-w/--tab-max-w. */
+.tab-preview {
+  display: flex;
+  gap: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+}
+#set-tab-preview .tab { flex: 1 1 0; min-width: 0; max-width: none; cursor: default; }
+
+.color-row { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+.color-cell { display: inline-flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10px; color: var(--muted); cursor: pointer; }
+.color-cell input[type="color"] {
+  width: 38px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  cursor: pointer;
+}
 .step-btn {
   width: 28px; height: 28px; border: 1px solid var(--border); border-radius: 6px;
   background: var(--panel-2); color: var(--text); font-size: 16px; line-height: 1;
