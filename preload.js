@@ -39,14 +39,21 @@ contextBridge.exposeInMainWorld('swarm', {
 
   // Git plumbing for the branch status bar. Each call targets a folder path
   // (the active session's cwd). info → { isRepo, branch, ahead, behind, dirty };
-  // branches → string[]; fetch/pull/checkout → { ok, error }.
+  // branches → string[]; fetch/pull/checkout → { ok, error };
+  // diffstat → { added, removed, files[] }; difftext → unified diff of one file.
   git: {
     info:     (cwd)         => ipcRenderer.invoke('git:info', cwd),
     branches: (cwd)         => ipcRenderer.invoke('git:branches', cwd),
     fetch:    (cwd)         => ipcRenderer.invoke('git:fetch', cwd),
     pull:     (cwd)         => ipcRenderer.invoke('git:pull', cwd),
     checkout: (cwd, branch) => ipcRenderer.invoke('git:checkout', cwd, branch),
+    diffstat: (cwd)         => ipcRenderer.invoke('git:diffstat', cwd),
+    difftext: (cwd, path)   => ipcRenderer.invoke('git:difftext', cwd, path),
   },
+
+  // Open a file in the OS' default editor (the diff overlay's way out to an IDE).
+  // cwd + relative path — main joins them platform-correctly.
+  openPath: (cwd, rel) => ipcRenderer.invoke('shell:openPath', cwd, rel),
 
   // Subscribe to pty output. cb({ id, data }). Returns an unsubscribe fn.
   onData: (cb) => {

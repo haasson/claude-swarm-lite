@@ -1,6 +1,6 @@
-// git.js — all git plumbing for the branch status bar. Pure Node on purpose
-// (child_process only, no Electron), so it can be required from a plain
-// `node -e` script and main.js just wires the IPC.
+// git.js — all git plumbing for the branch status bar and the diff counter.
+// Pure Node on purpose (child_process + fs, no Electron), so it can be required
+// from a plain `node -e` script and main.js just wires the IPC.
 //
 // Every command runs via execFile (no shell → a branch name can't inject) and
 // is forced non-interactive so it can NEVER hang or pop a login window from this
@@ -16,6 +16,13 @@
 // (Keychain / ssh-agent / GCM), so cached creds just work. No UI login by design.
 
 const { execFile } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+
+// numstat parsing is shared with the renderer's diff overlay — one parser, one
+// set of tests (test/diff.test.js). diffview.js is dual-mode, so requiring it
+// from plain Node here works exactly as it does from the tests.
+const { parseNumstatZ } = require('./renderer/diffview');
 
 const NO_PROMPT_ENV = {
   GIT_TERMINAL_PROMPT: '0',
@@ -99,4 +106,150 @@ async function gitPull(cwd) {
   return actionResult(await runGit(cwd, ['pull', '--ff-only'], 20000), 'не удалось подтянуть');
 }
 
-module.exports = { runGit, gitInfo, gitBranches, gitCheckout, gitFetch, gitPull };
+// --- untracked files ---------------------------------------------------------
+// New files are invisible to `git diff HEAD`, but Claude creates them constantly
+// — a fresh 200-line file would read as +0. We count them ourselves rather than
+// shelling out per file (`git diff --no-index` takes exactly two paths, so 50 new
+// files would mean 50 processes every 2.5s). Bonus: no /dev/null, which is a
+// cross-platform sore spot on Windows.
+
+const SNIFF_BYTES = 8192;          // how much of a file we read to guess binary
+const MAX_UNTRACKED_BYTES = 2 * 1024 * 1024; // past this we don't count, we say so
+
+// Same heuristic git itself uses: a NUL byte early in the file means binary.
+function isBinaryBuffer(buf) {
+  const end = Math.min(buf.length, SNIFF_BYTES);
+  for (let i = 0; i < end; i++) if (buf[i] === 0) return true;
+  return false;
+}
+
+// Lines as a diff would count them: a trailing newline does not open a new line,
+// and a last line without one still counts. CR is part of the line, not a break.
+function countLines(buf) {
+  if (!buf.length) return 0;
+  let n = 0;
+  for (let i = 0; i < buf.length; i++) if (buf[i] === 0x0a) n++;
+  if (buf[buf.length - 1] !== 0x0a) n++; // unterminated last line
+  return n;
+}
+
+// The empty tree. Diffing against it makes a repo with NO commits work (there
+// `git diff HEAD` just fails — HEAD does not exist yet), so the very first
+// commit's worth of work shows up as changes instead of an error.
+const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+
+// mtime+size → { added, binary, big }. Steady-state polling then costs a stat()
+// per untracked file, not a full read.
+const untrackedCache = new Map();
+
+async function diffBase(cwd) {
+  const head = await runGit(cwd, ['rev-parse', '--verify', 'HEAD']);
+  return head.code === 0 ? 'HEAD' : EMPTY_TREE;
+}
+
+// One untracked file → { added, binary, big }. Never throws: an unreadable file
+// (deleted between listing and stat, permissions) counts as nothing.
+function statUntracked(abs) {
+  let st;
+  try { st = fs.statSync(abs); } catch (_) { return null; }
+  if (!st.isFile()) return null;
+
+  const key = st.mtimeMs + ':' + st.size;
+  const hit = untrackedCache.get(abs);
+  if (hit && hit.key === key) return hit.val;
+
+  let val;
+  if (st.size > MAX_UNTRACKED_BYTES) {
+    val = { added: 0, binary: false, big: true };
+  } else {
+    let buf;
+    try { buf = fs.readFileSync(abs); } catch (_) { return null; }
+    val = isBinaryBuffer(buf)
+      ? { added: 0, binary: true, big: false }
+      : { added: countLines(buf), binary: false, big: false };
+  }
+  untrackedCache.set(abs, { key, val });
+  return val;
+}
+
+// Every untracked file in cwd, already .gitignore-filtered by git itself.
+// -uall lists files inside new folders individually (the default collapses them
+// to 'dir/', which we could not count); -z keeps unicode/spaced paths unquoted.
+async function untrackedFiles(cwd) {
+  const res = await runGit(cwd, ['status', '--porcelain', '-uall', '-z']);
+  if (res.code !== 0) return [];
+  const out = [];
+  for (const rec of res.stdout.split('\0')) {
+    if (rec.slice(0, 2) !== '??') continue;
+    const rel = rec.slice(3);
+    if (rel) out.push(rel);
+  }
+  return out;
+}
+
+// { added, removed, files: [{ path, oldPath, added, removed, status, binary, big }] }.
+// Tracked changes come from `git diff <base> --numstat -z`; untracked ones are
+// appended as pure additions (status 'added'). Non-repo / git failure → nulls,
+// so the caller just hides the counter, matching how the branch bar stays hidden.
+async function gitDiffStat(cwd) {
+  if (!cwd) return { added: 0, removed: 0, files: [] };
+  const base = await diffBase(cwd);
+  const res = await runGit(cwd, ['diff', base, '--numstat', '-z']);
+  if (res.code !== 0) return { added: 0, removed: 0, files: [] };
+
+  const files = parseNumstatZ(res.stdout);
+
+  for (const rel of await untrackedFiles(cwd)) {
+    const info = statUntracked(path.join(cwd, rel));
+    if (!info) continue;
+    files.push({
+      path: rel,
+      oldPath: null,
+      added: info.added,
+      removed: 0,
+      status: info.binary ? 'binary' : 'added',
+      binary: info.binary,
+      big: info.big,
+    });
+  }
+
+  let added = 0, removed = 0;
+  for (const f of files) { added += f.added; removed += f.removed; }
+  return { added, removed, files };
+}
+
+// Unified diff of ONE file, as text. Lazy by design — the overlay asks for a
+// file only when you click it.
+//
+// An untracked file has no diff to ask git for, so we synthesise it: every line
+// is an addition. This is also why gitDiffStat counts them with fs — the two
+// stay consistent, and `git diff --no-index /dev/null <file>` (a Windows sore
+// spot) never enters the picture.
+async function gitDiffText(cwd, rel) {
+  if (!cwd || !rel) return '';
+
+  const tracked = await runGit(cwd, ['ls-files', '--error-unmatch', '-z', '--', rel]);
+  if (tracked.code === 0) {
+    const base = await diffBase(cwd);
+    // -- <path> after a '--' separator: a file named like a flag can't be
+    // mistaken for one. No -z here: we want the human-readable unified text.
+    const res = await runGit(cwd, ['diff', base, '--', rel]);
+    return res.code === 0 ? res.stdout : '';
+  }
+
+  const info = statUntracked(path.join(cwd, rel));
+  if (!info || info.binary || info.big) return '';
+  let buf;
+  try { buf = fs.readFileSync(path.join(cwd, rel)); } catch (_) { return ''; }
+  const text = buf.toString('utf8');
+  const lines = text.split('\n');
+  if (lines.length && lines[lines.length - 1] === '') lines.pop(); // trailing \n
+  const body = lines.map((l) => '+' + (l.endsWith('\r') ? l.slice(0, -1) : l));
+  const tail = text.endsWith('\n') ? [] : ['\\ No newline at end of file'];
+  return ['@@ -0,0 +1,' + lines.length + ' @@', ...body, ...tail].join('\n');
+}
+
+module.exports = {
+  runGit, gitInfo, gitBranches, gitCheckout, gitFetch, gitPull,
+  isBinaryBuffer, countLines, gitDiffStat, gitDiffText,
+};

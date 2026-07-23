@@ -175,9 +175,12 @@ const cmdMenu    = document.getElementById('cmd-menu');
 const gitBtn      = document.getElementById('git-branch');
 const gitMenu     = document.getElementById('git-menu');
 const gitMsgEl    = document.getElementById('git-msg');
+const gitDiffBtn  = document.getElementById('git-diff');
 
 let gitInfo = null;      // last git:info for the ACTIVE folder (null until first fetch)
 let gitMsgTimer = null;  // auto-clear timer for the transient error plaque
+let gitDiff = null;      // last git:diffstat for the ACTIVE folder (null until first fetch)
+let gitDiffBusy = false; // a diffstat is in flight — skip the tick, don't queue up
 
 // Built-in commands sent into the ACTIVE session on click, grouped by purpose.
 // Item flags (all optional):
@@ -687,15 +690,36 @@ async function createSessionInFolder() {
 // after its await so a fast tab switch mid-request can't paint stale data.
 function renderGitBar(info) {
   gitInfo = info;
-  if (!info || !info.isRepo) { gitBtn.hidden = true; return; }
+  if (!info || !info.isRepo) { gitBtn.hidden = true; gitDiffBtn.hidden = true; return; }
   gitBtn.hidden = false;
   gitBtn.querySelector('.git-ic').innerHTML = ICONS.branch;
   gitBtn.querySelector('.git-name').textContent = info.branch || '';
   const parts = [];
   if (info.behind) parts.push('↓' + info.behind);
   if (info.ahead) parts.push('↑' + info.ahead);
-  if (info.dirty) parts.push('*');
+  // No '*' for dirty: the +N −M counter next door says the same thing, better.
+  // info.dirty stays in git.js' contract — it's a standalone module — we just
+  // stopped drawing it.
   gitBtn.querySelector('.git-track').textContent = parts.join(' ');
+}
+
+// The counter next to the branch. Hidden when there's nothing to show, exactly
+// like the branch button on a non-repo folder.
+function renderGitDiff(stat) {
+  gitDiff = stat;
+  if (!stat || (!stat.added && !stat.removed)) { gitDiffBtn.hidden = true; return; }
+  const { added, removed } = window.SWARM_DIFF.formatCount(stat);
+  gitDiffBtn.hidden = false;
+  gitDiffBtn.querySelector('.d-add').textContent = added;
+  gitDiffBtn.querySelector('.d-del').textContent = removed;
+
+  // The overlay is a snapshot. When the counter drifts from what it's showing,
+  // say so — but never re-render under the reader's cursor.
+  if (diffOverlay) {
+    const shown = diffOverlay.dataset.sum || '';
+    const now = stat ? stat.added + '/' + stat.removed : '0/0';
+    diffOverlay.querySelector('.diff-stale').hidden = (shown === now);
+  }
 }
 
 async function refreshGit() {
@@ -705,6 +729,17 @@ async function refreshGit() {
   try { info = await window.swarm.git.info(cwd); } catch (_) {}
   if (forId !== activeId) return; // switched tabs during the await — drop stale
   renderGitBar(info);
+  if (!info || !info.isRepo) { renderGitDiff(null); return; }
+
+  // A big repo's --numstat may outlive the 2.5s tick; without this guard the
+  // ticks would pile up on each other.
+  if (gitDiffBusy) return;
+  gitDiffBusy = true;
+  let stat = null;
+  try { stat = await window.swarm.git.diffstat(cwd); } catch (_) {}
+  finally { gitDiffBusy = false; }
+  if (forId !== activeId) return; // switched again during the diff — drop stale
+  renderGitDiff(stat);
 }
 
 // A short-lived message in the bar (e.g. checkout failed / needs login).
@@ -1254,6 +1289,10 @@ function activate(id) {
 function closeSession(id) {
   const s = sessions.get(id);
   if (!s) return;
+  // The overlay shows THIS folder's diff. Once the tab is gone, refreshGit
+  // repaints the bar for another tab while the overlay would keep showing the
+  // old folder's files and querying difftext with a dead cwd.
+  if (activeId === id) closeDiffOverlay();
   if (s.runTimer) { clearTimeout(s.runTimer); s.runTimer = null; }
   window.swarm.killSession(id);
   s.term.dispose();
@@ -1656,6 +1695,202 @@ function outsideCloseCmd(e) {
 function toggleCmdMenu() {
   if (cmdMenu.classList.contains('hidden')) openCmdMenu();
   else closeCmdMenu();
+}
+
+// --- diff overlay ------------------------------------------------------------
+// Read-only by design: several agents write these files right now, so an editor
+// here would be a write race (see the spec). "Открыть в редакторе" hands the
+// file to the real IDE instead.
+//
+// A SNAPSHOT, not a live feed: re-rendering under the cursor while an agent
+// writes would move the text you're reading. We freeze on open and offer an
+// explicit "изменилось — обновить" instead.
+let diffOverlay = null;
+
+// Past this we stop building DOM. 50k changed lines = 50k nodes = a frozen
+// overlay. The COUNTER stays honest either way — it comes from --numstat, not
+// from what we drew.
+const DIFF_MAX_LINES = 2000;
+
+function diffTagFor(file) {
+  if (file.status === 'added') return 'NEW';
+  if (file.status === 'renamed') return 'RENAMED';
+  if (file.status === 'binary') return 'BIN';
+  if (file.big) return 'БОЛЬШОЙ';
+  return '';
+}
+
+// Build the file tree into `host`. Returns the first file node, so the caller
+// can open something instead of showing an empty pane.
+function renderDiffTree(host, nodes, cwd, depth = 0) {
+  let first = null;
+  for (const n of nodes) {
+    if (n.kind === 'dir') {
+      const row = document.createElement('div');
+      row.className = 'diff-node dir';
+      row.style.paddingLeft = (10 + depth * 12) + 'px';
+      row.textContent = n.name + '/';
+      host.appendChild(row);
+      const f = renderDiffTree(host, n.children, cwd, depth + 1);
+      if (!first) first = f;
+    } else {
+      const btn = document.createElement('button');
+      btn.className = 'diff-file';
+      btn.style.paddingLeft = (10 + depth * 12) + 'px';
+      btn.dataset.path = n.path;
+      const { added, removed } = window.SWARM_DIFF.formatCount(n);
+      const name = document.createElement('span');
+      name.className = 'f-name';
+      name.textContent = n.name; // text node, never markup — paths are hostile
+      btn.appendChild(name);
+      const tag = diffTagFor(n.file);
+      if (tag) {
+        const t = document.createElement('span');
+        t.className = 'f-tag';
+        t.textContent = tag;
+        btn.appendChild(t);
+      }
+      if (added) { const a = document.createElement('span'); a.className = 'f-add'; a.textContent = added; btn.appendChild(a); }
+      if (removed) { const d = document.createElement('span'); d.className = 'f-del'; d.textContent = removed; btn.appendChild(d); }
+      const open = document.createElement('span');
+      open.className = 'f-tag';
+      open.textContent = '↗';
+      open.title = 'Открыть в редакторе';
+      open.addEventListener('click', (ev) => {
+        ev.stopPropagation(); // don't also select the file
+        window.swarm.openPath(cwd, n.path);
+      });
+      btn.appendChild(open);
+      btn.addEventListener('click', () => selectDiffFile(cwd, n.path));
+      host.appendChild(btn);
+      if (!first) first = n;
+    }
+  }
+  return first;
+}
+
+// Idempotent: called from Esc, the ✕, the backdrop, the stale pill — and from
+// closeSession, where the overlay's folder may be going away entirely.
+function closeDiffOverlay() {
+  if (!diffOverlay) return;
+  if (diffOverlay._onKey) document.removeEventListener('keydown', diffOverlay._onKey, true);
+  diffOverlay.remove();
+  diffOverlay = null;
+}
+
+function openDiffOverlay() {
+  if (diffOverlay) return;                       // already open
+  if (!gitDiff || !gitDiff.files.length) return; // nothing to show
+  const cwd = sessions.get(activeId)?.cwd || '';
+  const name = basename(cwd) || 'проект';
+  const snapshot = gitDiff;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal diff">
+      <div class="diff-head">
+        <span class="diff-title"></span>
+        <span class="diff-sum"><span class="d-add"></span><span class="d-del"></span></span>
+        <button class="diff-stale" hidden>изменилось — обновить</button>
+        <button class="diff-close" title="Закрыть (Esc)">✕</button>
+      </div>
+      <div class="diff-body">
+        <div class="diff-tree"></div>
+        <div class="diff-pane"></div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  diffOverlay = overlay;
+  overlay.dataset.sum = snapshot.added + '/' + snapshot.removed;
+
+  overlay.querySelector('.diff-title').textContent = 'Изменения — ' + name;
+  const sum = window.SWARM_DIFF.formatCount(snapshot);
+  overlay.querySelector('.diff-sum .d-add').textContent = sum.added;
+  overlay.querySelector('.diff-sum .d-del').textContent = sum.removed;
+
+  const tree = overlay.querySelector('.diff-tree');
+  const first = renderDiffTree(tree, window.SWARM_DIFF.buildTree(snapshot.files), cwd);
+
+  const onKey = (ev) => { if (ev.key === 'Escape') { ev.preventDefault(); closeDiffOverlay(); } };
+  overlay._onKey = onKey; // closeDiffOverlay needs it to unbind
+  overlay.querySelector('.diff-close').addEventListener('click', closeDiffOverlay);
+  overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) closeDiffOverlay(); });
+  overlay.querySelector('.diff-stale').addEventListener('click', () => {
+    closeDiffOverlay();
+    openDiffOverlay(); // reopen on the fresh gitDiff — an explicit, user-driven reload
+  });
+  document.addEventListener('keydown', onKey, true);
+
+  if (first) selectDiffFile(cwd, first.path);
+}
+
+async function selectDiffFile(cwd, rel) {
+  if (!diffOverlay) return;
+  for (const b of diffOverlay.querySelectorAll('.diff-file')) {
+    b.classList.toggle('active', b.dataset.path === rel);
+  }
+  const pane = diffOverlay.querySelector('.diff-pane');
+  pane.textContent = '';
+
+  const meta = (gitDiff?.files || []).find((f) => f.path === rel);
+  if (meta?.binary) { pane.appendChild(diffNotice('Бинарный файл — показать нечего.', cwd, rel)); return; }
+  if (meta?.big)    { pane.appendChild(diffNotice('Файл больше 2 МБ — не показываем.', cwd, rel)); return; }
+
+  let text = '';
+  try { text = await window.swarm.git.difftext(cwd, rel); } catch (_) {}
+  if (!diffOverlay) return;                                    // closed during the await
+  if (pane !== diffOverlay.querySelector('.diff-pane')) return; // reopened
+  const hunks = window.SWARM_DIFF.parseUnified(text);
+  if (!hunks.length) { pane.appendChild(diffNotice('Изменений нет.', cwd, rel)); return; }
+
+  const frag = document.createDocumentFragment();
+  let drawn = 0;
+  let total = 0;
+  for (const h of hunks) total += h.lines.length;
+
+  outer:
+  for (const h of hunks) {
+    const head = document.createElement('div');
+    head.className = 'diff-hunk';
+    head.textContent = h.header;
+    frag.appendChild(head);
+    for (const l of h.lines) {
+      if (drawn >= DIFF_MAX_LINES) break outer;
+      const row = document.createElement('div');
+      row.className = 'diff-line ' + l.type;
+      const ln = document.createElement('span');
+      ln.className = 'ln';
+      ln.textContent = l.type === 'add' ? String(l.newNo ?? '') : String(l.oldNo ?? '');
+      const tx = document.createElement('span');
+      tx.className = 'tx';
+      tx.textContent = l.type === 'meta' ? l.text : (l.text || ' '); // text node, never markup
+      row.appendChild(ln);
+      row.appendChild(tx);
+      frag.appendChild(row);
+      drawn++;
+    }
+  }
+  pane.appendChild(frag);
+
+  if (drawn < total) {
+    pane.appendChild(diffNotice(
+      `Показаны первые ${drawn} строк из ${total}.`, cwd, rel,
+    ));
+  }
+}
+
+// A muted line at the bottom of the pane + the escape hatch to a real editor.
+function diffNotice(text, cwd, rel) {
+  const box = document.createElement('div');
+  box.className = 'diff-more';
+  box.textContent = text;
+  const btn = document.createElement('button');
+  btn.className = 'diff-open';
+  btn.textContent = 'Открыть в редакторе';
+  btn.addEventListener('click', () => window.swarm.openPath(cwd, rel));
+  box.appendChild(btn);
+  return box;
 }
 
 // --- git branch menu ---------------------------------------------------------
@@ -2148,6 +2383,7 @@ layoutBtn.addEventListener('click', toggleLayout);
 document.getElementById('settings-btn').addEventListener('click', () => showSettingsModal());
 cmdBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleCmdMenu(); });
 gitBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleGitMenu(); });
+gitDiffBtn.addEventListener('click', (e) => { e.stopPropagation(); openDiffOverlay(); });
 
 // Set the button icons (Lucide SVGs).
 document.querySelector('#new-session-folder .ic').innerHTML = ICONS.plus;

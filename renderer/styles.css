@@ -622,6 +622,105 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .git-branch .git-track { color: var(--accent); letter-spacing: 0.02em; }
 .git-msg { color: var(--waiting); font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* Diff counter — sits next to the branch, same muted bar language. */
+.git-diff {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 0;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+.git-diff:hover { background: var(--panel-2); }
+.git-diff[hidden] { display: none; }
+.git-diff .d-add { color: var(--ready); }
+.git-diff .d-del { color: var(--danger); }
+.git-diff .d-add:empty, .git-diff .d-del:empty { display: none; }
+
+/* --- diff overlay --------------------------------------------------------- */
+.modal.diff {
+  width: min(1100px, 94vw);
+  height: min(760px, 88vh);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.diff-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 16px; border-bottom: 1px solid var(--border);
+}
+.diff-head .diff-title { color: var(--text); font-size: 14px; font-weight: 600; }
+.diff-head .diff-sum { font-family: var(--mono); font-size: 12px; }
+.diff-head .diff-sum .d-add { color: var(--ready); }
+.diff-head .diff-sum .d-del { color: var(--danger); margin-left: 6px; }
+.diff-head .diff-stale {
+  margin-left: auto; border: 1px solid var(--border); background: transparent;
+  color: var(--waiting); font-size: 11px; padding: 3px 8px; border-radius: 6px; cursor: pointer;
+}
+.diff-head .diff-stale[hidden] { display: none; }
+.diff-head .diff-close {
+  border: 0; background: transparent; color: var(--muted);
+  font-size: 16px; cursor: pointer; padding: 0 4px;
+}
+.diff-head .diff-close:hover { color: var(--text); }
+
+.diff-body { display: flex; flex: 1; min-height: 0; }
+.diff-tree {
+  width: 260px; flex: none; overflow: auto;
+  border-right: 1px solid var(--border); padding: 8px 0;
+}
+.diff-pane { flex: 1; min-width: 0; overflow: auto; }
+
+.diff-node { padding: 3px 10px; font-size: 12px; }
+.diff-node.dir { color: var(--muted); }
+.diff-file {
+  display: flex; align-items: baseline; gap: 6px; width: 100%;
+  border: 0; background: transparent; text-align: left; cursor: pointer;
+  padding: 3px 10px; font-size: 12px; color: var(--text); font-family: var(--mono);
+}
+.diff-file:hover { background: var(--panel-2); }
+.diff-file.active { background: var(--panel-2); color: var(--accent); }
+.diff-file .f-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-file .f-add { color: var(--ready); }
+.diff-file .f-del { color: var(--danger); }
+.diff-file .f-tag {
+  color: var(--muted); font-size: 10px; border: 1px solid var(--border);
+  border-radius: 4px; padding: 0 3px;
+}
+.diff-empty { color: var(--muted); font-size: 12px; padding: 16px; }
+
+.diff-hunk {
+  font-family: var(--mono); font-size: 11px;
+  color: var(--muted); background: var(--panel);
+  padding: 4px 10px; border-top: 1px solid var(--border);
+  position: sticky; top: 0;
+}
+.diff-line {
+  display: flex; font-family: var(--mono); font-size: 12px; line-height: 1.5;
+  white-space: pre; color: var(--text);
+}
+.diff-line .ln {
+  flex: none; width: 44px; text-align: right; padding-right: 8px;
+  color: var(--muted); user-select: none;
+}
+.diff-line .tx { flex: 1; min-width: 0; padding-right: 10px; }
+.diff-line.add { background: color-mix(in srgb, var(--ready) 14%, transparent); }
+.diff-line.del { background: color-mix(in srgb, var(--danger) 14%, transparent); }
+.diff-line.meta { color: var(--muted); font-style: italic; }
+.diff-more {
+  color: var(--muted); font-size: 11px; padding: 10px;
+  border-top: 1px solid var(--border);
+}
+.diff-open {
+  border: 1px solid var(--border); background: transparent; color: var(--text);
+  font-size: 11px; padding: 3px 8px; border-radius: 6px; cursor: pointer; margin-left: 8px;
+}
+.diff-open:hover { border-color: var(--accent); color: var(--accent); }
+
 /* --- settings: appearance tab -------------------------------------------- */
 .theme-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
 .theme-swatch {
