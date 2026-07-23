@@ -6,7 +6,7 @@
 // reads `d.lastDataAt`, `applyLatch` reads/mutates the latch fields on `d`, and
 // both take the current screen `snap` as a string.
 
-const { inferWaitingKind } = require('./screen');
+const { inferWaitingKind, asksForInput } = require('./screen');
 
 const ACTIVE_MS = 1200;      // bytes seen this recently => the agent is working
 // Once «ждёт» is latched we stop believing transient running/ready reads (repaint
@@ -40,13 +40,10 @@ const RE_WAIT_NOW = /Esc to cancel|Enter to confirm|[❯>→➜▸►▶]\s*\d+\
 const RE_RUNNING = /(?:…|\.\.\.)\s*\(\d+\s*[smh]\b|\besc to interrupt\b/i;
 
 // Waiting on me WITHOUT prompt chrome: the agent asked in prose and stopped. The
-// task skills close every such message with the line «Сейчас от тебя: …» (see
-// fastio CLAUDE.md), so that phrase — not a glyph — is the marker. Without this
-// the tab paints «готов», identical to a tab that simply finished, and a question
-// can sit unseen in a background tab.
-// Checked LAST, only on the path that would otherwise return «готов»: a stale
-// marker still on screen must never outvote real activity or the spinner.
-const RE_WAIT_ASK = /Сейчас от тебя/i;
+// task skills close such a message with «Сейчас от тебя: …» (see fastio CLAUDE.md),
+// so that phrase — not a glyph — is the marker. screen.js's asksForInput owns it
+// (and excludes the «ничего, жди» non-requests). Checked LAST, only on the path
+// that would otherwise return «готов»: a stale marker must never outvote the spinner.
 
 function mkWaiting(snap) {
   return { status: 'waiting', detail: 'ждёт ответа', kind: inferWaitingKind(snap) };
@@ -76,8 +73,9 @@ function decide(d, now, snap) {
   if (RE_RUNNING.test(snap)) {
     return { status: 'running', detail: 'работает' };
   }
-  // Quiet, no spinner, no prompt box — but the agent signed off with a question.
-  if (RE_WAIT_ASK.test(snap)) {
+  // Quiet, no spinner, no prompt box — but the agent signed off asking for input.
+  // asksForInput excludes «Сейчас от тебя: ничего, жди …» (not a real request).
+  if (asksForInput(snap)) {
     return mkWaiting(snap);
   }
 
@@ -87,7 +85,7 @@ function decide(d, now, snap) {
 // Any on-screen evidence that we're still waiting on the user. When NONE of these
 // match, the prompt/question is gone from the visible screen.
 function hasWaitChrome(snap) {
-  return RE_WAIT.test(snap) || RE_WAIT_NOW.test(snap) || RE_WAIT_ASK.test(snap);
+  return RE_WAIT.test(snap) || RE_WAIT_NOW.test(snap) || asksForInput(snap);
 }
 
 // The latch: `raw` is decide()'s per-tick read; this holds «ждёт» through screen
@@ -155,7 +153,7 @@ function detailFor(status) {
 // тебя» sits on screen). It never overrides running / ready / permission.
 function arbitrate(d, snap) {
   const hs = d.hookState || { status: 'ready', kind: null };
-  if (hs.status === 'ready' && RE_WAIT_ASK.test(snap)) {
+  if (hs.status === 'ready' && asksForInput(snap)) {
     return { status: 'waiting', detail: 'ждёт ответа', kind: 'question' };
   }
   return { status: hs.status, detail: detailFor(hs.status), kind: hs.status === 'waiting' ? hs.kind : null };
@@ -170,7 +168,7 @@ function tickStatus(d, now, snap) {
 
 module.exports = {
   ACTIVE_MS, LATCH_RELEASE_MS,
-  RE_WAIT, RE_WAIT_NOW, RE_RUNNING, RE_WAIT_ASK,
+  RE_WAIT, RE_WAIT_NOW, RE_RUNNING,
   decide, hasWaitChrome, applyLatch,
   applyHook, arbitrate, tickStatus,
 };

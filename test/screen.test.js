@@ -99,6 +99,24 @@ test('«Сейчас от тебя» prose question → question', () => {
   assert.strictEqual(S.inferWaitingKind('Сейчас от тебя: путь к схеме'), 'question');
 });
 
+test('«Сейчас от тебя: ничего, жди …» is NOT a request', () => {
+  assert.strictEqual(S.asksForInput('Сейчас от тебя: ничего, жди результата ревью'), false);
+  assert.strictEqual(S.asksForInput('Сейчас от тебя — ничего не нужно'), false);
+  assert.strictEqual(S.asksForInput('Сейчас от тебя: подожди, пока соберётся билд'), false);
+  assert.strictEqual(S.asksForInput('Сейчас от тебя: жди'), false);
+});
+
+test('«Сейчас от тебя: <настоящий запрос>» IS a request', () => {
+  assert.strictEqual(S.asksForInput('Сейчас от тебя: путь к схеме'), true);
+  assert.strictEqual(S.asksForInput('Сейчас от тебя: подтверди, ничего не удаляй'), true);
+  assert.strictEqual(S.asksForInput('обычный вывод без маркера'), false);
+});
+
+test('a «ничего, жди» sign-off does NOT classify as question via the marker', () => {
+  // extractQuestion may still pick the line, but the ask-marker path must not fire.
+  assert.strictEqual(S.asksForInput('Сейчас от тебя: ничего, жди результата ревью'), false);
+});
+
 test('a bare prose question line → question', () => {
   assert.strictEqual(S.inferWaitingKind(['│ Какой выбрать вариант? │', 'model │ ~/p │ ██░ 40%'].join('\n')), 'question');
 });

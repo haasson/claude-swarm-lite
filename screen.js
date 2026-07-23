@@ -47,7 +47,18 @@ const PERMISSION_RE = /No, and tell Claude|Do you want\b/i;
 // detector's RE_WAIT_NOW option pattern; used here to spot an AskUserQuestion list.
 // Not anchored — we scan the whole snapshot, not one line.
 const OPTIONS_RE = /[❯>→➜▸►▶]\s*\d+\.\s/;
-const RE_ASK = /Сейчас от тебя/i;
+// «Сейчас от тебя: …» closes a turn saying what the user must do — but ONLY when it
+// actually asks for something. "Сейчас от тебя: ничего, жди результата" is the
+// opposite: the agent says nothing is needed. So the marker alone isn't enough —
+// if the first word after it is a nothing/wait word, it's NOT a request.
+const RE_ASK_MARK = /Сейчас от тебя/i;
+const RE_ASK_NONE = /Сейчас от тебя\s*[:.—-]*\s*(?:ничего|жд[иёе]|ждать|ждите|подожди(?:те)?|дождись|дождитесь|не\s+(?:нужно|требуется|надо))/i;
+
+// True only for a REAL «Сейчас от тебя» request (marker present, not a «ничего/жди»).
+function asksForInput(snapshot) {
+  const t = String(snapshot == null ? '' : snapshot);
+  return RE_ASK_MARK.test(t) && !RE_ASK_NONE.test(t);
+}
 
 // WHY a waiting agent is calling — for the pult chip, tab sub-label and notify.
 // Only sensible once status is already «waiting». Returns:
@@ -61,7 +72,7 @@ function inferWaitingKind(snapshot) {
   const text = String(snapshot == null ? '' : snapshot);
   if (PERMISSION_RE.test(text)) return 'permission';
   if (OPTIONS_RE.test(text)) return 'question';
-  if (RE_ASK.test(text)) return 'question';
+  if (asksForInput(text)) return 'question';
   if (extractQuestion(text)) return 'question';
   return null;
 }
@@ -91,4 +102,4 @@ function countSubagents(snapshot) {
   return rows;
 }
 
-module.exports = { extractQuestion, inferWaitingKind, countSubagents };
+module.exports = { extractQuestion, inferWaitingKind, asksForInput, countSubagents };

@@ -56,6 +56,17 @@ test('decide: quiet empty screen → ready', () => {
   assert.strictEqual(D.decide(mkD(), NOW, QUIET).status, 'ready');
 });
 
+test('decide: «Сейчас от тебя: ничего, жди …» stays ready (not a false «ждёт»)', () => {
+  const r = D.decide(mkD(), NOW, 'Сейчас от тебя: ничего, жди результата ревью');
+  assert.strictEqual(r.status, 'ready');
+});
+
+test('arbitrate: a hook «ready» is NOT upgraded by a «ничего, жди» sign-off', () => {
+  const d = mkD();
+  D.applyHook(d, 'idle', NOW);
+  assert.strictEqual(D.tickStatus(d, NOW, 'Сейчас от тебя: ничего, жди').status, 'ready');
+});
+
 // --- applyLatch: hold «ждёт» through noise ----------------------------------
 
 test('latch: engages when raw goes waiting', () => {
