@@ -293,6 +293,12 @@ setInterval(() => {
   const now = Date.now();
   for (const [id, d] of det) {
     if (d.dead) continue;
+    // Mid-resize the screen is repainting and unreliable: a half-drawn prompt box
+    // reads as «готов» and would flip a waiting tab green until the next settled
+    // tick. That's the "collapse a folder → waiting tab turns green" bug — a
+    // collapse resizes the active terminal. Hold the last status through the
+    // repaint burst (same grace window feedDetector uses to ignore the bytes).
+    if (now < d.graceUntil) continue;
     try {
       const next = decide(d, now);
       const snap = snapshot(d);
