@@ -60,9 +60,11 @@
   <!-- Quick-commands popover (populated from JS, anchored to the burger button). -->
   <div id="cmd-menu" class="cmd-menu hidden"></div>
 
-  <!-- xterm core + fit addon (UMD globals: Terminal, FitAddon.FitAddon) -->
+  <!-- xterm core + fit + web-links addons
+       (UMD globals: Terminal, FitAddon.FitAddon, WebLinksAddon.WebLinksAddon) -->
   <script src="./vendor/xterm.js"></script>
   <script src="./vendor/addon-fit.js"></script>
+  <script src="./vendor/addon-web-links.js"></script>
   <!-- Terminal theme presets + appearance helpers (window.SWARM_THEMES). Must
        load before renderer.js, which reads it in makeXterm/applyAppearance. -->
   <script src="./themes.js"></script>

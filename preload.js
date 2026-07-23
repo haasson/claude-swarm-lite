@@ -80,6 +80,10 @@ contextBridge.exposeInMainWorld('swarm', {
   // Used for ⌘C so a terminal/modal selection with Cyrillic doesn't get mangled.
   clipboardWrite: (text) => ipcRenderer.send('clipboard:write', text),
 
+  // Open a clicked terminal link in the default browser. Main validates the
+  // scheme (http/https only) before handing it to the OS.
+  openExternal: (url) => ipcRenderer.send('shell:openExternal', url),
+
   // Native Edit → Copy (⌘C) asks the renderer to copy the current selection.
   onMenuCopy: (cb) => {
     const handler = () => cb();

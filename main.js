@@ -18,7 +18,7 @@
 //   just type `claude` into it. Bonus: auth "just works" because it's the same
 //   environment you log in from.
 
-const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeImage, shell } = require('electron');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
@@ -537,6 +537,16 @@ ipcMain.on('app:focus', () => {
 // UTF-8 bytes on the board tagged as MacRoman, so Cyrillic pasted as mojibake.
 ipcMain.on('clipboard:write', (_event, text) => {
   try { clipboard.writeText(String(text == null ? '' : text)); } catch (_) {}
+});
+
+// Open a URL in the user's default browser (terminal link clicks). We only hand
+// http(s) to the OS — anything else (file:, javascript:, custom schemes) is
+// dropped so a rogue link in pty output can't launch arbitrary handlers.
+ipcMain.on('shell:openExternal', (_event, url) => {
+  try {
+    const u = new URL(String(url));
+    if (u.protocol === 'http:' || u.protocol === 'https:') shell.openExternal(u.href);
+  } catch (_) {}
 });
 
 // --- IPC: auto-update ---------------------------------------------------------

@@ -328,6 +328,32 @@ window.swarm.onExit(({ id }) => {
   s.term.write('\r\n\x1b[2m[session ended — close the tab]\x1b[0m\r\n');
 });
 
+// Terminal links open only on modifier-click (like VS Code / editors), so a
+// stray click while reading never yanks you to the browser. macOS uses ⌘, the
+// rest use Ctrl. The hover tooltip spells this out.
+const LINK_MOD = window.swarm.platform === 'darwin' ? 'metaKey' : 'ctrlKey';
+const LINK_HINT = window.swarm.platform === 'darwin'
+  ? '⌘+клик — открыть ссылку'
+  : 'Ctrl+клик — открыть ссылку';
+
+// One reused tooltip element, positioned once where the cursor enters a link
+// (the addon fires `hover` on entry, not per mouse-move).
+let linkTip = null;
+function showLinkTip(event) {
+  if (!linkTip) {
+    linkTip = document.createElement('div');
+    linkTip.className = 'link-tip';
+    linkTip.textContent = LINK_HINT;
+    document.body.appendChild(linkTip);
+  }
+  linkTip.style.left = event.clientX + 'px';
+  linkTip.style.top = (event.clientY - 8) + 'px';
+  linkTip.classList.add('show');
+}
+function hideLinkTip() {
+  if (linkTip) linkTip.classList.remove('show');
+}
+
 function makeXterm() {
   const term = new Terminal({
     cursorBlink: appearance.cursorBlink,
@@ -340,6 +366,23 @@ function makeXterm() {
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
+  // Make http(s) links in the pty output open in the default browser — but only
+  // on modifier-click (⌘ / Ctrl), with a hover tooltip explaining the shortcut.
+  // Main validates the scheme before handing it to the OS. Guarded so a missing
+  // addon (e.g. stale vendor bundle) never breaks terminal creation.
+  const WebLinks = window.WebLinksAddon && window.WebLinksAddon.WebLinksAddon;
+  if (WebLinks) {
+    try {
+      const activate = (event, uri) => {
+        hideLinkTip();
+        if (event && event[LINK_MOD]) window.swarm.openExternal(uri);
+      };
+      term.loadAddon(new WebLinks(activate, {
+        hover: (event) => showLinkTip(event),
+        leave: () => hideLinkTip(),
+      }));
+    } catch (_) {}
+  }
   return { term, fit };
 }
 
@@ -1236,6 +1279,10 @@ function showSettingsModal(tab) {
 function activate(id) {
   const s = sessions.get(id);
   if (!s) return;
+  // A link tooltip lives on document.body, not the terminal holder, so a
+  // keyboard tab-switch with the mouse still over a link never fires the addon's
+  // `leave` — drop any stale tip so it doesn't float over the new terminal.
+  hideLinkTip();
   // Switching focus makes both the old and new terminals repaint — grace all
   // detectors so that burst isn't read as activity (would flash "работает").
   window.swarm.uiRepaint();
@@ -1255,6 +1302,7 @@ function closeSession(id) {
   const s = sessions.get(id);
   if (!s) return;
   if (s.runTimer) { clearTimeout(s.runTimer); s.runTimer = null; }
+  hideLinkTip();
   window.swarm.killSession(id);
   s.term.dispose();
   s.holder.remove();

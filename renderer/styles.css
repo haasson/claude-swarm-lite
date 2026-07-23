@@ -705,3 +705,24 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .set-check-btn:hover { border-color: var(--accent); color: var(--accent); }
 .upd-go-btn { margin-top: 10px; border-color: var(--accent); color: var(--accent); }
 .upd-status { margin-top: 8px; }
+
+/* Hover hint over a terminal link: "⌘/Ctrl+клик — открыть ссылку". Positioned in
+   JS where the cursor enters the link, anchored bottom-left so it sits above. */
+.link-tip {
+  position: fixed;
+  z-index: 200;
+  transform: translateY(-100%);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 90ms ease;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: var(--mono);
+  white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+.link-tip.show { opacity: 1; }
