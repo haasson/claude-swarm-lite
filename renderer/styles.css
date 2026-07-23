@@ -256,7 +256,7 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
    (rail) or at the end of the card row (top). Everything else moved to the bar. */
 #chrome-actions { display: flex; -webkit-app-region: no-drag; }
 .layout-rail #chrome-actions { flex-direction: column; padding: 4px 8px 8px; }
-.layout-top  #chrome-actions { align-items: center; padding: 0 10px 0 4px; }
+.layout-top  #chrome-actions { align-items: center; padding: 0 8px 0 4px; }
 #new-session-folder {
   -webkit-app-region: no-drag;
   display: inline-flex;
@@ -272,7 +272,11 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   white-space: nowrap;
   padding: 9px 10px;
 }
-.layout-top #new-session-folder { padding: 8px 12px; }
+/* В top-раскладке кнопка съедала ~140px горизонтали ради текста, который
+   дублируется тултипом. Оставляем иконку: ⌘O работает, у каждой группы есть
+   свой «+» (.group-add). В rail текст остаётся — там она под списком, место есть. */
+.layout-top #new-session-folder { padding: 8px; }
+.layout-top #new-session-folder .tx { display: none; }
 #new-session-folder:hover { color: var(--text); border-color: var(--accent); }
 #new-session-folder .ic { color: var(--accent); display: inline-flex; align-items: center; }
 #new-session-folder .ic svg { width: 15px; height: 15px; }
