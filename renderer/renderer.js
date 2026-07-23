@@ -233,6 +233,14 @@ function setFolderLabel(el, name) {
 /** id -> { term, fit, holder, tab, alive, status, idleTimer } */
 const sessions = new Map();
 let activeId = null;
+// --- pult --------------------------------------------------------------------
+// A pinned tab (⌘0) that lists every agent waiting on an answer and shows the
+// live terminal of the picked one. Not a session: it has no pty. See
+// docs/superpowers/specs/2026-07-15-pult-design.md.
+let pultEnabled = localStorage.getItem('swarm.pult') !== '0'; // Settings → Вид
+let pultOn = false;      // pult mode active right now
+let pultPick = null;     // id of the agent whose terminal the pult shows
+let pultTimer = null;    // 1s tick, only while pultOn — chips show a live timer
 let renaming = false;       // true while a card title is being edited (don't steal focus)
 let notifyEnabled = true;   // master switch: system notifications for background agents
 // Finer notification prefs (all default on), editable in Settings → Уведомления.
@@ -261,6 +269,9 @@ function setStatus(id, status, detail) {
     s.tab.classList.remove('status-ready', 'status-running', 'status-waiting', 'status-dead');
     s.tab.classList.add('status-' + status);
     if (s.sumDot) s.sumDot.className = 'sum-dot status-' + status; // collapsed-group dot
+    // Queue order + chip timer in the pult: when this agent started waiting.
+    s.waitingSince = status === 'waiting' ? Date.now() : null;
+    renderPult();
   }
   if (detail != null) {
     const sub = s.tab.querySelector('.sub');
@@ -277,11 +288,12 @@ window.swarm.onData(({ id, data }) => {
 // Inferred status from main (running / ready / waiting + detail + statusline).
 const RUN_BUFFER_MS = 2500; // delay painting "работает" so sub-buffer blips never show
 
-window.swarm.onStatus(({ id, status, detail, statusline }) => {
+window.swarm.onStatus(({ id, status, detail, statusline, question }) => {
   const s = sessions.get(id);
   if (!s || !s.alive) return;
 
   if (statusline != null) { s.statusline = statusline; updateCtx(s); }
+  if (question !== s.question) { s.question = question; renderPult(); }
 
   if (status === 'running') {
     if (s.runningSince == null) s.runningSince = Date.now(); // real start of this run
@@ -872,6 +884,12 @@ function showSettingsModal(tab) {
           <span class="set-label">Предпросмотр</span>
           <div class="term-preview" id="set-term-preview"></div>
         </div>
+        <div class="set-sep"></div>
+        <label class="set-check">
+          <input type="checkbox" id="set-pult" />
+          <span class="set-check-tx">Показывать пульт
+            <span class="set-check-sub">вкладка ⌘0 с очередью агентов, которые ждут ответа</span></span>
+        </label>
       </div>
 
       <div class="set-panel" data-panel="keys">
@@ -900,6 +918,8 @@ function showSettingsModal(tab) {
   const pickFieldEl = overlay.querySelector('#set-pick-field');
   const resumeI = overlay.querySelector('#set-resume');
   resumeI.checked = resumeSessions;
+  const pultI = overlay.querySelector('#set-pult');
+  pultI.checked = pultEnabled;
 
   // The pick-mode choice only matters with more than one command — hide otherwise.
   const countAgents = () => [...agentListEl.querySelectorAll('.agent-cmd')]
@@ -1201,6 +1221,10 @@ function showSettingsModal(tab) {
     saveLaunchPick();
     resumeSessions = resumeI.checked;
     saveResumeSessions();
+    pultEnabled = pultI.checked;
+    localStorage.setItem('swarm.pult', pultEnabled ? '1' : '0');
+    if (!pultEnabled) setPult(false); // no restart needed
+    relayoutTabs();                   // adds or drops the Пульт tab
     notifyOnReady = readyI.checked;
     notifyOnWaiting = waitingI.checked;
     notifyActive = activeI.checked;
@@ -1233,9 +1257,12 @@ function showSettingsModal(tab) {
   });
 }
 
-function activate(id) {
+// opts.pult: called from the pult picking a chip — stay in pult mode. Without
+// it (a click on an agent's own tab, ⌘1–⌘9) pult mode turns off.
+function activate(id, opts) {
   const s = sessions.get(id);
   if (!s) return;
+  if (!(opts && opts.pult) && pultOn) setPult(false);
   // Switching focus makes both the old and new terminals repaint — grace all
   // detectors so that burst isn't read as activity (would flash "работает").
   window.swarm.uiRepaint();
@@ -1244,7 +1271,8 @@ function activate(id) {
     other.tab.classList.remove('active');
   }
   s.holder.classList.add('active');
-  s.tab.classList.add('active');
+  // In pult mode the highlighted tab is the Пульт, not the agent you're reading.
+  if (!pultOn) s.tab.classList.add('active');
   activeId = id;
   // Refit now that the holder is visible (fit on a hidden element is a no-op).
   requestAnimationFrame(() => { s.fit.fit(); if (!renaming) s.term.focus(); });
@@ -1332,9 +1360,103 @@ function defaultName(folderName) {
 // Rebuild the sidebar, grouping sessions by working folder. A folder with one
 // session shows the folder on the card; 2+ get boxed under a folder header.
 // Existing tab elements are re-appended (listeners preserved).
+// Everyone waiting on an answer, longest wait first. Tab/folder order is
+// deliberately ignored: the queue is about who's been stuck longest.
+function pultQueue() {
+  return [...sessions.values()]
+    .filter((s) => s.alive && s.status === 'waiting')
+    .sort((a, b) => (a.waitingSince || 0) - (b.waitingSince || 0));
+}
+
+function fmtWait(ms) {
+  const sec = Math.max(0, Math.floor(ms / 1000));
+  return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0');
+}
+
+// Repaint the strip + advance the queue. Safe to call any time: a no-op unless
+// pult mode is on.
+function renderPult() {
+  const countEl = tabsEl.querySelector('.pult-count');
+  const q = pultQueue();
+  if (countEl) { countEl.textContent = q.length; countEl.hidden = q.length === 0; }
+  if (!pultOn) return;
+
+  document.body.classList.toggle('pult-empty', q.length === 0);
+  // Hold the current pick while it's still waiting; otherwise take the head.
+  // This is what makes the queue advance on its own once you've answered.
+  if (!q.some((s) => s.id === pultPick)) pultPick = q.length ? q[0].id : null;
+  if (pultPick && pultPick !== activeId) activate(pultPick, { pult: true });
+
+  const strip = document.getElementById('pult-strip');
+  strip.innerHTML = '';
+  const now = Date.now();
+  for (const s of q) {
+    const chip = document.createElement('div');
+    chip.className = 'pult-chip' + (s.id === pultPick ? ' picked' : '');
+    const name = s.tab.querySelector('.label').textContent;
+
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    const nm = document.createElement('span');
+    nm.className = 'pult-name';
+    nm.textContent = name;
+    const tm = document.createElement('span');
+    tm.className = 'pult-time';
+    tm.textContent = fmtWait(now - (s.waitingSince || now));
+    chip.append(dot, nm, tm);
+
+    // Best effort — main sends null when the screen didn't parse. Then the chip
+    // is just name + timer, which still works.
+    if (s.question) {
+      const q1 = document.createElement('span');
+      q1.className = 'pult-q';
+      q1.textContent = s.question;
+      chip.appendChild(q1);
+      chip.title = s.question;
+    }
+    chip.addEventListener('click', () => { pultPick = s.id; renderPult(); });
+    strip.appendChild(chip);
+  }
+}
+
+function refitActive() {
+  const s = sessions.get(activeId);
+  if (s) requestAnimationFrame(() => s.fit.fit());
+}
+
+function setPult(on) {
+  const next = on && pultEnabled;
+  pultOn = next;
+  document.body.classList.toggle('pult-on', next);
+  if (pultTimer) { clearInterval(pultTimer); pultTimer = null; }
+  if (next) {
+    pultTimer = setInterval(renderPult, 1000); // chips tick; only while open
+    renderPult();
+  } else {
+    document.body.classList.remove('pult-empty');
+  }
+  const t = tabsEl.querySelector('.pult-tab');
+  if (t) t.classList.toggle('active', next);
+  // The strip changes .term-holder's inset, so the grid must be recomputed.
+  refitActive();
+}
+
 function relayoutTabs() {
   for (const s of sessions.values()) s.sumDot = null; // reset; reassigned for collapsed groups
   tabsEl.innerHTML = '';
+  // The stage is never :empty any more (the pult strip lives in it), so the
+  // "no sessions" hint keys off this class instead.
+  document.body.classList.toggle('no-sessions', sessions.size === 0);
+  if (pultEnabled) {
+    const pt = document.createElement('div');
+    pt.className = 'pult-tab' + (pultOn ? ' active' : '');
+    pt.title = 'Пульт — кто ждёт ответа (⌘0)';
+    pt.innerHTML = '<span class="pult-name">Пульт</span>'
+      + '<span class="pult-count" hidden>0</span>'
+      + '<span class="pult-key">⌘0</span>';
+    pt.addEventListener('click', () => setPult(true));
+    tabsEl.appendChild(pt);
+  }
   // Every working folder is a group (with a header) — even with a single tab.
   for (const { cwd, list } of orderedUnits()) {
     const folderName = cwd ? basename(cwd) : 'claude';
@@ -1388,6 +1510,7 @@ function relayoutTabs() {
     grp.append(head, inner);
     tabsEl.appendChild(grp);
   }
+  renderPult(); // the chip count lives on the freshly rebuilt Пульт tab
 }
 
 // --- drag & drop: live reflow (dragged item leaves a faint slot; others move) -
@@ -1949,9 +2072,14 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'o') { e.preventDefault(); createSessionInFolder(); }
   else if (e.key === 'k') { e.preventDefault(); toggleCmdMenu(); }
   else if (e.key === ',') { e.preventDefault(); showSettingsModal(); }
-  else if (e.key === 'w' && activeId) { e.preventDefault(); requestCloseSession(activeId); }
+  // Always preventDefault: in pult mode activeId is an agent you're merely
+  // reading, so ⌘W must not close it — but it must not reach Electron and close
+  // the window either.
+  else if (e.key === 'w') { e.preventDefault(); if (activeId && !pultOn) requestCloseSession(activeId); }
   else if (e.key === 'l') { e.preventDefault(); toggleLayout(); }
+  else if (e.key === '0') { e.preventDefault(); if (pultEnabled) setPult(true); }
   else if (/^[1-9]$/.test(e.key)) {
+    // Unchanged: the pult took ⌘0, so agent digits never shift.
     const idx = Number(e.key) - 1;
     const id = [...sessions.keys()][idx];
     if (id) { e.preventDefault(); activate(id); }

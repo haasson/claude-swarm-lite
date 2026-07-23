@@ -576,7 +576,9 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .xterm-viewport::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
 .xterm-viewport::-webkit-scrollbar-thumb:hover { background: #2f3742; }
 
-#stage:empty::after {
+/* Was #stage:empty — the pult strip lives inside the stage now, so :empty never
+   matches. relayoutTabs() toggles .no-sessions instead. */
+body.no-sessions #stage::after {
   content: "no sessions — press  + new session";
   position: absolute;
   inset: 0;
@@ -704,4 +706,93 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 }
 .set-check-btn:hover { border-color: var(--accent); color: var(--accent); }
 .upd-go-btn { margin-top: 10px; border-color: var(--accent); color: var(--accent); }
+
+/* Visible break in the "Вид" panel: its intro promises terminal styling, but the
+   pult toggle is about window structure. */
+.set-sep { height: 1px; margin: 4px 0 2px; background: var(--border); }
+
+/* --- pult: queue strip over the stage ------------------------------------- */
+#pult-strip {
+  position: absolute;
+  inset: 0 0 auto 0;
+  z-index: 2;
+  height: 34px;
+  display: none;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+body.pult-on #pult-strip { display: flex; }
+/* Push the terminal below the strip. Keeps the 6px inset of .term-holder. */
+body.pult-on .term-holder { inset: 40px 6px 6px; }
+/* Nobody waiting: hide the terminal, show the note. Beats .term-holder.active
+   on specificity, so no !important. */
+body.pult-on.pult-empty .term-holder.active { display: none; }
+
+#pult-empty {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+body.pult-on.pult-empty #pult-empty { display: flex; }
+
+.pult-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  font-size: 11px;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pult-chip:hover { border-color: var(--accent); }
+.pult-chip.picked { border-color: var(--accent); background: var(--panel); }
+.pult-chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--waiting); flex: none; }
+.pult-chip .pult-name { font-weight: 600; }
+.pult-chip .pult-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.pult-chip .pult-q { color: var(--muted); max-width: 26ch; overflow: hidden; text-overflow: ellipsis; }
+
+/* Pinned first in #tabs, above every folder group. Not a .tab — that class is a
+   grid with dot/label/ctx/sub slots this doesn't have. */
+.pult-tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.pult-tab:hover { border-color: var(--accent); }
+.pult-tab.active { border-color: var(--accent); background: var(--panel); }
+.pult-tab .pult-key { margin-left: auto; color: var(--muted); font-size: 10px; font-weight: 400; }
+.pult-tab .pult-count {
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--waiting);
+  color: #101418;
+  font-size: 10px;
+  text-align: center;
+}
+.pult-tab .pult-count[hidden] { display: none; }
 .upd-status { margin-top: 8px; }
