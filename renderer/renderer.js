@@ -303,6 +303,7 @@ function setStatus(id, status, detail) {
   const s = sessions.get(id);
   if (!s) return;
   if (status && s.status !== status) {
+    if (STATUS_DEBUG) console.debug('[status] paint', statusName(s), s.status, '→', status, '| raw:', s.rawStatus, 'agentOrange:', tabstyle.show.agentOrange, 'sub:', s.sub);
     s.status = status;
     s.tab.classList.remove('status-ready', 'status-running', 'status-waiting', 'status-dead');
     s.tab.classList.add('status-' + status);
@@ -326,9 +327,26 @@ window.swarm.onData(({ id, data }) => {
 // Inferred status from main (running / ready / waiting + detail + statusline).
 const RUN_BUFFER_MS = 2500; // delay painting "работает" so sub-buffer blips never show
 
+// Диагностика перекраса вкладок: включить в devtools-консоли `swarmStatusDebug(true)`
+// (сохраняется в localStorage). Логирует и входящий поток статусов из main, и
+// каждый фактический перекрас — чтобы поймать, что держит вкладку «зелёной».
+let STATUS_DEBUG = false;
+try { STATUS_DEBUG = localStorage.getItem('swarm.statusDebug') === '1'; } catch (_) {}
+window.swarmStatusDebug = (on) => {
+  STATUS_DEBUG = !!on;
+  try { localStorage.setItem('swarm.statusDebug', on ? '1' : '0'); } catch (_) {}
+  console.info('[status] debug', STATUS_DEBUG ? 'ON' : 'OFF');
+};
+function statusName(s) {
+  const el = s.tab && s.tab.querySelector('.label');
+  return (el && el.textContent) || s.id;
+}
+
 window.swarm.onStatus(({ id, status, detail, statusline, question, sub }) => {
   const s = sessions.get(id);
   if (!s || !s.alive) return;
+
+  if (STATUS_DEBUG) console.debug('[status] ← main', statusName(s), 'raw:', status, 'detail:', detail, 'shown:', s.status);
 
   if (statusline != null) { s.statusline = statusline; updateCtx(s); }
   if (question !== s.question) { s.question = question; renderPult(); }
@@ -359,6 +377,23 @@ function effectiveStatus(s) {
 // only on real IPC transitions (opts.notify), never on a settings re-apply.
 function applyStatus(s, opts) {
   const eff = effectiveStatus(s);
+
+  // Уход из waiting дебаунсим: короткий блик в ready/running, пока читаешь вопрос,
+  // не должен выкидывать сессию из очереди Пульта и перематывать выбор. Возврат в
+  // waiting отменяет отложенный уход — waitingSince сохраняется, порядок стабилен.
+  // (Это НЕ лечит долгий перекрас из main — только стабилизирует очередь.)
+  if (eff.status === 'waiting') {
+    if (s.leaveWaitTimer) { clearTimeout(s.leaveWaitTimer); s.leaveWaitTimer = null; }
+  } else if (s.status === 'waiting' && !(opts && opts.leaveWait)) {
+    if (!s.leaveWaitTimer) {
+      s.leaveWaitTimer = setTimeout(() => {
+        s.leaveWaitTimer = null;
+        if (s.alive) applyStatus(s, { leaveWait: true, notify: true });
+      }, RUN_BUFFER_MS);
+    }
+    return; // держим waiting, вкладку не трогаем
+  }
+
   if (eff.status === 'running') {
     if (s.runningSince == null) s.runningSince = Date.now(); // real start of this run
     if (s.status !== 'running' && !s.runTimer) {
@@ -409,6 +444,7 @@ window.swarm.onExit(({ id }) => {
   if (!s) return;
   s.alive = false;
   if (s.runTimer) { clearTimeout(s.runTimer); s.runTimer = null; }
+  if (s.leaveWaitTimer) { clearTimeout(s.leaveWaitTimer); s.leaveWaitTimer = null; }
   setStatus(id, 'dead', 'завершён');
   // Claude/the shell has exited. Leave the pane so output stays readable.
   s.term.write('\r\n\x1b[2m[session ended — close the tab]\x1b[0m\r\n');
@@ -1063,7 +1099,7 @@ function showSettingsModal(tab) {
         </label>
         <label class="set-check">
           <input type="checkbox" id="set-tab-ctx" />
-          <span class="set-check-tx">Метр контекста<span class="set-check-sub">Полоска и процент заполнения контекста Claude</span></span>
+          <span class="set-check-tx">Метр контекста<span class="set-check-sub">тонкая полоска заполнения контекста Claude по нижнему краю карточки</span></span>
         </label>
         <label class="set-check">
           <input type="checkbox" id="set-tab-sub" />
@@ -1310,14 +1346,23 @@ function showSettingsModal(tab) {
     layoutSel.appendChild(o);
   });
   layoutSel.value = currentLayout();
-  layoutSel.addEventListener('change', () => applyLayout(layoutSel.value));
+  // Смена раскладки применяется сразу и тут же перерисовывает предпросмотр —
+  // превью строится по currentLayout(), поэтому должно переключиться вживую.
+  layoutSel.addEventListener('change', () => { applyLayout(layoutSel.value); renderTabPreview(); });
 
   Object.keys(showInputs).forEach((k) => { showInputs[k].checked = tabDraft.show[k]; });
 
   // Two sample cards cover the whole surface: an active/running one (accent ring
   // + run fill) and an idle one. Written once — renderTabPreview only restyles.
+  // Превью 1:1 с боем: та же разметка, что строит createSession/relayoutTabs —
+  // включая вкладку Пульта с каунтером и угловой крестик. Ширина/высота ведут
+  // себя как реальные (см. renderTabPreview: класс раскладки берётся из боя).
   tabPreviewEl.innerHTML =
-    `<div class="tab active status-running">
+    `<div class="pult-tab">
+       <span class="pult-name">Пульт</span>
+       <span class="pult-count">2</span>
+     </div>
+     <div class="tab active status-running">
        <span class="dot"></span>
        <span class="body">
          <span class="label">api</span>
@@ -1327,6 +1372,7 @@ function showSettingsModal(tab) {
            <span class="agents">${ICONS.agents}<span class="agents-num">3</span></span>
          </span>
        </span>
+       <span class="close" title="Close">×</span>
      </div>
      <div class="tab status-ready">
        <span class="dot"></span>
@@ -1337,14 +1383,15 @@ function showSettingsModal(tab) {
            <span class="sub">готов</span>
          </span>
        </span>
+       <span class="close" title="Close">×</span>
      </div>`;
 
   function renderTabPreview() {
     const vars = TABSTYLE.toCssVars(tabDraft);
     for (const k of Object.keys(vars)) tabPreviewEl.style.setProperty(k, vars[k]);
-    // layout-top pins the card look regardless of the app's current layout —
-    // .layout-top .tab is what gives a tab its border/background.
-    tabPreviewEl.className = 'tab-preview layout-top ' + TABSTYLE.bodyClasses(tabDraft).join(' ');
+    // Раскладка превью = фактическая раскладка приложения (top/rail), чтобы
+    // предпросмотр совпадал с тем, что клиент увидит в бою.
+    tabPreviewEl.className = 'tab-preview ' + currentLayout() + ' ' + TABSTYLE.bodyClasses(tabDraft).join(' ');
     tabLabelVal.textContent = tabDraft.labelSize;
     tabSubVal.textContent = tabDraft.subSize;
   }
@@ -1642,6 +1689,7 @@ function closeSession(id) {
   // old folder's files and querying difftext with a dead cwd.
   if (activeId === id) closeDiffOverlay();
   if (s.runTimer) { clearTimeout(s.runTimer); s.runTimer = null; }
+  if (s.leaveWaitTimer) { clearTimeout(s.leaveWaitTimer); s.leaveWaitTimer = null; }
   hideLinkTip();
   window.swarm.killSession(id);
   s.term.dispose();

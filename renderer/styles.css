@@ -188,6 +188,7 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 
 /* --- a session entry (name + status + optional folder) -------------------- */
 .tab {
+  position: relative; /* anchors the ctx underline + the corner close badge */
   display: flex;
   align-items: flex-start;
   gap: var(--tab-gap);
@@ -198,16 +199,18 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   padding: var(--tab-pad-y) var(--tab-pad-x);
 }
 .layout-top .tab {
+  /* Жёсткая ширина: карточка не «дышит» под контент (бейджи/каунтер/имя).
+     Длинное имя обрезается многоточием — см. .tab .label. */
   flex: 0 0 auto;
-  width: auto;
-  min-width: var(--tab-min-w);
-  max-width: var(--tab-max-w);
+  width: var(--tab-min-w);
   background: var(--panel-2);
   border: 1px solid var(--border);
 }
 .tab .dot { width: var(--tab-dot-size); height: var(--tab-dot-size); border-radius: 50%; background: var(--ready); flex: none; margin-top: 3px; }
 .tab .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.tab .label { color: var(--text); font-size: var(--tab-label-size); font-weight: 600; overflow-wrap: anywhere; }
+/* Имя всегда в одну строку с многоточием — во всех плотностях, в обеих
+   раскладках. Полное имя остаётся в title карточки (см. renderer.js). */
+.tab .label { color: var(--text); font-size: var(--tab-label-size); font-weight: 600; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tab .folder { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
 .tab .folder:empty { display: none; }
 .tab .folder svg, .group-head svg { width: 11px; height: 11px; flex: none; }
@@ -217,12 +220,23 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .tab .foot { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .tab .sub { flex: 1 1 auto; min-width: 0; color: var(--muted); font-size: var(--tab-sub-size); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* per-card context meter (parsed from the session's Claude statusline) */
-.tab .ctx { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+/* per-card context meter (parsed from the session's Claude statusline).
+   Тонкая полоска приклеена к нижнему краю карточки и вынесена из потока
+   (position:absolute) — её появление/исчезновение НЕ меняет высоту вкладки.
+   Проценты не показываем, насыщенность передаёт цвет. */
+.tab .ctx {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--tab-ctx-h);
+  overflow: hidden;
+  border-radius: 0 0 7px 7px; /* повторяет нижние углы карточки */
+}
 .tab .ctx[hidden] { display: none; }
-.tab .ctx-track { flex: 1; min-width: 26px; height: var(--tab-ctx-h); border-radius: 2px; background: var(--border); overflow: hidden; }
+.tab .ctx-track { width: 100%; height: 100%; background: var(--border); }
 .tab .ctx-fill { display: block; height: 100%; width: 0; background: var(--ready); transition: width 0.3s ease; }
-.tab .ctx-num { font-size: 9px; color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+.tab .ctx-num { display: none; }
 .tab .ctx.ctx-lo  .ctx-fill { background: var(--ready); }
 .tab .ctx.ctx-mid .ctx-fill { background: var(--run); }
 .tab .ctx.ctx-hi  .ctx-fill { background: var(--danger); }
@@ -231,9 +245,28 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .tab .agents[hidden] { display: none; }
 .tab .agents svg { width: 12px; height: 12px; flex: none; }
 
-.tab .close { flex: none; opacity: 0; color: var(--muted); font-size: 14px; line-height: 1; padding: 0 2px; }
+/* Крестик — угловой бейдж, частично за пределами карточки, вне потока: не
+   резервирует колонку справа (раньше это давало «воздух»). */
+.tab .close {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  z-index: 2;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0;
+}
 .tab:hover .close { opacity: 1; }
-.tab .close:hover { color: var(--danger); }
+.tab .close:hover { color: var(--danger); border-color: var(--danger); }
 
 /* While a title is being renamed, allow caret + text selection (the tab itself
    sets user-select:none, which otherwise freezes the contenteditable). */
@@ -245,6 +278,9 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   box-shadow: 0 0 0 1px var(--accent);
   border-radius: 3px;
   padding: 0 2px;
+  /* во время ввода снимаем обрезку многоточием, иначе не видно, что печатаешь */
+  overflow: visible;
+  text-overflow: clip;
 }
 
 /* status → dot color + full border + faint fill; active = teal ring */
@@ -295,30 +331,19 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   --tab-ctx-h: 5px;
 }
 
-/* Компактный режим кладёт содержимое карточки в строку: имя, метр контекста и
-   (если включена) подпись, которую flex: 1 0 100% уносит на вторую строку. С
-   выключенной подписью карточка становится однострочной — ~28px вместо ~52px.
-   Размен: длинное имя обрезается многоточием вместо переноса. Полное имя
-   остаётся в title карточки. */
+/* Компактный режим — однострочная карточка: имя (обрезается многоточием) слева,
+   статус + бейдж сабагентов справа на ТОЙ ЖЕ строке. Метр контекста ушёл в
+   тонкую полоску по нижнему краю (см. .tab .ctx), поэтому строка ровно одна и
+   высота детерминирована. Полное имя остаётся в title карточки. */
 :where(body, #set-tab-preview).tabs-compact .tab { align-items: center; }
 :where(body, #set-tab-preview).tabs-compact .tab .dot { margin-top: 0; }
 :where(body, #set-tab-preview).tabs-compact .tab .body {
   flex-direction: row;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
-:where(body, #set-tab-preview).tabs-compact .tab .label {
-  flex: 1 1 auto;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  overflow-wrap: normal;
-}
-:where(body, #set-tab-preview).tabs-compact .tab .ctx { flex: 0 0 auto; margin-top: 0; }
-:where(body, #set-tab-preview).tabs-compact .tab .ctx-track { min-width: 20px; }
-:where(body, #set-tab-preview).tabs-compact .tab .foot { flex: 1 0 100%; }
+:where(body, #set-tab-preview).tabs-compact .tab .label { flex: 1 1 auto; }
+:where(body, #set-tab-preview).tabs-compact .tab .foot { flex: 0 0 auto; }
 
 /* Видимость элементов. У .ctx !important обязателен: updateCtx() снимает атрибут
    hidden, а правило .tab .ctx[hidden] имеет ту же специфичность, что это. */
@@ -882,9 +907,16 @@ body.pult-on #git-msg { display: none; }
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 8px;
+  /* чуть больше сверху/справа — угловой крестик карточки вылезает за её край */
+  padding: 12px;
+  overflow-x: auto;
 }
-#set-tab-preview .tab { flex: 1 1 0; min-width: 0; max-width: none; cursor: default; }
+/* rail-раскладка в превью — вертикальный стек, как реальный сайдбар */
+.tab-preview.layout-rail { flex-direction: column; align-items: stretch; }
+/* Ширину/высоту карточек в превью больше НЕ переопределяем — они ведут себя
+   1:1 с боем (жёсткая ширина в top, растяжка по колонке в rail). Крестик
+   появляется на hover, как в приложении. */
+#set-tab-preview .tab { cursor: default; }
 
 .color-row { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
 .color-cell { display: inline-flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10px; color: var(--muted); cursor: pointer; }
@@ -1053,6 +1085,17 @@ body.pult-on.pult-empty #pult-empty { display: flex; }
   text-align: center;
 }
 .pult-tab .pult-count[hidden] { display: none; }
+/* В раскладке «табы сверху» каунтер уходит под слово «Пульт», а его место
+   зарезервировано всегда (visibility вместо display) — появление счётчика не
+   раздвигает вкладку. В rail остаётся строкой со счётчиком справа. */
+.layout-top .pult-tab {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 3px;
+}
+.layout-top .pult-tab .pult-count { margin-left: 0; }
+.layout-top .pult-tab .pult-count[hidden] { display: block; visibility: hidden; }
 .upd-status { margin-top: 8px; }
 
 /* Hover hint over a terminal link: "⌘/Ctrl+клик — открыть ссылку". Positioned in
