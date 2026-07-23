@@ -536,6 +536,9 @@ let launch = launchList[0];
 let launchMode = localStorage.getItem('swarm.launchMode') || 'agent';
 let launchPick = localStorage.getItem('swarm.launchPick') || 'folder';
 let resumeSessions = localStorage.getItem('swarm.resumeSessions') === '1';
+// Opt-in «precise status via Claude hooks» (Settings → Запуск). Off by default;
+// main gets it on startup + on save and (de)activates the hooks in swarm-settings.
+let hooksEnabled = localStorage.getItem('swarm.hooks') === '1';
 
 // Split a "cmd --flags" line into { cmd, flags }: first token = launcher, rest = flags.
 function parseAgentLine(line) {
@@ -1026,6 +1029,11 @@ function showSettingsModal(tab) {
             <span class="set-check-tx">Восстанавливать диалоги после перезапуска
               <span class="set-check-sub">сейчас только Claude Code</span></span>
           </label>
+          <label class="set-check">
+            <input type="checkbox" id="set-hooks" />
+            <span class="set-check-tx">Точный статус через хуки Claude
+              <span class="set-check-sub">различает разрешение и вопрос точно, без угадывания по экрану; только Claude Code, применяется к новым вкладкам</span></span>
+          </label>
         </div>
       </div>
 
@@ -1184,6 +1192,8 @@ function showSettingsModal(tab) {
   const pickFieldEl = overlay.querySelector('#set-pick-field');
   const resumeI = overlay.querySelector('#set-resume');
   resumeI.checked = resumeSessions;
+  const hooksI = overlay.querySelector('#set-hooks');
+  hooksI.checked = hooksEnabled;
   const pultI = overlay.querySelector('#set-pult');
   pultI.checked = pultEnabled;
 
@@ -1619,6 +1629,11 @@ function showSettingsModal(tab) {
     saveLaunchPick();
     resumeSessions = resumeI.checked;
     saveResumeSessions();
+    if (hooksI.checked !== hooksEnabled) {
+      hooksEnabled = hooksI.checked;
+      localStorage.setItem('swarm.hooks', hooksEnabled ? '1' : '0');
+      window.swarm.setHooksEnabled(hooksEnabled); // main rewrites swarm-settings.json
+    }
     pultEnabled = pultI.checked;
     localStorage.setItem('swarm.pult', pultEnabled ? '1' : '0');
     if (!pultEnabled) setPult(false); // no restart needed
@@ -2944,6 +2959,9 @@ async function restoreOrStart() {
 applyTabStyle();
 applyLayout(localStorage.getItem('swarm.layout') || 'layout-rail');
 applyNotify(localStorage.getItem('swarm.notify') !== '0'); // master notifications on/off
+// Tell main the saved hooks pref BEFORE restoring sessions, so swarm-settings.json
+// carries (or omits) the hooks block before the first claude spawn.
+window.swarm.setHooksEnabled(hooksEnabled);
 try { JSON.parse(localStorage.getItem('swarm.collapsed') || '[]').forEach((c) => collapsedFolders.add(c)); } catch (_) {}
 restoreOrStart();
 

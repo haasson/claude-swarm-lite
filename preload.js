@@ -37,6 +37,11 @@ contextBridge.exposeInMainWorld('swarm', {
   // terminals — so their focus/redraw burst isn't mistaken for real activity.
   uiRepaint: () => ipcRenderer.send('ui:repaint'),
 
+  // Opt-in «precise status via Claude hooks». Renderer pushes the saved pref on
+  // startup and on toggle; main adds/removes the hooks block in swarm-settings.json
+  // (scoped to swarm sessions). Takes effect on sessions started after the change.
+  setHooksEnabled: (on) => ipcRenderer.send('settings:hooks', on),
+
   // Git plumbing for the branch status bar. Each call targets a folder path
   // (the active session's cwd). info → { isRepo, branch, ahead, behind, dirty };
   // branches → string[]; fetch/pull/checkout → { ok, error };

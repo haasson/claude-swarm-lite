@@ -1,0 +1,19 @@
+'use strict';
+// The `hooks` block we add to swarm-settings.json, which the app already passes to
+// Claude via `--settings` — scoped to swarm-spawned sessions only, never the user's
+// global ~/.claude/settings.json. Every event we track points at the same launcher;
+// the script (hooks/swarm-signal.mjs) switches on hook_event_name. Kept pure so the
+// event set is pinned by a test — a wrong/missing event name means that signal just
+// silently never fires. Event names mirror swarm-signal.mjs's tokenFor.
+function hookSettings(command) {
+  const entry = [{ hooks: [{ type: 'command', command }] }];
+  return {
+    UserPromptSubmit: entry,   // → busy (working)
+    Stop: entry,               // → idle (ready)
+    Notification: entry,       // permission_prompt → perm, idle_prompt → idle
+    PermissionRequest: entry,  // → perm (разрешение)
+    PreToolUse: entry,         // AskUserQuestion → ask, else busy
+  };
+}
+
+module.exports = { hookSettings };

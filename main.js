@@ -91,33 +91,49 @@ function defaultWorkdir() {
 // Path to the JSON settings file we hand to `claude --settings`. null if
 // provisioning failed (then we simply skip injection and behave as before).
 let STATUSLINE_SETTINGS = null;
+const { hookSettings } = require('./hook-config');
+let STATUSLINE_COMMAND = null; // the provisioned statusline launcher command
+let HOOK_COMMAND = null;       // the provisioned hook launcher command
+// Opt-in: precise status via Claude hooks. Off by default; the renderer pushes the
+// user's saved pref on startup (settings:hooks) and rewrites swarm-settings.json.
+// Scoped to swarm sessions via --settings — never the user's global config.
+let HOOKS_ENABLED = false;
+
+// Copy a bundled script onto a real path (fs CAN read inside app.asar, but Node
+// can't exec from there) and return a launcher command that runs our own binary as
+// Node. Per-OS because inline `VAR=1 cmd` is POSIX-only; cmd.exe needs `set`.
+function provisionNodeLauncher(dir, srcName, base) {
+  const scriptDst = path.join(dir, path.basename(srcName));
+  fs.copyFileSync(path.join(__dirname, srcName), scriptDst);
+  const exe = process.execPath;
+  if (os.platform() === 'win32') {
+    const launcher = path.join(dir, base + '.cmd');
+    fs.writeFileSync(launcher, `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${exe}" "${scriptDst}"\r\n`);
+    return `"${launcher}"`;
+  }
+  const launcher = path.join(dir, base + '.sh');
+  fs.writeFileSync(launcher, `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "${exe}" "${scriptDst}"\n`, { mode: 0o755 });
+  return `sh "${launcher}"`;
+}
+
+// (Re)write swarm-settings.json: always the statusline; the hooks block only when
+// the user opted in. Called at startup and whenever the hooks pref changes — new
+// Claude sessions read the flag at launch, so a change takes effect on the next one.
+function writeSwarmSettings() {
+  if (!STATUSLINE_COMMAND) return;
+  const settings = { statusLine: { type: 'command', command: STATUSLINE_COMMAND, padding: 0 } };
+  if (HOOKS_ENABLED && HOOK_COMMAND) settings.hooks = hookSettings(HOOK_COMMAND);
+  const settingsPath = path.join(app.getPath('userData'), 'swarm-settings.json');
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+  STATUSLINE_SETTINGS = settingsPath;
+}
 
 function provisionStatusline() {
   const dir = app.getPath('userData');
-  // fs CAN read inside app.asar, so this copies the bundled script onto a real
-  // path Electron-as-node can exec. Rewritten every launch so upgrades take.
-  const scriptDst = path.join(dir, 'swarm-statusline.js');
-  fs.copyFileSync(path.join(__dirname, 'swarm-statusline.js'), scriptDst);
-
-  // A tiny launcher sets ELECTRON_RUN_AS_NODE and runs our own binary as Node.
-  // Per-OS because inline `VAR=1 cmd` is POSIX-only; cmd.exe needs `set`.
-  const exe = process.execPath;
-  let command;
-  if (os.platform() === 'win32') {
-    const launcher = path.join(dir, 'swarm-statusline.cmd');
-    fs.writeFileSync(launcher, `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${exe}" "${scriptDst}"\r\n`);
-    command = `"${launcher}"`;
-  } else {
-    const launcher = path.join(dir, 'swarm-statusline.sh');
-    fs.writeFileSync(launcher, `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "${exe}" "${scriptDst}"\n`, { mode: 0o755 });
-    command = `sh "${launcher}"`;
-  }
-
-  const settingsPath = path.join(dir, 'swarm-settings.json');
-  fs.writeFileSync(settingsPath, JSON.stringify({
-    statusLine: { type: 'command', command, padding: 0 },
-  }, null, 2));
-  STATUSLINE_SETTINGS = settingsPath;
+  // Rewritten every launch so upgrades take.
+  STATUSLINE_COMMAND = provisionNodeLauncher(dir, 'swarm-statusline.js', 'swarm-statusline');
+  HOOK_COMMAND = provisionNodeLauncher(dir, path.join('hooks', 'swarm-signal.mjs'), 'swarm-signal');
+  writeSwarmSettings();
 }
 
 // Append `--settings <ours>` so a launched Claude prints the context statusline.
@@ -606,6 +622,14 @@ ipcMain.handle('update:installer', async (_e, { url, filename }) => {
     return await updater.downloadInstaller(url, filename, (pct) => safeSend('update:progress', pct));
   } catch (e) { reportMainError(e); return { ok: false, error: String(e && e.message || e) }; }
 });
+// Renderer pushes the «precise status via hooks» pref (on startup and on toggle).
+// We rewrite swarm-settings.json; the flag is read by claude at launch, so it
+// applies to sessions started after the change.
+ipcMain.on('settings:hooks', (_e, enabled) => {
+  HOOKS_ENABLED = !!enabled;
+  try { writeSwarmSettings(); } catch (e) { reportMainError(e); }
+});
+
 ipcMain.on('update:relaunch', () => {
   // Skip the "close app?" confirm so deferred asar-swap can exit cleanly.
   allowClose = true;
