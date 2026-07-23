@@ -41,6 +41,10 @@
       <span class="git-name"></span>
       <span class="git-track"></span>
     </button>
+    <button id="git-diff" class="git-diff" hidden title="Изменения — показать дифф">
+      <span class="d-add"></span>
+      <span class="d-del"></span>
+    </button>
     <span id="git-msg" class="git-msg"></span>
     <!-- Action icons (VS Code style), pinned to the right of the bar. -->
     <div id="bar-actions">
@@ -76,6 +80,8 @@
   <script src="./logstore.js"></script>
   <!-- Tab card style: density presets + pure helpers (window.SWARM_TABSTYLE). -->
   <script src="./tabstyle.js"></script>
+  <!-- Unified-diff parser + change-tree builder (window.SWARM_DIFF). Before renderer.js. -->
+  <script src="./diffview.js"></script>
   <script src="./renderer.js"></script>
 </body>
 </html>

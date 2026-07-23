@@ -434,6 +434,19 @@ ipcMain.handle('git:fetch', (_e, cwd) => git.gitFetch(cwd));
 ipcMain.handle('git:pull', (_e, cwd) => git.gitPull(cwd));
 ipcMain.handle('git:checkout', (_e, cwd, branch) => git.gitCheckout(cwd, branch));
 
+// Diff counter + viewer for the active session's folder. Same contract as the
+// rest: the renderer picks the cwd, git.js does the work, nothing throws here.
+ipcMain.handle('git:diffstat', (_e, cwd) => git.gitDiffStat(cwd));
+ipcMain.handle('git:difftext', (_e, cwd, path) => git.gitDiffText(cwd, path));
+
+// Hand a file to the OS' default editor. The overlay is read-only on purpose —
+// editing here would race the agents writing these same files — so this is the
+// way out to a real IDE.
+//
+// Joins here rather than in the renderer: the renderer has no `path`, and
+// cwd + '/' + rel would hand Windows a mixed-separator path.
+ipcMain.handle('shell:openPath', (_e, cwd, rel) => shell.openPath(path.join(cwd, rel)));
+
 // --- IPC: renderer asks main to spawn a new claude session -------------------
 ipcMain.handle('session:create', (_event, opts = {}) => {
   const id = String(nextId++);
