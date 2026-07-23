@@ -30,8 +30,13 @@
     </div>
   </div>
 
-  <!-- One xterm container per session, only the active one is shown. -->
-  <main id="stage"></main>
+  <!-- One xterm container per session, only the active one is shown. The pult
+       strip + empty note live INSIDE the stage: body has two different grids
+       (rail / top), so a new grid row would mean editing both. -->
+  <main id="stage">
+    <div id="pult-strip"></div>
+    <div id="pult-empty">Никто не ждёт ответа</div>
+  </main>
 
   <!-- Bottom status bar: git branch of the ACTIVE session's folder (VS Code
        style). Hidden entirely when that folder is not a git repo. -->

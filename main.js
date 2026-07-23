@@ -109,6 +109,7 @@ process.on('unhandledRejection', (reason) => reportMainError(reason));
 // tell "waiting for a prompt" apart from "idle/done". We deliberately do NOT
 // surface Claude's token counter or activity words — just the four states.
 const { Terminal: HeadlessTerminal } = require('@xterm/headless');
+const { extractQuestion } = require('./screen');
 
 const ACTIVE_MS = 1200;      // bytes seen this recently => the agent is working
 const TICK_MS = 300;
@@ -157,7 +158,7 @@ function makeDetector(cols, rows) {
     term: new HeadlessTerminal({ cols: cols || 80, rows: rows || 24, scrollback: 200, allowProposedApi: true }),
     lastDataAt: Date.now(),
     graceUntil: 0,
-    status: '', detail: '', statusline: '', dead: false,
+    status: '', detail: '', statusline: '', question: null, dead: false,
   };
 }
 
@@ -242,11 +243,16 @@ setInterval(() => {
     try {
       const next = decide(d, now);
       const statusline = extractStatusline(d);
-      if (next.status !== d.status || next.detail !== d.detail || statusline !== d.statusline) {
+      // Only a waiting agent has a question on screen; anything else would be
+      // scraping streamed prose. null in every other state.
+      const question = next.status === 'waiting' ? extractQuestion(snapshot(d)) : null;
+      if (next.status !== d.status || next.detail !== d.detail
+          || statusline !== d.statusline || question !== d.question) {
         d.status = next.status;
         d.detail = next.detail;
         d.statusline = statusline;
-        safeSend('session:status', { id, status: next.status, detail: next.detail, statusline });
+        d.question = question;
+        safeSend('session:status', { id, status: next.status, detail: next.detail, statusline, question });
       }
     } catch (_) {
       // A detector hiccup must never crash the app or freeze the UI.
