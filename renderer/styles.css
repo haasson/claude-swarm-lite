@@ -162,6 +162,11 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .tab-group.collapsed .group-dots { margin-left: auto; }
 .tab-group.collapsed .group-dots { display: inline-flex; }
 .tab-group.collapsed .group-tabs { display: none; }
+/* Свёрнутая группа ужимается до своей шапки. Развёрнутые продолжают
+   выравниваться по высоте друг с другом — за это отвечает align-items:stretch
+   на .layout-top #tabs, и трогать его нельзя: тот же stretch выравнивает
+   карточки разной высоты внутри .group-tabs. */
+.layout-top .tab-group.collapsed { align-self: flex-start; }
 .sum-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ready); cursor: pointer; flex: none; }
 .sum-dot.status-ready   { background: var(--ready); }
 .sum-dot.status-running { background: var(--run); }
