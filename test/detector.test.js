@@ -124,6 +124,59 @@ test('latch: kind never softens permission → question', () => {
   assert.strictEqual(eff.kind, 'permission');
 });
 
+// --- hooks + arbitration ----------------------------------------------------
+
+test('hook: applyHook flips hooksActive and records status/kind', () => {
+  const d = mkD();
+  assert.strictEqual(D.applyHook(d, 'perm', NOW), true);
+  assert.strictEqual(d.hooksActive, true);
+  assert.strictEqual(d.hookState.status, 'waiting');
+  assert.strictEqual(d.hookState.kind, 'permission');
+});
+
+test('hook: an unknown token is ignored', () => {
+  const d = mkD();
+  assert.strictEqual(D.applyHook(d, 'bogus', NOW), false);
+  assert.strictEqual(d.hooksActive, undefined);
+});
+
+test('tickStatus: hooks drive status once active — screen cannot override', () => {
+  const d = mkD();
+  D.applyHook(d, 'busy', NOW);                    // hook says running
+  // Screen shows a permission prompt, but the hook is authoritative → running.
+  const eff = D.tickStatus(d, NOW, PERMISSION);
+  assert.strictEqual(eff.status, 'running');
+});
+
+test('tickStatus: permission from a hook shows «ждёт» + permission', () => {
+  const d = mkD();
+  D.applyHook(d, 'perm', NOW);
+  const eff = D.tickStatus(d, NOW, QUIET);
+  assert.strictEqual(eff.status, 'waiting');
+  assert.strictEqual(eff.kind, 'permission');
+});
+
+test('arbitrate: screen upgrades a hook «ready» to a prose question', () => {
+  const d = mkD();
+  D.applyHook(d, 'idle', NOW);                    // hook says ready (turn ended)
+  const eff = D.tickStatus(d, NOW, ASK);          // but «Сейчас от тебя» on screen
+  assert.strictEqual(eff.status, 'waiting');
+  assert.strictEqual(eff.kind, 'question');
+});
+
+test('arbitrate: a hook «ready» with a quiet screen stays ready', () => {
+  const d = mkD();
+  D.applyHook(d, 'idle', NOW);
+  assert.strictEqual(D.tickStatus(d, NOW, QUIET).status, 'ready');
+});
+
+test('tickStatus: without hooks it falls back to the latch', () => {
+  const d = mkD();
+  const eff = D.tickStatus(d, NOW, PERMISSION);   // no hooks → screen decides
+  assert.strictEqual(eff.status, 'waiting');
+  assert.strictEqual(d.waitLatched, true);        // and the latch engaged
+});
+
 for (const [name, fn] of tests) {
   try { fn(); passed++; }
   catch (e) { console.error('FAIL: ' + name + '\n  ' + e.message); process.exitCode = 1; }

@@ -6,7 +6,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "test": "node test/themes.test.js && node test/tabstyle.test.js && node test/keybinds.test.js && node test/preload-contract.test.js && node test/logstore.test.js && node test/updater.test.js && node test/pty-loader.test.js && node test/resume.test.js && node test/diff.test.js && node test/gitdiff.test.js && node test/screen.test.js && node test/detector.test.js && node test/package-files.test.js",
+    "test": "node test/themes.test.js && node test/tabstyle.test.js && node test/keybinds.test.js && node test/preload-contract.test.js && node test/logstore.test.js && node test/updater.test.js && node test/pty-loader.test.js && node test/resume.test.js && node test/diff.test.js && node test/gitdiff.test.js && node test/screen.test.js && node test/detector.test.js && node test/osc.test.js && node test/package-files.test.js",
     "dist": "electron-builder --mac",
     "dist:win": "electron-builder --win",
     "release": "node scripts/release.mjs"
@@ -25,6 +25,7 @@
       "pty-loader.js",
       "screen.js",
       "detector.js",
+      "osc.js",
       "swarm-statusline.js",
       "build-info.json",
       "preload.js",

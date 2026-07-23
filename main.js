@@ -163,8 +163,10 @@ process.on('unhandledRejection', (reason) => reportMainError(reason));
 // surface Claude's token counter or activity words — just the four states.
 const { Terminal: HeadlessTerminal } = require('@xterm/headless');
 const { extractQuestion, countSubagents } = require('./screen');
-// The status state machine + «ждёт» latch live in a pure, unit-tested module.
-const { decide, applyLatch } = require('./detector');
+// The status state machine + «ждёт» latch + hook arbitration live in a pure,
+// unit-tested module; osc.js sniffs hook markers out of the raw pty stream.
+const { tickStatus, applyHook } = require('./detector');
+const { extractHookSignals } = require('./osc');
 
 const TICK_MS = 300;
 const SNAP_ROWS = 16;        // how many bottom screen rows to inspect
@@ -183,6 +185,9 @@ function makeDetector(cols, rows) {
     // Waiting latch (fallback detection, no hooks): hold «ждёт» through screen
     // noise, release only when the agent genuinely resumed. See detector.js.
     waitLatched: false, waitKind: null, waitingKind: null, chromeGoneSince: 0,
+    // Hooks channel: once a marker arrives, hooksActive drives status; oscCarry
+    // reassembles a marker split across pty chunks. See osc.js / detector.js.
+    hooksActive: false, hookState: null, oscCarry: '',
   };
 }
 
@@ -220,6 +225,11 @@ function feedDetector(id, chunk) {
   const d = det.get(id);
   if (!d || d.dead) return;
   d.term.write(chunk);
+  // Sniff invisible hook markers out of the raw stream (carry a tail so one split
+  // across chunks still assembles). A signal flips this session to hook-driven.
+  const { signals, rest } = extractHookSignals(d.oscCarry + chunk);
+  d.oscCarry = rest;
+  for (const sig of signals) applyHook(d, sig.token, Date.now());
   // A resize makes Claude repaint the whole screen — a burst of output that is
   // NOT real work. Inside the grace window after a resize we keep feeding the
   // emulator (so the screen stays correct) but don't count it as activity, so an
@@ -241,9 +251,10 @@ setInterval(() => {
     if (now < d.graceUntil) continue;
     try {
       const snap = snapshot(d);
-      // Raw per-tick read, then the latch: hold «ждёт» through screen noise and
-      // release only when the agent visibly resumed (never on the user typing).
-      const next = applyLatch(d, now, snap, decide(d, now, snap));
+      // Status = hooks when this session has spoken through them (arbitration:
+      // hook wins, screen only upgrades a «ready» to a prose question); otherwise
+      // the screen-scrape + «ждёт» latch fallback (never released by mere typing).
+      const next = tickStatus(d, now, snap);
       const kind = next.status === 'waiting' ? (next.kind || null) : null;
       const statusline = extractStatusline(d);
       // How many sub-agents are running (Claude's Task/agent tool). Sent raw; the

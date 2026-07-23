@@ -125,8 +125,52 @@ function applyLatch(d, now, snap, raw) {
   return raw;
 }
 
+// --- hooks: the deterministic channel --------------------------------------
+// A Claude hook prints a marker (parsed in osc.js) whose token we map to a status
+// here — so the meaning lives in tested code, not in the installed hook script.
+const HOOK_TOKEN = {
+  busy: { status: 'running' },              // UserPromptSubmit / a normal tool starts
+  idle: { status: 'ready' },                // Stop — the turn ended
+  perm: { status: 'waiting', kind: 'permission' }, // PermissionRequest
+  ask:  { status: 'waiting', kind: 'question' },    // AskUserQuestion tool
+};
+
+// Record a hook signal on `d`. Once ANY signal has arrived, hooksActive flips on
+// and this session trusts hooks over the screen (see tickStatus). Returns whether
+// the token was known.
+function applyHook(d, token, now) {
+  const m = HOOK_TOKEN[token];
+  if (!m) return false;
+  d.hooksActive = true;
+  d.hookState = { status: m.status, kind: m.kind || null, at: now };
+  return true;
+}
+
+function detailFor(status) {
+  return status === 'running' ? 'работает' : status === 'waiting' ? 'ждёт ответа' : 'готов';
+}
+
+// Hooks are authoritative. The screen may ONLY add the one thing hooks can't see:
+// a prose question after the agent ended its turn (Stop → ready, yet «Сейчас от
+// тебя» sits on screen). It never overrides running / ready / permission.
+function arbitrate(d, snap) {
+  const hs = d.hookState || { status: 'ready', kind: null };
+  if (hs.status === 'ready' && RE_WAIT_ASK.test(snap)) {
+    return { status: 'waiting', detail: 'ждёт ответа', kind: 'question' };
+  }
+  return { status: hs.status, detail: detailFor(hs.status), kind: hs.status === 'waiting' ? hs.kind : null };
+}
+
+// The single entry point main's tick calls. Hooks-authoritative once the session
+// has spoken through them; otherwise the screen-scrape + «ждёт» latch fallback.
+function tickStatus(d, now, snap) {
+  if (d.hooksActive) return arbitrate(d, snap);
+  return applyLatch(d, now, snap, decide(d, now, snap));
+}
+
 module.exports = {
   ACTIVE_MS, LATCH_RELEASE_MS,
   RE_WAIT, RE_WAIT_NOW, RE_RUNNING, RE_WAIT_ASK,
   decide, hasWaitChrome, applyLatch,
+  applyHook, arbitrate, tickStatus,
 };
