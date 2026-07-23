@@ -342,7 +342,12 @@ function statusName(s) {
   return (el && el.textContent) || s.id;
 }
 
-window.swarm.onStatus(({ id, status, detail, statusline, question, sub }) => {
+// WHY a waiting agent is calling — for the chip, tab sub-label and notify. null =>
+// the generic «ждёт ответа» (detector wasn't confident, or hooks haven't spoken).
+const KIND_LABEL = { permission: 'разрешение', question: 'вопрос' };
+function waitLabel(s) { return KIND_LABEL[s && s.waitKind] || 'ждёт ответа'; }
+
+window.swarm.onStatus(({ id, status, detail, statusline, question, sub, waitingKind }) => {
   const s = sessions.get(id);
   if (!s || !s.alive) return;
 
@@ -350,6 +355,13 @@ window.swarm.onStatus(({ id, status, detail, statusline, question, sub }) => {
 
   if (statusline != null) { s.statusline = statusline; updateCtx(s); }
   if (question !== s.question) { s.question = question; renderPult(); }
+  if ((waitingKind || null) !== (s.waitKind || null)) {
+    s.waitKind = waitingKind || null;
+    renderPult();
+    // Sharpening (question → permission) can arrive while status stays «waiting»,
+    // so refresh the sub-label directly — applyStatus only repaints on transitions.
+    if (s.status === 'waiting') { const subEl = s.tab.querySelector('.sub'); if (subEl) subEl.textContent = waitLabel(s); }
+  }
   if ((sub || 0) !== (s.sub || 0)) { s.sub = sub || 0; updateAgents(s); }
 
   // Keep the RAW main-thread status; the tab's shown status may differ from it —
@@ -407,7 +419,7 @@ function applyStatus(s, opts) {
   // ready / waiting: cancel any pending orange, then apply immediately.
   if (s.runTimer) { clearTimeout(s.runTimer); s.runTimer = null; }
   const prev = s.status;
-  setStatus(s.id, eff.status, eff.detail);
+  setStatus(s.id, eff.status, eff.status === 'waiting' ? waitLabel(s) : eff.detail);
   if (opts && opts.notify) maybeNotify(s.id, prev, eff.status);
   s.runningSince = null;
 }
@@ -1800,7 +1812,8 @@ function renderPult() {
   const now = Date.now();
   for (const s of q) {
     const chip = document.createElement('div');
-    chip.className = 'pult-chip' + (s.id === pultPick ? ' picked' : '');
+    chip.className = 'pult-chip' + (s.id === pultPick ? ' picked' : '')
+      + (s.waitKind ? ' kind-' + s.waitKind : '');
     const name = s.tab.querySelector('.label').textContent;
 
     const dot = document.createElement('span');
@@ -1808,10 +1821,18 @@ function renderPult() {
     const nm = document.createElement('span');
     nm.className = 'pult-name';
     nm.textContent = name;
+    chip.append(dot, nm);
+    // WHY it's calling, when the detector/hooks are confident: разрешение / вопрос.
+    if (s.waitKind) {
+      const kd = document.createElement('span');
+      kd.className = 'pult-kind';
+      kd.textContent = KIND_LABEL[s.waitKind];
+      chip.append(kd);
+    }
     const tm = document.createElement('span');
     tm.className = 'pult-time';
     tm.textContent = fmtWait(now - (s.waitingSince || now));
-    chip.append(dot, nm, tm);
+    chip.append(tm);
 
     // The parsed question still makes a useful tooltip, but we don't print it on
     // the chip — the chip is just name + timer.
@@ -2075,7 +2096,11 @@ function maybeNotify(id, prev, next) {
   let body = null;
   if (next === 'waiting') {
     if (!notifyOnWaiting) return;
-    body = 'ждёт ответа';
+    // WHY + WHAT: «разрешение»/«вопрос» (or generic «ждёт ответа»), then the parsed
+    // question so you can often decide without switching tabs. Trimmed to ~140.
+    const label = waitLabel(s);
+    body = s && s.question ? `${label}: ${s.question}` : label;
+    if (body.length > 140) body = body.slice(0, 139).trimEnd() + '…';
   } else if (next === 'ready' && prev === 'running') {
     if (!notifyOnReady) return;
     // Only ping "готов" if the agent actually worked for a bit — a sub-3s "run"

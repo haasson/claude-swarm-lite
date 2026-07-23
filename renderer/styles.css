@@ -18,6 +18,7 @@
   --run:       #e0a53f;  /* session busy */
   --ready:     #4ade80;  /* session idle / ready */
   --waiting:   #3fd0c9;  /* session waiting for my input */
+  --permission:#f0b232;  /* waiting on a permission prompt (vs a plain question) */
   --danger:    #e05a5a;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Menlo", monospace;
 
@@ -1054,6 +1055,16 @@ body.pult-on.pult-empty #pult-empty { display: flex; }
 .pult-chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--waiting); flex: none; }
 .pult-chip .pult-name { font-weight: 600; }
 .pult-chip .pult-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+/* WHY it's calling: разрешение (amber) vs вопрос (teal). Small, before the timer. */
+.pult-chip .pult-kind {
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  color: #101418;
+  background: var(--waiting);
+}
+.pult-chip.kind-permission .pult-kind { background: var(--permission); }
+.pult-chip.kind-permission .dot { background: var(--permission); }
 
 /* Pinned first in #tabs, above every folder group. Not a .tab — that class is a
    grid with dot/label/ctx/sub slots this doesn't have. */
