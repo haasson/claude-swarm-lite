@@ -112,6 +112,7 @@ function openLogsModal() {
 const APPEARANCE = window.SWARM_THEMES;       // terminal theme presets + helpers
 const KEYBINDS_API = window.SWARM_KEYBINDS;   // newline chord + word/line scopes
 const RESUME_API = window.SWARM_RESUME;       // Claude -n / --resume per tab
+const TABSTYLE = window.SWARM_TABSTYLE;       // tab card density / visibility / colors
 
 // Global terminal appearance (theme + font + cursor). One setting for all tabs,
 // persisted as a single JSON blob in localStorage (see swarm.appearance). Read by
@@ -126,6 +127,21 @@ function loadAppearance() {
 
 function saveAppearance() {
   localStorage.setItem('swarm.appearance', JSON.stringify(appearance));
+}
+
+// Tab card look (density, which elements show, font sizes, status colors). One
+// setting for all tabs, persisted as a single JSON blob in swarm.tabstyle —
+// separate from swarm.appearance, which describes the TERMINAL, not the chrome.
+let tabstyle = loadTabStyle();
+
+function loadTabStyle() {
+  let raw = null;
+  try { raw = JSON.parse(localStorage.getItem('swarm.tabstyle') || 'null'); } catch (_) {}
+  return TABSTYLE.normalizeTabStyle(raw);
+}
+
+function saveTabStyle() {
+  localStorage.setItem('swarm.tabstyle', JSON.stringify(tabstyle));
 }
 
 // Custom keybinds (newline chord + word/line scope modifiers). Handlers read this
@@ -161,6 +177,24 @@ function applyAppearance() {
     s.term.options.cursorBlink = appearance.cursorBlink;
     s.fit.fit();
   }
+}
+
+// Every class bodyClasses() can produce — listed so apply can clear the previous
+// state without touching layout-* / platform-* on the same element.
+const TABSTYLE_CLASSES = [
+  'tabs-compact', 'tabs-normal', 'tabs-roomy',
+  'tab-no-dot', 'tab-no-ctx', 'tab-no-sub', 'tab-no-fill',
+];
+
+// Restyle every tab card at once: vars on <html>, classes on <body>. No DOM
+// rebuild — the effect is pure cascade, so live and future cards both pick it up.
+// No fit() here, unlike applyAppearance: the chrome's height is flexbox-driven and
+// the #stage ResizeObserver (see below) refits the terminal when the bar changes.
+function applyTabStyle() {
+  const vars = TABSTYLE.toCssVars(tabstyle);
+  for (const k of Object.keys(vars)) document.documentElement.style.setProperty(k, vars[k]);
+  document.body.classList.remove(...TABSTYLE_CLASSES);
+  document.body.classList.add(...TABSTYLE.bodyClasses(tabstyle));
 }
 
 // Tag the body with the host OS so the stylesheet can drop mac-only chrome
@@ -2181,6 +2215,7 @@ async function restoreOrStart() {
 }
 
 // Restore saved prefs, then the tabs.
+applyTabStyle();
 applyLayout(localStorage.getItem('swarm.layout') || 'layout-rail');
 applyNotify(localStorage.getItem('swarm.notify') !== '0'); // master notifications on/off
 try { JSON.parse(localStorage.getItem('swarm.collapsed') || '[]').forEach((c) => collapsedFolders.add(c)); } catch (_) {}
