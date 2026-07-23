@@ -66,6 +66,47 @@ test('returns null when nothing on screen qualifies', () => {
   assert.strictEqual(S.extractQuestion(null), null);
 });
 
+// The sub-agent status line Claude pins above the input box (real capture). It
+// stays whether the main turn is busy or the prompt is idle.
+const WAITING4 = [
+  '✻ Waiting for 4 background agents to finish',
+  '─────────────────────────────────────────',
+  '❯ ',
+  '─────────────────────────────────────────',
+  '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents · ↓ to manage',
+  '',
+  '  ⏺ main',
+  '  ◯ Explore  Long probe A: status detector          2m 2s · ↓ 28.4k tokens',
+  '  ◯ Explore  Long probe B: renderer status flow     1m 59s · ↓ 28.7k tokens',
+  '  ◯ Explore  Long probe C: settings UI              1m 55s · ↓ 39.1k tokens',
+  '  ◯ Explore  Long probe D: tabstyle model           1m 50s · ↓ 23.8k tokens',
+].join('\n');
+
+test('countSubagents reads the "Waiting for N" count', () => {
+  assert.strictEqual(S.countSubagents(WAITING4), 4);
+});
+
+test('countSubagents handles the singular "1 background agent"', () => {
+  assert.strictEqual(S.countSubagents('✻ Waiting for 1 background agent to finish'), 1);
+});
+
+test('countSubagents returns 0 when no sub-agents are on screen', () => {
+  assert.strictEqual(S.countSubagents(PERMISSION), 0);
+  assert.strictEqual(S.countSubagents(''), 0);
+  assert.strictEqual(S.countSubagents(null), 0);
+});
+
+test('countSubagents falls back to counting hollow-circle roster rows', () => {
+  // No "Waiting for N" line (roster shown without it): count only running rows.
+  const roster = [
+    '  ⏺ main',
+    '  ◯ Explore  probe A   19s · ↓ 9.3k tokens',
+    '  ◯ Plan     probe B   15s · ↓ 11.5k tokens',
+    '  ⏺ Explore  probe C   Done (12 tool uses · 8k tokens · 40s)', // finished — filled, not counted
+  ].join('\n');
+  assert.strictEqual(S.countSubagents(roster), 2);
+});
+
 for (const [name, fn] of tests) {
   try { fn(); passed++; }
   catch (e) { console.error('FAIL: ' + name + '\n  ' + e.message); process.exitCode = 1; }

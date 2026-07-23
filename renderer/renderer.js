@@ -183,7 +183,7 @@ function applyAppearance() {
 // state without touching layout-* / platform-* on the same element.
 const TABSTYLE_CLASSES = [
   'tabs-compact', 'tabs-normal', 'tabs-roomy',
-  'tab-no-dot', 'tab-no-ctx', 'tab-no-sub', 'tab-no-fill',
+  'tab-no-dot', 'tab-no-ctx', 'tab-no-sub', 'tab-no-fill', 'tab-no-agents',
 ];
 
 // Restyle every tab card at once: vars on <html>, classes on <body>. No DOM
@@ -259,6 +259,8 @@ const ICONS = {
   chevron: SVG('<path d="m6 9 6 6 6-6"/>'),
   branch: SVG('<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>'),
   gear: SVG('<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>'),
+  // Lucide "bot" — the sub-agent badge.
+  agents: SVG('<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>'),
 };
 
 // Put an icon + a folder name into an element (name via text node, never markup).
@@ -325,33 +327,69 @@ window.swarm.onData(({ id, data }) => {
 // Inferred status from main (running / ready / waiting + detail + statusline).
 const RUN_BUFFER_MS = 2500; // delay painting "работает" so sub-buffer blips never show
 
-window.swarm.onStatus(({ id, status, detail, statusline, question }) => {
+window.swarm.onStatus(({ id, status, detail, statusline, question, sub }) => {
   const s = sessions.get(id);
   if (!s || !s.alive) return;
 
   if (statusline != null) { s.statusline = statusline; updateCtx(s); }
   if (question !== s.question) { s.question = question; renderPult(); }
+  if ((sub || 0) !== (s.sub || 0)) { s.sub = sub || 0; updateAgents(s); }
 
-  if (status === 'running') {
+  // Keep the RAW main-thread status; the tab's shown status may differ from it —
+  // see effectiveStatus (the «оранжевый пока работает сабагент» toggle).
+  s.rawStatus = status;
+  s.rawDetail = detail;
+  applyStatus(s, { notify: true });
+});
+
+// The status a tab should SHOW = the main-thread status, except: while sub-agents
+// run in the background the main thread often sits idle («готов»/green), yet the
+// work isn't done — so if the «оранжевый пока работает сабагент» toggle is on we
+// keep it «работает». A real prompt (waiting) always wins so the user still notices.
+function effectiveStatus(s) {
+  const status = s.rawStatus || s.status || 'ready';
+  const detail = s.rawDetail != null ? s.rawDetail : null;
+  if (tabstyle.show.agentOrange && (s.sub || 0) > 0 && status === 'ready') {
+    return { status: 'running', detail: 'работает' };
+  }
+  return { status, detail };
+}
+
+// Paint the effective status. `running` is buffered by RUN_BUFFER_MS so sub-buffer
+// blips never flash orange; `ready`/`waiting` apply immediately. Notifications fire
+// only on real IPC transitions (opts.notify), never on a settings re-apply.
+function applyStatus(s, opts) {
+  const eff = effectiveStatus(s);
+  if (eff.status === 'running') {
     if (s.runningSince == null) s.runningSince = Date.now(); // real start of this run
-    // Delay the orange paint; a blip that clears within the buffer never shows.
     if (s.status !== 'running' && !s.runTimer) {
       s.runTimer = setTimeout(() => {
         s.runTimer = null;
-        if (s.alive) setStatus(id, 'running', 'работает');
+        if (s.alive) setStatus(s.id, 'running', eff.detail);
       }, RUN_BUFFER_MS);
     }
-
     return; // notifications only fire on the ready/waiting transitions below
   }
-
   // ready / waiting: cancel any pending orange, then apply immediately.
   if (s.runTimer) { clearTimeout(s.runTimer); s.runTimer = null; }
   const prev = s.status;
-  setStatus(id, status, detail);
-  maybeNotify(id, prev, status);
+  setStatus(s.id, eff.status, eff.detail);
+  if (opts && opts.notify) maybeNotify(s.id, prev, eff.status);
   s.runningSince = null;
-});
+}
+
+// The sub-agent badge (icon + count). Number shows only when >1 (a single agent is
+// just the icon). Whether the badge appears at all is the `agents` toggle, handled
+// in CSS via the tab-no-agents body class — here we only reflect the live count.
+function updateAgents(s) {
+  const el = s.tab.querySelector('.agents');
+  if (!el) return;
+  const n = s.sub || 0;
+  if (n <= 0) { el.hidden = true; return; }
+  el.hidden = false;
+  const num = el.querySelector('.agents-num');
+  if (num) num.textContent = n > 1 ? String(n) : '';
+}
 
 // Show the session's context fill on its card, parsed from the Claude statusline
 // (which contains "… ████░░ 65% …"). Colored green/amber/red by how full it is.
@@ -721,6 +759,7 @@ async function createSession(opts = {}) {
         <span class="ctx-track"><span class="ctx-fill"></span></span>
         <span class="ctx-num"></span>
       </span>
+      <span class="agents" hidden title="работающие сабагенты">${ICONS.agents}<span class="agents-num"></span></span>
       <span class="sub">готов</span>
     </span>
     <span class="close" title="Close">×</span>
@@ -745,7 +784,7 @@ async function createSession(opts = {}) {
 
   sessions.set(id, {
     term, fit, holder, tab, alive: true, status: null, cwd: resolvedCwd, id, sumDot: null,
-    cmd, flags, blank, sessionKey: sessionKey || null,
+    cmd, flags, blank, sessionKey: sessionKey || null, sub: 0, rawStatus: null, rawDetail: null,
   });
   const okey = resolvedCwd || '';
   if (!folderOrder.includes(okey)) folderOrder.push(okey);
@@ -1027,6 +1066,14 @@ function showSettingsModal(tab) {
           <input type="checkbox" id="set-tab-fill" />
           <span class="set-check-tx">Заливка карточки по статусу</span>
         </label>
+        <label class="set-check">
+          <input type="checkbox" id="set-tab-agents" />
+          <span class="set-check-tx">Значок сабагентов<span class="set-check-sub">иконка + число работающих сабагентов (число если их больше 1)</span></span>
+        </label>
+        <label class="set-check">
+          <input type="checkbox" id="set-tab-agent-orange" />
+          <span class="set-check-tx">Оранжевый, пока работает сабагент<span class="set-check-sub">держать статус «работает», пока в фоне крутятся сабагенты</span></span>
+        </label>
         <div class="set-field">
           <span class="set-label">Размер заголовка</span>
           <div class="set-stepper">
@@ -1228,6 +1275,8 @@ function showSettingsModal(tab) {
     ctx: overlay.querySelector('#set-tab-ctx'),
     sub: overlay.querySelector('#set-tab-sub'),
     statusFill: overlay.querySelector('#set-tab-fill'),
+    agents: overlay.querySelector('#set-tab-agents'),
+    agentOrange: overlay.querySelector('#set-tab-agent-orange'),
   };
   const tabLabelVal = overlay.querySelector('#set-tab-label-val');
   const tabSubVal = overlay.querySelector('#set-tab-sub-val');
@@ -1252,6 +1301,7 @@ function showSettingsModal(tab) {
        <span class="body">
          <span class="label">api</span>
          <span class="ctx ctx-mid"><span class="ctx-track"><span class="ctx-fill" style="width:62%"></span></span><span class="ctx-num">62%</span></span>
+         <span class="agents">${ICONS.agents}<span class="agents-num">3</span></span>
          <span class="sub">работает</span>
        </span>
      </div>
@@ -1504,6 +1554,10 @@ function showSettingsModal(tab) {
     tabstyle = TABSTYLE.normalizeTabStyle(tabDraft);
     saveTabStyle();
     applyTabStyle();
+    // Re-reflect the agent badge + «оранжевый пока работает сабагент» on live tabs:
+    // main.js won't re-send an unchanged status, so a toggle flip must repaint here.
+    // No notify — this is a settings change, not a real status transition.
+    sessions.forEach((s) => { if (s.alive) { updateAgents(s); applyStatus(s, { notify: false }); } });
     keybinds = KEYBINDS_API.normalizeKeybinds(kbDraft, window.swarm.platform);
     saveKeybinds();
     close();

@@ -27,13 +27,17 @@
     { key: 'danger', name: 'Ошибка' },
   ];
 
-  const SHOW_KEYS = ['dot', 'ctx', 'sub', 'statusFill'];
+  // `agents` — show the sub-agent badge (icon + count) on the card.
+  // `agentOrange` — keep the status «работает» (orange) while sub-agents run, even
+  //   when the main thread is idle. Unlike the others it has NO CSS class: the
+  //   renderer reads it in onStatus (see effectiveStatus), so bodyClasses skips it.
+  const SHOW_KEYS = ['dot', 'ctx', 'sub', 'statusFill', 'agents', 'agentOrange'];
 
   // Colors mirror the hardcoded :root palette (styles.css:10-22) — pinned by a
   // regression test, so a change there must be mirrored here.
   const DEFAULT_TABSTYLE = {
     density: 'normal',
-    show: { dot: true, ctx: true, sub: true, statusFill: true },
+    show: { dot: true, ctx: true, sub: true, statusFill: true, agents: true, agentOrange: true },
     labelSize: 12,
     subSize: 10,
     colors: {
@@ -99,6 +103,8 @@
     if (!s.show.ctx) out.push('tab-no-ctx');
     if (!s.show.sub) out.push('tab-no-sub');
     if (!s.show.statusFill) out.push('tab-no-fill');
+    if (!s.show.agents) out.push('tab-no-agents');
+    // NB: agentOrange has no class — it drives JS status logic, not CSS.
     return out;
   }
 

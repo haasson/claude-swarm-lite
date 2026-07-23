@@ -109,7 +109,7 @@ process.on('unhandledRejection', (reason) => reportMainError(reason));
 // tell "waiting for a prompt" apart from "idle/done". We deliberately do NOT
 // surface Claude's token counter or activity words — just the four states.
 const { Terminal: HeadlessTerminal } = require('@xterm/headless');
-const { extractQuestion } = require('./screen');
+const { extractQuestion, countSubagents } = require('./screen');
 
 const ACTIVE_MS = 1200;      // bytes seen this recently => the agent is working
 const TICK_MS = 300;
@@ -158,7 +158,7 @@ function makeDetector(cols, rows) {
     term: new HeadlessTerminal({ cols: cols || 80, rows: rows || 24, scrollback: 200, allowProposedApi: true }),
     lastDataAt: Date.now(),
     graceUntil: 0,
-    status: '', detail: '', statusline: '', question: null, dead: false,
+    status: '', detail: '', statusline: '', question: null, sub: 0, dead: false,
   };
 }
 
@@ -242,17 +242,23 @@ setInterval(() => {
     if (d.dead) continue;
     try {
       const next = decide(d, now);
+      const snap = snapshot(d);
       const statusline = extractStatusline(d);
+      // How many sub-agents are running (Claude's Task/agent tool). Sent raw; the
+      // renderer decides whether to keep the tab «работает» while they run and
+      // whether to show the agent badge — both are toggles in the tab settings.
+      const sub = countSubagents(snap);
       // Only a waiting agent has a question on screen; anything else would be
       // scraping streamed prose. null in every other state.
-      const question = next.status === 'waiting' ? extractQuestion(snapshot(d)) : null;
+      const question = next.status === 'waiting' ? extractQuestion(snap) : null;
       if (next.status !== d.status || next.detail !== d.detail
-          || statusline !== d.statusline || question !== d.question) {
+          || statusline !== d.statusline || question !== d.question || sub !== d.sub) {
         d.status = next.status;
         d.detail = next.detail;
         d.statusline = statusline;
         d.question = question;
-        safeSend('session:status', { id, status: next.status, detail: next.detail, statusline, question });
+        d.sub = sub;
+        safeSend('session:status', { id, status: next.status, detail: next.detail, statusline, question, sub });
       }
     } catch (_) {
       // A detector hiccup must never crash the app or freeze the UI.

@@ -47,7 +47,7 @@ test('normalizeTabStyle fills defaults from empty/garbage input', () => {
     assert.strictEqual(s.density, 'normal', String(bad));
     assert.strictEqual(s.labelSize, 12);
     assert.strictEqual(s.subSize, 10);
-    assert.deepStrictEqual(s.show, { dot: true, ctx: true, sub: true, statusFill: true });
+    assert.deepStrictEqual(s.show, { dot: true, ctx: true, sub: true, statusFill: true, agents: true, agentOrange: true });
     assert.deepStrictEqual(s.colors, T.DEFAULT_TABSTYLE.colors);
   }
 });
@@ -73,6 +73,8 @@ test('normalizeTabStyle keeps valid booleans and fills missing ones', () => {
   assert.strictEqual(s.show.sub, true, 'non-boolean falls back to default');
   assert.strictEqual(s.show.ctx, true);
   assert.strictEqual(s.show.statusFill, true);
+  assert.strictEqual(s.show.agents, true);
+  assert.strictEqual(s.show.agentOrange, true);
 });
 
 test('normalizeTabStyle rejects a bad hex and lowercases a good one', () => {
@@ -113,9 +115,13 @@ test('bodyClasses always names the density and nothing else by default', () => {
 });
 
 test('bodyClasses adds one tab-no-* class per hidden element', () => {
-  const all = T.bodyClasses({ show: { dot: false, ctx: false, sub: false, statusFill: false } });
-  assert.deepStrictEqual(all, ['tabs-normal', 'tab-no-dot', 'tab-no-ctx', 'tab-no-sub', 'tab-no-fill']);
+  const all = T.bodyClasses({ show: { dot: false, ctx: false, sub: false, statusFill: false, agents: false } });
+  assert.deepStrictEqual(all, ['tabs-normal', 'tab-no-dot', 'tab-no-ctx', 'tab-no-sub', 'tab-no-fill', 'tab-no-agents']);
   assert.deepStrictEqual(T.bodyClasses({ show: { sub: false } }), ['tabs-normal', 'tab-no-sub']);
+});
+
+test('bodyClasses emits no class for agentOrange (JS-only toggle)', () => {
+  assert.deepStrictEqual(T.bodyClasses({ show: { agentOrange: false } }), ['tabs-normal']);
 });
 
 (async () => {

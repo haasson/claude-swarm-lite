@@ -39,4 +39,29 @@ function extractQuestion(snapshot) {
   return null;
 }
 
-module.exports = { extractQuestion };
+// Sub-agents (Claude Code's Task/agent tool). Claude runs them in the background
+// by default and pins a status line just above the input box:
+//   "✻ Waiting for N background agents to finish"
+// It stays whether the main turn is busy OR the prompt is idle — and the idle case
+// is exactly when the byte-flow/spinner heuristic wrongly reads «готов» (green),
+// which is the bug this detects. When the roster panel is expanded (↓ to manage)
+// each RUNNING agent is a hollow-circle row, while «⏺ main» / finished agents use a
+// filled glyph:
+//   "◯ Explore  <desc>   2m 2s · ↓ 28.4k tokens"
+const RE_AGENTS_WAIT = /Waiting for (\d+) background agents?\b/i;
+const RE_AGENT_ROW = /^\s*[◯○]\s/;   // a running sub-agent row (hollow circle)
+
+// How many sub-agents are running per the current screen (0 = none). Prefers the
+// explicit "Waiting for N …" count — it's present even when the roster is collapsed
+// and it never counts the main thread. Falls back to counting expanded hollow-circle
+// roster rows (filled ⏺/● rows — main + finished agents — are deliberately excluded).
+function countSubagents(snapshot) {
+  const text = String(snapshot == null ? '' : snapshot);
+  const m = text.match(RE_AGENTS_WAIT);
+  if (m) return parseInt(m[1], 10) || 0;
+  let rows = 0;
+  for (const line of text.split('\n')) if (RE_AGENT_ROW.test(line)) rows++;
+  return rows;
+}
+
+module.exports = { extractQuestion, countSubagents };
