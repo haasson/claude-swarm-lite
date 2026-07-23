@@ -162,10 +162,15 @@ process.on('unhandledRejection', (reason) => reportMainError(reason));
 // tell "waiting for a prompt" apart from "idle/done". We deliberately do NOT
 // surface Claude's token counter or activity words — just the four states.
 const { Terminal: HeadlessTerminal } = require('@xterm/headless');
-const { extractQuestion, countSubagents } = require('./screen');
+const { extractQuestion, inferWaitingKind, countSubagents } = require('./screen');
 
 const ACTIVE_MS = 1200;      // bytes seen this recently => the agent is working
 const TICK_MS = 300;
+// Once «ждёт» is latched we stop believing transient running/ready reads (repaint
+// bursts, half-drawn prompts). We only release when the agent VISIBLY resumed —
+// its spinner is back — or the wait chrome has been gone this long with no work
+// (a just-answered trivial prompt). Debounce > a repaint blip so it can't flicker.
+const LATCH_RELEASE_MS = 900;
 const SNAP_ROWS = 16;        // how many bottom screen rows to inspect
 const RESIZE_GRACE_MS = 700; // after a resize, ignore the repaint burst as "activity"
 const INPUT_GRACE_MS = 700;  // after a keystroke, ignore the echo/redraw as "activity"
@@ -212,6 +217,9 @@ function makeDetector(cols, rows) {
     lastDataAt: Date.now(),
     graceUntil: 0,
     status: '', detail: '', statusline: '', question: null, sub: 0, dead: false,
+    // Waiting latch (fallback detection, no hooks): hold «ждёт» through screen
+    // noise, release only when the agent genuinely resumed. See LATCH_RELEASE_MS.
+    waitLatched: false, waitKind: null, waitingKind: null, chromeGoneSince: 0,
   };
 }
 
@@ -257,22 +265,25 @@ function feedDetector(id, chunk) {
   if (now >= d.graceUntil) d.lastDataAt = now;
 }
 
-function decide(d, now) {
-  const snap = snapshot(d);
+function mkWaiting(snap) {
+  return { status: 'waiting', detail: 'ждёт ответа', kind: inferWaitingKind(snap) };
+}
+
+function decide(d, now, snap) {
   // A confirm/permission prompt on screen means "waiting on me" regardless of byte
   // activity — check it EVERY tick, not only when the stream goes quiet. Otherwise a
   // background tab keeps showing "работает" while the prompt renders in bursts, and
   // only flips to "ждёт ответа" once the stream finally falls silent for ACTIVE_MS
   // (a long, ragged lag). Uses the strong prompt-chrome markers, safe mid-stream.
   if (RE_WAIT_NOW.test(snap)) {
-    return { status: 'waiting', detail: 'ждёт ответа' };
+    return mkWaiting(snap);
   }
   // Active output => working. Only peek for the looser prompt once it goes quiet.
   if (now - d.lastDataAt < ACTIVE_MS) {
     return { status: 'running', detail: 'работает' };
   }
   if (RE_WAIT.test(snap)) {
-    return { status: 'waiting', detail: 'ждёт ответа' };
+    return mkWaiting(snap);
   }
   // Quiet, but the spinner (with its live timer) is still on screen => the agent
   // is thinking / running a tool, not idle. Keep it "работает" instead of the
@@ -282,10 +293,50 @@ function decide(d, now) {
   }
   // Quiet, no spinner, no prompt box — but the agent signed off with a question.
   if (RE_WAIT_ASK.test(snap)) {
-    return { status: 'waiting', detail: 'ждёт ответа' };
+    return mkWaiting(snap);
   }
 
   return { status: 'ready', detail: 'готов' };
+}
+
+// Any on-screen evidence that we're still waiting on the user. When NONE of these
+// match, the prompt/question is gone from the visible screen.
+function hasWaitChrome(snap) {
+  return RE_WAIT.test(snap) || RE_WAIT_NOW.test(snap) || RE_WAIT_ASK.test(snap);
+}
+
+// The latch: decide gives the raw per-tick read; this holds «ждёт» through screen
+// noise and releases only when the agent visibly resumed. NOT released by the user
+// typing — a keystroke into an answer field isn't «resumed work». Returns the
+// effective { status, detail, kind } and mutates the latch fields on d.
+function applyLatch(d, now, snap, raw) {
+  if (d.waitLatched) {
+    if (hasWaitChrome(snap)) {
+      // Still waiting on screen. Kind can only sharpen (question → permission),
+      // never soften, so the label doesn't flip-flop.
+      d.chromeGoneSince = 0;
+      if (raw.status === 'waiting' && raw.kind === 'permission') d.waitKind = 'permission';
+      return { status: 'waiting', detail: 'ждёт ответа', kind: d.waitKind };
+    }
+    if (RE_RUNNING.test(snap)) {
+      // Spinner is back — the agent genuinely resumed. Release now.
+      d.waitLatched = false; d.waitKind = null; d.chromeGoneSince = 0;
+      return raw;
+    }
+    // Chrome gone but no spinner: a repaint blip, or a trivial prompt just answered
+    // and the turn ended. Debounce — release only after it's been gone a while, so a
+    // one-tick repaint can't flicker us out of «ждёт».
+    if (!d.chromeGoneSince) d.chromeGoneSince = now;
+    if (now - d.chromeGoneSince >= LATCH_RELEASE_MS) {
+      d.waitLatched = false; d.waitKind = null; d.chromeGoneSince = 0;
+      return raw;
+    }
+    return { status: 'waiting', detail: 'ждёт ответа', kind: d.waitKind };
+  }
+  if (raw.status === 'waiting') {
+    d.waitLatched = true; d.waitKind = raw.kind; d.chromeGoneSince = 0;
+  }
+  return raw;
 }
 
 setInterval(() => {
@@ -300,8 +351,11 @@ setInterval(() => {
     // repaint burst (same grace window feedDetector uses to ignore the bytes).
     if (now < d.graceUntil) continue;
     try {
-      const next = decide(d, now);
       const snap = snapshot(d);
+      // Raw per-tick read, then the latch: hold «ждёт» through screen noise and
+      // release only when the agent visibly resumed (never on the user typing).
+      const next = applyLatch(d, now, snap, decide(d, now, snap));
+      const kind = next.status === 'waiting' ? (next.kind || null) : null;
       const statusline = extractStatusline(d);
       // How many sub-agents are running (Claude's Task/agent tool). Sent raw; the
       // renderer decides whether to keep the tab «работает» while they run and
@@ -311,13 +365,15 @@ setInterval(() => {
       // scraping streamed prose. null in every other state.
       const question = next.status === 'waiting' ? extractQuestion(snap) : null;
       if (next.status !== d.status || next.detail !== d.detail
-          || statusline !== d.statusline || question !== d.question || sub !== d.sub) {
+          || statusline !== d.statusline || question !== d.question || sub !== d.sub
+          || kind !== d.waitingKind) {
         d.status = next.status;
         d.detail = next.detail;
         d.statusline = statusline;
         d.question = question;
         d.sub = sub;
-        safeSend('session:status', { id, status: next.status, detail: next.detail, statusline, question, sub });
+        d.waitingKind = kind;
+        safeSend('session:status', { id, status: next.status, detail: next.detail, statusline, question, sub, waitingKind: kind });
       }
     } catch (_) {
       // A detector hiccup must never crash the app or freeze the UI.
