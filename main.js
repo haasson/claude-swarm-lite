@@ -178,7 +178,7 @@ process.on('unhandledRejection', (reason) => reportMainError(reason));
 // tell "waiting for a prompt" apart from "idle/done". We deliberately do NOT
 // surface Claude's token counter or activity words — just the four states.
 const { Terminal: HeadlessTerminal } = require('@xterm/headless');
-const { extractQuestion, countSubagents } = require('./screen');
+const { extractQuestion, countSubagents, contentEnd, snapshotRows } = require('./screen');
 // The status state machine + «ждёт» latch + hook arbitration live in a pure,
 // unit-tested module; osc.js sniffs hook markers out of the raw pty stream.
 const { tickStatus, applyHook } = require('./detector');
@@ -207,17 +207,11 @@ function makeDetector(cols, rows) {
   };
 }
 
-// Read the bottom SNAP_ROWS lines of the emulator's current screen.
+// Read the bottom SNAP_ROWS lines of the emulator's current screen. The window is
+// anchored to the last row WITH CONTENT, not to buf.length — see screen.js for why
+// (a shrinking TUI frame leaves blank rows the buffer never gives back).
 function snapshot(d) {
-  const buf = d.term.buffer.active;
-  const end = buf.length;
-  const start = Math.max(0, end - SNAP_ROWS);
-  const out = [];
-  for (let y = start; y < end; y++) {
-    const line = buf.getLine(y);
-    if (line) out.push(line.translateToString(true));
-  }
-  return out.join('\n');
+  return snapshotRows(d.term.buffer.active, SNAP_ROWS);
 }
 
 // The user's Claude statusline (model │ dir [bar] % │ task) renders on the very
@@ -225,7 +219,7 @@ function snapshot(d) {
 // separators or the progress-bar blocks) so the app can show it in a footer.
 function extractStatusline(d) {
   const buf = d.term.buffer.active;
-  const end = buf.length;
+  const end = contentEnd(buf);   // same anchor as snapshot(): blank tail rows lie
   const start = Math.max(0, end - SNAP_ROWS);
   for (let y = end - 1; y >= start; y--) {
     const line = buf.getLine(y);

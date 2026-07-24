@@ -2,6 +2,42 @@
 // Pure screen-scraping helpers for the status detector. Kept out of main.js so
 // they're unit-testable in plain node, like git.js / updater-core.js.
 
+// --- the snapshot window ------------------------------------------------------
+// What the detector actually looks at: the bottom rows of the emulator. The window
+// must be anchored to the last row that HAS content, never to buf.length.
+//
+// Claude Code's UI is a TUI frame that grows and shrinks (spinner block, permission
+// box, a multi-line input collapsing after submit). Shrinking is drawn as "cursor up
+// N rows + erase to end of screen" — the rows the tall frame had scrolled into the
+// buffer stay allocated, just blank, and buf.length NEVER shrinks. A window anchored
+// to buf.length then slides off the real screen into that emptiness, so every marker
+// (prompt box, spinner, «Сейчас от тебя») reads as absent and the tab paints a false
+// «готов» while a question sits visible on screen.
+
+// The row after the last one with content (an exclusive end index).
+function contentEnd(buf) {
+  let end = buf.length;
+  while (end > 0) {
+    const line = buf.getLine(end - 1);
+    const text = line ? line.translateToString(true) : '';
+    if (text.trim()) break;
+    end--;
+  }
+  return end;
+}
+
+// The bottom `rows` rows of the screen that carry content, as one string.
+function snapshotRows(buf, rows) {
+  const end = contentEnd(buf);
+  const start = Math.max(0, end - rows);
+  const out = [];
+  for (let y = start; y < end; y++) {
+    const line = buf.getLine(y);
+    if (line) out.push(line.translateToString(true));
+  }
+  return out.join('\n');
+}
+
 // A selection row before the answer: "❯ 1. Yes". Claude Code paints ❯, but
 // Cursor / some terminals use an arrow (→ ▸ ▶) or a plain ">".
 const OPTION_RE = /^\s*[❯>→➜▸►▶]?\s*\d+\.\s/;
@@ -102,4 +138,7 @@ function countSubagents(snapshot) {
   return rows;
 }
 
-module.exports = { extractQuestion, inferWaitingKind, asksForInput, countSubagents };
+module.exports = {
+  extractQuestion, inferWaitingKind, asksForInput, countSubagents,
+  contentEnd, snapshotRows,
+};

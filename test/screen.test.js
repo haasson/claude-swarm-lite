@@ -168,6 +168,33 @@ test('countSubagents falls back to counting hollow-circle roster rows', () => {
   assert.strictEqual(S.countSubagents(roster), 2);
 });
 
+// A minimal stand-in for an xterm buffer: rows of text, plus the blank tail a
+// shrinking TUI frame leaves behind (see snapshotRows in screen.js).
+function fakeBuf(rows) {
+  return {
+    length: rows.length,
+    getLine: (y) => (rows[y] == null ? null : { translateToString: () => rows[y] }),
+  };
+}
+
+test('contentEnd ignores blank rows below the screen content', () => {
+  assert.strictEqual(S.contentEnd(fakeBuf(['a', 'b', '', '   ', ''])), 2);
+  assert.strictEqual(S.contentEnd(fakeBuf(['a', 'b'])), 2);
+  assert.strictEqual(S.contentEnd(fakeBuf(['', '  '])), 0);
+  assert.strictEqual(S.contentEnd(fakeBuf([])), 0);
+});
+
+test('snapshotRows takes the last rows WITH content, not the last rows of the buffer', () => {
+  const rows = ['вопрос', 'хвост', '', '', '', ''];   // 4 blank rows below the content
+  assert.strictEqual(S.snapshotRows(fakeBuf(rows), 2), 'вопрос\nхвост');
+  // Fewer rows of content than asked for: return what there is, no padding.
+  assert.strictEqual(S.snapshotRows(fakeBuf(rows), 16), 'вопрос\nхвост');
+});
+
+test('snapshotRows keeps blank rows that sit BETWEEN content', () => {
+  assert.strictEqual(S.snapshotRows(fakeBuf(['a', '', 'b', '']), 16), 'a\n\nb');
+});
+
 for (const [name, fn] of tests) {
   try { fn(); passed++; }
   catch (e) { console.error('FAIL: ' + name + '\n  ' + e.message); process.exitCode = 1; }
