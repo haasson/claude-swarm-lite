@@ -843,11 +843,13 @@ body.pult-on #git-msg { display: none; }
   padding: 12px 16px; border-bottom: 1px solid var(--border);
 }
 .diff-head .diff-title { color: var(--text); font-size: 14px; font-weight: 600; }
-.diff-head .diff-sum { font-family: var(--mono); font-size: 12px; }
+/* Распорка живёт здесь, а не на .diff-stale: та кнопка почти всегда hidden, и
+   вместе с ней пропадал margin-left:auto — крестик съезжал к счётчику. */
+.diff-head .diff-sum { font-family: var(--mono); font-size: 12px; margin-right: auto; }
 .diff-head .diff-sum .d-add { color: var(--ready); }
 .diff-head .diff-sum .d-del { color: var(--danger); margin-left: 6px; }
 .diff-head .diff-stale {
-  margin-left: auto; border: 1px solid var(--border); background: transparent;
+  border: 1px solid var(--border); background: transparent;
   color: var(--waiting); font-size: 11px; padding: 3px 8px; border-radius: 6px; cursor: pointer;
 }
 .diff-head .diff-stale[hidden] { display: none; }
@@ -882,23 +884,35 @@ body.pult-on #git-msg { display: none; }
 }
 .diff-empty { color: var(--muted); font-size: 12px; padding: 16px; }
 
+/* As wide as the longest line, but never narrower than the pane — so the row
+   backgrounds (add/del) and the hunk header keep covering the full line when
+   the pane is scrolled sideways. */
+.diff-doc { width: max-content; min-width: 100%; }
+
 .diff-hunk {
   font-family: var(--mono); font-size: 11px;
   color: var(--muted); background: var(--panel);
-  padding: 4px 10px; border-top: 1px solid var(--border);
-  position: sticky; top: 0;
+  padding: 4px 0; border-top: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 1;
 }
+/* Keeps the "@@ …" caption at the left edge instead of scrolling out of sight. */
+.diff-hunk > span { display: inline-block; position: sticky; left: 0; padding: 0 10px; }
 .diff-line {
+  --row-tint: transparent;
   display: flex; font-family: var(--mono); font-size: 12px; line-height: 1.5;
   white-space: pre; color: var(--text);
 }
+/* The gutter stays pinned while the code scrolls under it, so it needs an opaque
+   base (the modal's own colour) plus this row's tint on top of it. */
 .diff-line .ln {
   flex: none; width: 44px; text-align: right; padding-right: 8px;
   color: var(--muted); user-select: none;
+  position: sticky; left: 0;
+  background: linear-gradient(var(--row-tint), var(--row-tint)), var(--panel-2);
 }
-.diff-line .tx { flex: 1; min-width: 0; padding-right: 10px; }
-.diff-line.add { background: color-mix(in srgb, var(--ready) 14%, transparent); }
-.diff-line.del { background: color-mix(in srgb, var(--danger) 14%, transparent); }
+.diff-line .tx { flex: none; padding-right: 10px; }
+.diff-line.add { --row-tint: color-mix(in srgb, var(--ready) 14%, transparent); background: var(--row-tint); }
+.diff-line.del { --row-tint: color-mix(in srgb, var(--danger) 14%, transparent); background: var(--row-tint); }
 .diff-line.meta { color: var(--muted); font-style: italic; }
 .diff-more {
   color: var(--muted); font-size: 11px; padding: 10px;

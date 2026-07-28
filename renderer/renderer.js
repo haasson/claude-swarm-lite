@@ -2568,7 +2568,11 @@ async function selectDiffFile(cwd, rel) {
   const hunks = window.SWARM_DIFF.parseUnified(text);
   if (!hunks.length) { pane.appendChild(diffNotice('Изменений нет.', cwd, rel)); return; }
 
-  const frag = document.createDocumentFragment();
+  // The rows live in a max-content wide box, not straight in the scrolling pane:
+  // otherwise every row is only as wide as the pane and the add/del background
+  // gets cut off as soon as you scroll a long line sideways.
+  const doc = document.createElement('div');
+  doc.className = 'diff-doc';
   let drawn = 0;
   let total = 0;
   for (const h of hunks) total += h.lines.length;
@@ -2577,8 +2581,10 @@ async function selectDiffFile(cwd, rel) {
   for (const h of hunks) {
     const head = document.createElement('div');
     head.className = 'diff-hunk';
-    head.textContent = h.header;
-    frag.appendChild(head);
+    const headText = document.createElement('span'); // pinned to the left edge on x-scroll
+    headText.textContent = h.header;
+    head.appendChild(headText);
+    doc.appendChild(head);
     for (const l of h.lines) {
       if (drawn >= DIFF_MAX_LINES) break outer;
       const row = document.createElement('div');
@@ -2591,11 +2597,11 @@ async function selectDiffFile(cwd, rel) {
       tx.textContent = l.type === 'meta' ? l.text : (l.text || ' '); // text node, never markup
       row.appendChild(ln);
       row.appendChild(tx);
-      frag.appendChild(row);
+      doc.appendChild(row);
       drawn++;
     }
   }
-  pane.appendChild(frag);
+  pane.appendChild(doc);
 
   if (drawn < total) {
     pane.appendChild(diffNotice(
