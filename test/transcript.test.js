@@ -104,6 +104,14 @@ test('projectSlug flattens the path the way Claude names its folders', () => {
   assert.strictEqual(T.projectSlug('/Users/e/.config/app'), '-Users-e--config-app');
 });
 
+// Windows: the drive colon counts too. Without it the slug is `C:-Users-me-p` while Claude
+// writes `C--Users-me-p`, so the transcript channel looks in a folder that never exists.
+test('projectSlug flattens a Windows path with a drive letter', () => {
+  assert.strictEqual(T.projectSlug('C:\\Users\\me\\WebstormProjects\\swarm'),
+    'C--Users-me-WebstormProjects-swarm');
+  assert.strictEqual(T.projectSlug('D:\\work\\my.app'), 'D--work-my-app');
+});
+
 // --- pickBinding: which file belongs to this tab ------------------------------
 
 const OPEN = 100_000;   // when the tab opened

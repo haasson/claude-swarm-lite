@@ -21,8 +21,13 @@
 // (and dot) flattened to '-'. We don't rely on this being exact — main.js verifies a
 // candidate file by the `cwd` recorded INSIDE it — but it gets us to the right
 // directory on the first try.
+//
+// The colon is in the class for Windows: a path starts with a drive (`C:\Users\me`), and
+// ':' is illegal in a folder name, so Claude flattens it like everything else —
+// `C--Users-me`. Miss it and every Windows path lands one folder off, which means the
+// transcript channel silently never finds a file there.
 function projectSlug(cwd) {
-  return String(cwd || '').replace(/[/\\.]/g, '-');
+  return String(cwd || '').replace(/[/\\.:]/g, '-');
 }
 
 // Lines that are conversation; everything else in the file (mode, permission-mode,
