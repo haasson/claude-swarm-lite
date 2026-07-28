@@ -333,6 +333,16 @@ window.swarm.onData(({ id, data }) => {
   if (s) s.term.write(data);
 });
 
+// The tab moved to another Claude conversation — /clear, a `claude` typed by hand, a
+// /resume inside the terminal. Main learns the new id from the hook marker; we save it,
+// so «восстанавливать диалоги» reopens what you were actually in, not what we launched.
+window.swarm.onClaudeSession(({ id, claudeSessionId }) => {
+  const s = sessions.get(id);
+  if (!s || (s.claudeSessionId || null) === (claudeSessionId || null)) return;
+  s.claudeSessionId = claudeSessionId || null;
+  persistTabs();
+});
+
 // Inferred status from main (running / ready / waiting + detail + statusline).
 const RUN_BUFFER_MS = 2500; // delay painting "работает" so sub-buffer blips never show
 // Leaving «ждёт» is held separately (and shorter): its job is only to keep the Пульт
@@ -718,11 +728,12 @@ async function resolveLaunch(opts, cwd) {
 }
 
 // Build the line typed into a new/restored tab: optional Claude -n / --resume.
-function sessionLaunchCommand({ cmd, flags, sessionKey, resume } = {}) {
+function sessionLaunchCommand({ cmd, flags, sessionKey, sessionId, resume } = {}) {
   return RESUME_API.buildCommand({
     cmd: cmd || launch.cmd,
     flags: flags != null ? flags : launch.flags,
     sessionKey: sessionKey || null,
+    sessionId: sessionId || null,
     mode: resume ? 'resume' : 'start',
   });
 }
@@ -776,12 +787,23 @@ async function createSession(opts = {}) {
   if (term._core && term._core.viewport) term._core.viewport.scrollBarWidth = 0;
   fit.fit();
 
-  // Pin Claude tabs with a stable swarm-* name so relaunch can --resume the same
-  // conversation (not "last in cwd"). Other agents: no pin yet.
+  // Give Claude tabs a stable swarm-* display name (shown in the prompt box and the
+  // /resume picker). Other agents: no pin yet.
   let sessionKey = opts.sessionKey || null;
-  const canPin = !blank && resumeSessions && RESUME_API.supports(cmd);
+  const claudeCmd = !blank && RESUME_API.supports(cmd);
+  const canPin = claudeCmd && resumeSessions;
   if (canPin && !sessionKey) sessionKey = RESUME_API.newSessionKey();
-  const doResume = !!(opts.resume && canPin && sessionKey);
+  // Restoring: reopen the exact conversation by its Claude session id — main pins one
+  // for every Claude tab, so this works for tabs that were already open when you ticked
+  // the setting. The swarm-* name is the fallback for tabs saved before ids were kept.
+  // A conversation that's gone from disk is not resumed at all: `--resume` on a dead
+  // handle lands in Claude's picker instead of a working agent.
+  let resumeId = null;
+  if (opts.resume && claudeCmd && opts.claudeSessionId) {
+    const ok = await window.swarm.canResumeSession(cwd || '', opts.claudeSessionId);
+    if (ok) resumeId = opts.claudeSessionId;
+  }
+  const doResume = !!(opts.resume && claudeCmd && (resumeId || sessionKey));
   // Blank tab → empty command (never fall back to the default agent).
   const command = blank
     ? ''
@@ -791,19 +813,21 @@ async function createSession(opts = {}) {
         cmd,
         flags,
         sessionKey: canPin ? sessionKey : null,
+        sessionId: doResume ? resumeId : null,
         resume: doResume,
       });
   // A key that outlives the process, unlike the per-run session id: the Telegram
   // bridge hangs a forum topic on it, so the same tab lands in the same topic after a
   // relaunch instead of spawning a new one. Restored tabs bring theirs back.
   const tabKey = opts.tabKey || (crypto.randomUUID ? crypto.randomUUID() : 'tab-' + Date.now() + '-' + Math.random().toString(16).slice(2));
-  const { id, cwd: resolvedCwd } = await window.swarm.createSession({
+  const { id, cwd: resolvedCwd, claudeSessionId } = await window.swarm.createSession({
     cols: term.cols,
     rows: term.rows,
     cwd,
     command,
     tabKey,
     name: opts.name || null,      // main only needs it to title the topic
+    resumeId: doResume ? resumeId : null,   // restoring: the id this tab reopens
   });
 
   // Wire keystrokes -> pty. Strip focus in/out reports (CSI I / CSI O): with
@@ -885,6 +909,8 @@ async function createSession(opts = {}) {
   sessions.set(id, {
     term, fit, holder, tab, alive: true, status: null, cwd: resolvedCwd, id, sumDot: null,
     cmd, flags, blank, sessionKey: sessionKey || null, tabKey, sub: 0, rawStatus: null, rawDetail: null,
+    // The conversation this tab is in. Saved with the tab; the next launch resumes it.
+    claudeSessionId: claudeSessionId || null,
   });
   const okey = resolvedCwd || '';
   if (!folderOrder.includes(okey)) folderOrder.push(okey);
@@ -1076,7 +1102,7 @@ function showSettingsModal(tab) {
           <label class="set-check">
             <input type="checkbox" id="set-resume" />
             <span class="set-check-tx">Восстанавливать диалоги после перезапуска
-              <span class="set-check-sub">сейчас только Claude Code</span></span>
+              <span class="set-check-sub">каждая вкладка вернётся в свой диалог; сейчас только Claude Code</span></span>
           </label>
           <label class="set-check">
             <input type="checkbox" id="set-hooks" />
@@ -2044,8 +2070,10 @@ async function requestCloseSession(id) {
   if (await confirmModal(`Закрыть «${name}»? Сессия агента завершится.`, 'Закрыть')) closeSession(id);
 }
 
-// Save open tabs so they restore next launch. For Claude we also keep sessionKey
-// (+ cmd/flags) to --resume that exact conversation — not "last in cwd".
+// Save open tabs so they restore next launch. For Claude we also keep the conversation
+// id (+ cmd/flags) to --resume that exact dialogue — not "last in cwd". sessionKey is
+// the older, name-based handle: still written so a downgrade keeps working, and still
+// read on restore for tabs saved before ids were kept.
 function persistTabs() {
   const out = [];
   for (const u of orderedUnits()) {
@@ -2057,6 +2085,7 @@ function persistTabs() {
         flags: s.flags != null ? s.flags : null,
         blank: s.blank || false,
         sessionKey: s.sessionKey || null,
+        claudeSessionId: s.claudeSessionId || null,
         tabKey: s.tabKey || null,
       });
     }
@@ -3330,8 +3359,9 @@ document.querySelector('#new-session-folder .ic').innerHTML = ICONS.plus;
 document.querySelector('#cmd-menu-btn .ic').innerHTML = ICONS.command;
 document.querySelector('#settings-btn .ic').innerHTML = ICONS.gear;
 
-// Restore previous tabs (folders + names + Claude session keys). With resume on,
-// each Claude tab runs `--resume swarm-…`; otherwise a fresh agent in that folder.
+// Restore previous tabs (folders + names + Claude conversation ids). With resume on,
+// each Claude tab reopens its own dialogue (`--resume <id>`, or the legacy `--resume
+// swarm-…` for tabs saved by older builds); otherwise a fresh agent in that folder.
 async function restoreOrStart() {
   let saved = [];
   try { saved = JSON.parse(localStorage.getItem('swarm.tabs') || '[]'); } catch (_) {}
@@ -3348,8 +3378,9 @@ async function restoreOrStart() {
       cmd: t.blank ? undefined : (t.cmd || launch.cmd),
       flags: t.blank ? undefined : (t.flags != null ? t.flags : undefined),
       sessionKey: t.sessionKey || undefined,
+      claudeSessionId: t.claudeSessionId || undefined,
       tabKey: t.tabKey || undefined,   // same tab → same Telegram topic as before
-      resume: !!(resumeSessions && t.sessionKey),
+      resume: !!(resumeSessions && (t.claudeSessionId || t.sessionKey)),
     });
   }
   const first = sessions.keys().next();

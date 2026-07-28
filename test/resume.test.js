@@ -62,6 +62,31 @@ test('buildCommand resume uses --resume key', () => {
   );
 });
 
+test('buildCommand resume prefers the Claude session id over the name', () => {
+  const id = '1a835121-3e5e-41ce-914f-c2805d3b9165';
+  // Both known → the id wins: it reopens exactly that conversation, a name only matches
+  // a session title. The -n pin is not repeated on resume.
+  assert.strictEqual(
+    R.buildCommand({ cmd: 'claude', flags: '', sessionKey: 'swarm-01', sessionId: id, mode: 'resume' }),
+    'claude --resume ' + id
+  );
+  // Id alone is enough (a tab that was open before the setting was ticked).
+  assert.strictEqual(
+    R.buildCommand({ cmd: 'claude', flags: '--model opus', sessionId: id, mode: 'resume' }),
+    'claude --model opus --resume ' + id
+  );
+  // Starting is unaffected: main pins the id itself, we only name the session.
+  assert.strictEqual(
+    R.buildCommand({ cmd: 'claude', flags: '', sessionKey: 'swarm-01', sessionId: id, mode: 'start' }),
+    'claude -n swarm-01'
+  );
+});
+
+test('stripSessionFlags drops --fork-session', () => {
+  // Left in, it would give the resumed tab a NEW id — the saved one would go stale.
+  assert.strictEqual(R.stripSessionFlags('--fork-session --model opus'), '--model opus');
+});
+
 test('buildCommand leaves non-Claude alone', () => {
   assert.strictEqual(
     R.buildCommand({ cmd: 'codex', flags: '--foo', sessionKey: 'swarm-01', mode: 'resume' }),

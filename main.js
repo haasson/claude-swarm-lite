@@ -292,6 +292,10 @@ function feedDetector(id, chunk) {
     // is how a RESUMED session — where we didn't choose the id — still binds precisely.
     if (sig.sessionId && sig.sessionId !== d.claudeSessionId) {
       d.claudeSessionId = sig.sessionId;
+      // The tab's conversation changed under us (/clear, a `claude` typed by hand, a
+      // /resume inside the terminal). Tell the renderer so the id it saves for the next
+      // launch is the conversation you're actually in, not the one we started with.
+      safeSend('session:claude', { id, claudeSessionId: sig.sessionId });
       // If this tab is already being driven from Telegram, the hook needs to know its id
       // to refuse the interactive picker — rewrite the list now that we have one.
       if (d.tgMode) tgWriteModes();
@@ -486,6 +490,14 @@ setInterval(() => {
         d.trFile = file;
         taken.add(file);
         trLog(`tab=${id} → ${path.basename(file)}${d.claudeSessionId ? ' (by session id)' : ' (by folder scan)'}`);
+        // Bound without knowing the id (hooks off, `claude` typed by hand, a tab restored
+        // by its old swarm-* name): the FILE NAME is that id. Hand it to the renderer so
+        // the tab is saved with an exact handle and the next restore stops relying on a
+        // name match. Deliberately not written into d.claudeSessionId — binding must stay
+        // free to re-scan; this is only what we persist.
+        if (!d.claudeSessionId) {
+          safeSend('session:claude', { id, claudeSessionId: path.basename(file, '.jsonl') });
+        }
       }
       // Re-read only when the file actually moved, but re-CLASSIFY every tick:
       // «готов» arrives by the ready-debounce expiring, not by a new write.
@@ -1484,7 +1496,11 @@ ipcMain.handle('session:create', (_event, opts = {}) => {
   // Give the login shell a moment to finish sourcing the profile, then run claude.
   const pinned = injectSessionId(injectStatusline(opts.command != null ? opts.command : START_COMMAND));
   const cmd = pinned.cmd;
-  d0.claudeSessionId = pinned.sessionId;   // known id => exact transcript binding
+  // Known id => exact transcript binding. Either we pinned it just now (a fresh tab),
+  // or the renderer is restoring a conversation and told us the id it is resuming —
+  // `--resume <id>` keeps that id, so the tab binds precisely from the first tick
+  // instead of guessing by folder + mtime.
+  d0.claudeSessionId = pinned.sessionId || String(opts.resumeId || '') || null;
   if (cmd) {
     setTimeout(() => {
       const p = sessions.get(id);
@@ -1492,7 +1508,30 @@ ipcMain.handle('session:create', (_event, opts = {}) => {
     }, 350);
   }
 
-  return { id, cwd };
+  // The renderer keeps claudeSessionId with the tab and saves it: that id is what the
+  // NEXT launch resumes. Null for non-Claude tabs and clean terminals.
+  return { id, cwd, claudeSessionId: d0.claudeSessionId };
+});
+
+// Is this conversation still on disk? Asked before a restored tab runs `--resume <id>`:
+// a dead id would drop the tab into Claude's interactive picker (or an error) instead of
+// a working agent, so we'd rather start it fresh.
+//
+// The folder slug is a guess (see transcript.projectSlug), so a miss falls back to a
+// scan of ~/.claude/projects — the file NAME is the session id and is unique, whatever
+// folder Claude filed it under.
+ipcMain.handle('session:canResume', (_e, cwd, sessionId) => {
+  const id = String(sessionId || '');
+  if (!/^[0-9a-fA-F-]{36}$/.test(id)) return false;
+  const file = id + '.jsonl';
+  try {
+    if (cwd && fs.existsSync(path.join(projectDir(cwd), file))) return true;
+    const root = path.join(os.homedir(), '.claude', 'projects');
+    for (const dir of fs.readdirSync(root)) {
+      if (fs.existsSync(path.join(root, dir, file))) return true;
+    }
+  } catch (_) {}
+  return false;
 });
 
 // --- IPC: keystrokes from the xterm in the renderer --------------------------

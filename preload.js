@@ -17,9 +17,25 @@ contextBridge.exposeInMainWorld('swarm', {
   // List custom slash commands for a project dir (+ global). [{name, hint, arg, scope}]
   listCommands: (cwd) => ipcRenderer.invoke('commands:list', cwd),
 
-  // Ask main to spawn a session. Returns { id }.
-  // opts: { cwd?, cols?, rows?, command? }
+  // Ask main to spawn a session. Returns { id, cwd, claudeSessionId }, where
+  // claudeSessionId is the conversation this tab runs (main pins it with --session-id) —
+  // the renderer saves it so the next launch can resume exactly that dialogue.
+  // opts: { cwd?, cols?, rows?, command?, tabKey?, name?, resumeId? }
+  // resumeId — set when `command` is a `--resume <id>`: the id being restored, so main
+  // binds the transcript exactly instead of guessing by folder.
   createSession: (opts) => ipcRenderer.invoke('session:create', opts),
+
+  // Is that conversation still on disk? Checked before restoring a tab with --resume,
+  // so a deleted dialogue starts fresh instead of dropping into Claude's picker.
+  canResumeSession: (cwd, sessionId) => ipcRenderer.invoke('session:canResume', cwd, sessionId),
+
+  // A tab's Claude conversation changed (/clear, `claude` typed by hand, /resume in the
+  // terminal). cb({ id, claudeSessionId }). Returns an unsubscribe fn.
+  onClaudeSession: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('session:claude', handler);
+    return () => ipcRenderer.removeListener('session:claude', handler);
+  },
 
   // Send user keystrokes to a session's pty.
   sendInput: (id, data) => ipcRenderer.send('session:input', { id, data }),
