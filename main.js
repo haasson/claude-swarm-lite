@@ -725,35 +725,64 @@ function tgDecodeAudio(bytes) {
   });
 }
 
+// Дольше этого голосовое не берём. Двухминутная запись — это уже не «сказал на ходу», а
+// монолог: распознавание займёт больше, чем есть терпения, и почти всегда это случайно
+// зажатая кнопка. Отказ приходит сразу, ДО скачивания, поэтому стоит он ноль.
+const TG_VOICE_MAX_S = 120;
+// Больше самой длинной допустимой записи с запасом: реальная фраза успевает, а зависший
+// бинарник (не та модель, битый файл) всё равно будет убит и ответит ошибкой.
+const TG_WHISPER_TIMEOUT_MS = 180000;
+
 // Голосовое → текст. Возвращает { text } или { error } — текст ошибки уходит в чат как
-// есть, потому что человек с телефоном должен понимать, что чинить.
+// есть, потому что человек с телефоном должен понимать, что чинить. Ни один путь отсюда не
+// имеет права бросить: голосовое, на которое не пришло НИЧЕГО, выглядит как сдохший мост.
 async function tgVoiceToText(fileId) {
   const bin = tgWhisperBin();
   if (!bin || !TG.whisperModel) {
     return { error: 'Голос не настроен: укажи путь к whisper.cpp и модели в «Настройки → Телеграм».' };
   }
-  const info = await tgFetchJson(telegram.apiUrl(TG.token, 'getFile'), { file_id: fileId });
-  const fpath = info.ok && info.body && info.body.ok === true && info.body.result && info.body.result.file_path;
-  if (!fpath) return { error: 'Не смог забрать файл у Telegram.' };
-  const res = await fetch(`${telegram.API_HOST}/file/bot${TG.token}/${fpath}`);
-  if (!res.ok) return { error: 'Не смог скачать голосовое.' };
-  const bytes = new Uint8Array(await res.arrayBuffer());
-  const decoded = await tgDecodeAudio(bytes);
-  if (decoded.error || !decoded.samples) return { error: 'Не смог декодировать запись: ' + (decoded.error || 'пусто') };
-  const wav = path.join(os.tmpdir(), `swarm-voice-${Date.now()}.wav`);
-  fs.writeFileSync(wav, voice.wavFromFloat32(decoded.samples, voice.SAMPLE_RATE));
+  let wav = null;
   try {
+    // Сеть здесь рвётся штатно (телефон в метро, мак ушёл в сон): fetch в этом случае не
+    // возвращает ошибку, а БРОСАЕТ, и без try весь ответ на голосовое сводился к записи в
+    // лог main-процесса — в чате тишина.
+    const info = await tgFetchJson(telegram.apiUrl(TG.token, 'getFile'), { file_id: fileId });
+    const fpath = info.ok && info.body && info.body.ok === true && info.body.result && info.body.result.file_path;
+    if (!fpath) return { error: 'Не смог забрать файл у Telegram.' };
+    const res = await fetch(`${telegram.API_HOST}/file/bot${TG.token}/${fpath}`);
+    if (!res.ok) return { error: 'Не смог скачать голосовое.' };
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const decoded = await tgDecodeAudio(bytes);
+    if (decoded.error || !decoded.samples || !decoded.samples.length) {
+      return { error: 'Не смог декодировать запись: ' + (decoded.error || 'пусто') };
+    }
+    wav = path.join(os.tmpdir(), `swarm-voice-${Date.now()}.wav`);
+    fs.writeFileSync(wav, voice.wavFromFloat32(decoded.samples, voice.SAMPLE_RATE));
     const out = await new Promise((resolve, reject) => {
       execFile(bin, voice.whisperArgs({ model: TG.whisperModel, wav }),
-        { timeout: 120000, maxBuffer: 4 << 20 },
-        (err, stdout, stderr) => (err && !stdout ? reject(new Error(String(stderr || err.message).slice(0, 200))) : resolve(stdout)));
+        { timeout: TG_WHISPER_TIMEOUT_MS, maxBuffer: 4 << 20 },
+        (err, stdout, stderr) => {
+          // Убит по таймауту или по переполнению буфера — то, что успело напечататься,
+          // это ОБРЕЗАННАЯ фраза. Отдать её как результат хуже, чем ошибка: агент начнёт
+          // работать по половине задачи, и никто не заметит, по какой именно.
+          if (err && (err.killed || err.signal)) {
+            reject(new Error(err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+              ? 'напечатал слишком много — похоже, это не тот бинарник'
+              : `не уложился в ${Math.round(TG_WHISPER_TIMEOUT_MS / 1000)} с — проверь модель и путь к бинарнику`));
+            return;
+          }
+          // Ненулевой код при живом выводе терпим: некоторые сборки whisper.cpp ругаются
+          // в stderr и всё равно печатают текст.
+          if (err && !stdout) { reject(new Error(String(stderr || err.message).slice(0, 200))); return; }
+          resolve(stdout);
+        });
     });
     const text = voice.parseOutput(out);
     return text ? { text } : { error: 'Ничего не разобрал — тишина или слишком коротко.' };
   } catch (e) {
-    return { error: 'whisper не отработал: ' + ((e && e.message) || e) };
+    return { error: 'Голосовое не получилось расшифровать: ' + ((e && e.message) || e) };
   } finally {
-    try { fs.unlinkSync(wav); } catch (_) {}
+    if (wav) { try { fs.unlinkSync(wav); } catch (_) {} }
   }
 }
 
@@ -1365,18 +1394,28 @@ async function tgOnVoice(u) {
       text: `${tgTabName(id)} ждёт разрешения — выбери вариант кнопкой, голосом это не даётся.` });
     return;
   }
+  const secs = Number(u.voice.seconds) || 0;
+  if (secs > TG_VOICE_MAX_S) {
+    await tgSend({ threadId: u.threadId, replyTo: u.messageId,
+      text: `Это ${secs} с — беру голосовые до ${TG_VOICE_MAX_S} с. Скажи короче или напиши текстом.` });
+    return;
+  }
   const r = await tgVoiceToText(u.voice.fileId);
   if (r.error) {
     await tgSend({ threadId: u.threadId, replyTo: u.messageId, text: r.error });
     return;
   }
+  // Эхо ДО печати в сессию, и именно поэтому await: «RoseVPN» легко становится «розовым
+  // пн», и увидеть, ЧТО услышано, надо раньше, чем агент по этому пойдёт работать. Если
+  // сначала печатать, то в ленте порядок обратный — ответ агента раньше расшифровки.
+  await tgSend({ threadId: u.threadId, replyTo: u.messageId,
+    text: `🎙 услышал: «${r.text}»\n→ ${tgTabName(id)}` });
   const tagged = telegram.tagInput({ text: r.text, instruction: TG_PROMPT, primed: !!(d && d.tgPrimed) });
   if (!tgAnswer(id, tagged)) {
     await tgSend({ threadId: u.threadId, replyTo: u.messageId, text: 'Эта вкладка уже закрыта.' });
     return;
   }
   if (d) d.tgPrimed = true;
-  await tgSend({ threadId: u.threadId, replyTo: u.messageId, text: `🎙 → ${tgTabName(id)}: ${r.text}` });
 }
 
 // /new в теме — ещё один агент в ТОЙ ЖЕ папке. Папку называть не надо: тема = вкладка =
