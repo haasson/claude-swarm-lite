@@ -326,6 +326,11 @@ window.swarm.onData(({ id, data }) => {
 
 // Inferred status from main (running / ready / waiting + detail + statusline).
 const RUN_BUFFER_MS = 2500; // delay painting "работает" so sub-buffer blips never show
+// Leaving «ждёт» is held separately (and shorter): its job is only to keep the Пульт
+// queue steady through a repaint blip while you read the question — main already
+// debounces the real release. It used to be RUN_BUFFER_MS and then STACKED with it,
+// so answering a prompt left the tab «ждёт» for up to five seconds.
+const LEAVE_WAIT_MS = 1200;
 
 // Диагностика перекраса вкладок: включить в devtools-консоли `swarmStatusDebug(true)`
 // (сохраняется в localStorage). Логирует и входящий поток статусов из main, и
@@ -401,14 +406,23 @@ function applyStatus(s, opts) {
       s.leaveWaitTimer = setTimeout(() => {
         s.leaveWaitTimer = null;
         if (s.alive) applyStatus(s, { leaveWait: true, notify: true });
-      }, RUN_BUFFER_MS);
+      }, LEAVE_WAIT_MS);
     }
     return; // держим waiting, вкладку не трогаем
   }
 
   if (eff.status === 'running') {
     if (s.runningSince == null) s.runningSince = Date.now(); // real start of this run
-    if (s.status !== 'running' && !s.runTimer) {
+    if (s.status === 'running') return;
+    if (opts && opts.leaveWait) {
+      // Coming out of «ждёт»: we already held the tab for LEAVE_WAIT_MS, which IS
+      // the anti-blip buffer. Stacking RUN_BUFFER_MS on top of it was the lag
+      // between answering a prompt and the tab finally turning «работает».
+      if (s.runTimer) { clearTimeout(s.runTimer); s.runTimer = null; }
+      setStatus(s.id, 'running', eff.detail);
+      return;
+    }
+    if (!s.runTimer) {
       s.runTimer = setTimeout(() => {
         s.runTimer = null;
         if (s.alive) setStatus(s.id, 'running', eff.detail);

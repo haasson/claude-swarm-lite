@@ -219,6 +219,7 @@ function makeDetector(cols, rows) {
     // Waiting latch (fallback detection, no hooks): hold «ждёт» through screen
     // noise, release only when the agent genuinely resumed. See detector.js.
     waitLatched: false, waitKind: null, waitingKind: null, chromeGoneSince: 0,
+    answeredAt: 0,             // when you last pressed Enter here (see session:input)
     // Hooks channel: once a marker arrives, hooksActive drives status; oscCarry
     // reassembles a marker split across pty chunks. See osc.js / detector.js.
     hooksActive: false, hookState: null, oscCarry: '',
@@ -552,7 +553,20 @@ ipcMain.on('session:input', (_event, { id, data }) => {
   // Your keystrokes echo back + redraw the input box — that's you typing, not the
   // agent working. Grace it so it isn't counted as activity.
   const d = det.get(id);
-  if (d) d.graceUntil = Date.now() + INPUT_GRACE_MS;
+  if (!d) return;
+  const now = Date.now();
+  if (/[\r\n]/.test(String(data || ''))) {
+    // Enter: you SENT something. Don't sit out the grace window — that froze the
+    // detector for INPUT_GRACE_MS right when the picture changes fastest, and left
+    // lastDataAt stale so the agent's first output didn't read as «работает».
+    // This is a hint, not a verdict: a quiz answers one question and paints the
+    // next, and detector.js keeps «ждёт» whenever a prompt box is still on screen.
+    d.graceUntil = 0;
+    d.lastDataAt = now;
+    d.answeredAt = now;
+  } else {
+    d.graceUntil = now + INPUT_GRACE_MS;
+  }
 });
 
 // --- IPC: the xterm was resized; keep the pty grid in sync -------------------

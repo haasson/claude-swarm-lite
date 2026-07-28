@@ -119,6 +119,62 @@ test('latch: typing keeps the prompt on screen, so it stays «ждёт» (not re
   assert.strictEqual(d.waitLatched, true);
 });
 
+// --- applyLatch: answering (Enter) -------------------------------------------
+// main sets `answeredAt` when you press Enter in a session. It's a HINT: it never
+// releases the latch on its own, it only stops stale evidence from outvoting work.
+
+test('latch: Enter in a quiz keeps «ждёт» while the next question is on screen', () => {
+  const d = mkD({ waitLatched: true, waitKind: 'question', answeredAt: NOW, lastDataAt: NOW });
+  const eff = D.applyLatch(d, NOW, QUESTION, D.decide(d, NOW, QUESTION));
+  assert.strictEqual(eff.status, 'waiting', 'a live prompt box still wins');
+  assert.strictEqual(d.waitLatched, true);
+});
+
+test('latch: a stale «Сейчас от тебя» no longer pins «ждёт» once the spinner turns', () => {
+  const d = mkD({ waitLatched: true, waitKind: 'question' });
+  const snap = ASK + '\n' + SPINNER;   // answered; the ask line is still in scrollback
+  const eff = D.applyLatch(d, NOW, snap, D.decide(d, NOW, snap));
+  assert.strictEqual(eff.status, 'running');
+  assert.strictEqual(d.waitLatched, false);
+});
+
+test('latch: «Сейчас от тебя» with no sign of work stays «ждёт»', () => {
+  const d = mkD({ waitLatched: true, waitKind: 'question' });
+  const eff = D.applyLatch(d, NOW, ASK, D.decide(d, NOW, ASK));
+  assert.strictEqual(eff.status, 'waiting');
+  assert.strictEqual(d.waitLatched, true);
+});
+
+test('latch: Enter + fresh output beats a stale «Сейчас от тебя» (no spinner yet)', () => {
+  const d = mkD({ waitLatched: true, waitKind: 'question', answeredAt: NOW, lastDataAt: NOW });
+  const eff = D.applyLatch(d, NOW, ASK, D.decide(d, NOW, ASK));
+  assert.strictEqual(eff.status, 'running');
+  assert.strictEqual(d.waitLatched, false);
+});
+
+test('latch: Enter on a cleared screen releases without the debounce wait', () => {
+  const d = mkD({ waitLatched: true, waitKind: 'permission', answeredAt: NOW, lastDataAt: NOW });
+  const eff = D.applyLatch(d, NOW, QUIET, D.decide(d, NOW, QUIET));
+  assert.strictEqual(eff.status, 'running');
+  assert.strictEqual(d.waitLatched, false);
+});
+
+test('latch: a NEW prompt clears the Enter hint (next prompt gets the full debounce)', () => {
+  const d = mkD({ answeredAt: NOW });
+  D.applyLatch(d, NOW, PERMISSION, D.decide(d, NOW, PERMISSION));   // engage on a new prompt
+  assert.strictEqual(d.answeredAt, 0);
+  const eff = D.applyLatch(d, NOW + 1, QUIET, D.decide(d, NOW + 1, QUIET));
+  assert.strictEqual(eff.status, 'waiting', 'a repaint blip must not release it');
+});
+
+test('latch: a stale answeredAt does not shortcut the debounce', () => {
+  const t = NOW + D.ANSWER_HINT_MS;       // hint window has expired
+  const d = mkD({ waitLatched: true, waitKind: 'permission', answeredAt: NOW });
+  const eff = D.applyLatch(d, t, QUIET, D.decide(d, t, QUIET));
+  assert.strictEqual(eff.status, 'waiting', 'back to the normal repaint debounce');
+  assert.strictEqual(d.waitLatched, true);
+});
+
 test('latch: kind sharpens question → permission', () => {
   const d = mkD();
   D.applyLatch(d, NOW, QUESTION, D.decide(d, NOW, QUESTION));     // latch as question

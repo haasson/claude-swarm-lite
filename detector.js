@@ -14,6 +14,13 @@ const ACTIVE_MS = 1200;      // bytes seen this recently => the agent is working
 // its spinner is back — or the wait chrome has been gone this long with no work
 // (a just-answered trivial prompt). Debounce > a repaint blip so it can't flicker.
 const LATCH_RELEASE_MS = 900;
+// You pressed Enter in a latched-«ждёт» session (main sets `answeredAt`): that's an
+// ANSWER, not «work resumed» — a multi-question quiz answers one question and paints
+// the next, so Enter alone must never release the latch. It only makes us quicker to
+// believe the OTHER evidence: within this window a live prompt box still wins, but a
+// stale on-screen «Сейчас от тебя» no longer outvotes fresh output, and the
+// release debounce drops to zero. Wide enough to cover the agent's first repaint.
+const ANSWER_HINT_MS = 3000;
 
 // Waiting on me: a permission / confirm prompt sits on screen.
 // Selection cursor before "1. Yes / 2. No": Claude Code often paints ❯ (heavy
@@ -82,10 +89,21 @@ function decide(d, now, snap) {
   return { status: 'ready', detail: 'готов' };
 }
 
+// A LIVE prompt box on screen (permission / options list). Claude Code erases it the
+// moment you answer, so its presence is current evidence — unlike the prose marker.
+function hasPromptBox(snap) {
+  return RE_WAIT.test(snap) || RE_WAIT_NOW.test(snap);
+}
+
 // Any on-screen evidence that we're still waiting on the user. When NONE of these
 // match, the prompt/question is gone from the visible screen.
 function hasWaitChrome(snap) {
-  return RE_WAIT.test(snap) || RE_WAIT_NOW.test(snap) || asksForInput(snap);
+  return hasPromptBox(snap) || asksForInput(snap);
+}
+
+// Did the user just press Enter into this session? See ANSWER_HINT_MS.
+function answeredRecently(d, now) {
+  return !!d.answeredAt && now - d.answeredAt < ANSWER_HINT_MS;
 }
 
 // The latch: `raw` is decide()'s per-tick read; this holds «ждёт» through screen
@@ -95,30 +113,46 @@ function hasWaitChrome(snap) {
 // (waitLatched, waitKind, chromeGoneSince).
 function applyLatch(d, now, snap, raw) {
   if (d.waitLatched) {
-    if (hasWaitChrome(snap)) {
+    // A live prompt box beats everything, including a spinner left over in the rows
+    // above it — that's the quiz case: Enter answered question 1 and question 2 is
+    // already painted, so we're still «ждёт».
+    if (hasPromptBox(snap)) {
       // Still waiting on screen. Kind can only sharpen (question → permission),
       // never soften, so the label doesn't flip-flop.
       d.chromeGoneSince = 0;
       if (raw.status === 'waiting' && raw.kind === 'permission') d.waitKind = 'permission';
       return { status: 'waiting', detail: 'ждёт ответа', kind: d.waitKind };
     }
-    if (RE_RUNNING.test(snap)) {
-      // Spinner is back — the agent genuinely resumed. Release now.
-      d.waitLatched = false; d.waitKind = null; d.chromeGoneSince = 0;
+    // No box. The agent visibly resumed => release, even though a «Сейчас от тебя»
+    // line may still sit in the rows below (it's scrollback text, not live UI, and
+    // it lingers for seconds after you answer — it used to pin the tab to «ждёт»
+    // while the spinner was already turning). Evidence: the spinner, or fresh output
+    // right after you pressed Enter.
+    const release = () => { d.waitLatched = false; d.waitKind = null; d.chromeGoneSince = 0; };
+    if (RE_RUNNING.test(snap) || (answeredRecently(d, now) && raw.status === 'running')) {
+      release();
       return raw;
+    }
+    // A prose question with no sign of work: nothing has happened yet, keep «ждёт».
+    if (asksForInput(snap)) {
+      d.chromeGoneSince = 0;
+      return { status: 'waiting', detail: 'ждёт ответа', kind: d.waitKind };
     }
     // Chrome gone but no spinner: a repaint blip, or a trivial prompt just answered
     // and the turn ended. Debounce — release only after it's been gone a while, so a
-    // one-tick repaint can't flicker us out of «ждёт».
+    // one-tick repaint can't flicker us out of «ждёт». Right after YOUR Enter there's
+    // nothing to protect against: the screen is clean because you answered.
     if (!d.chromeGoneSince) d.chromeGoneSince = now;
-    if (now - d.chromeGoneSince >= LATCH_RELEASE_MS) {
-      d.waitLatched = false; d.waitKind = null; d.chromeGoneSince = 0;
+    if (now - d.chromeGoneSince >= (answeredRecently(d, now) ? 0 : LATCH_RELEASE_MS)) {
+      release();
       return raw;
     }
     return { status: 'waiting', detail: 'ждёт ответа', kind: d.waitKind };
   }
   if (raw.status === 'waiting') {
-    d.waitLatched = true; d.waitKind = raw.kind; d.chromeGoneSince = 0;
+    // A NEW prompt: forget the previous Enter, or its hint window would let a
+    // one-tick repaint of this fresh prompt release the latch with no debounce.
+    d.waitLatched = true; d.waitKind = raw.kind; d.chromeGoneSince = 0; d.answeredAt = 0;
   }
   return raw;
 }
@@ -167,8 +201,8 @@ function tickStatus(d, now, snap) {
 }
 
 module.exports = {
-  ACTIVE_MS, LATCH_RELEASE_MS,
+  ACTIVE_MS, LATCH_RELEASE_MS, ANSWER_HINT_MS,
   RE_WAIT, RE_WAIT_NOW, RE_RUNNING,
-  decide, hasWaitChrome, applyLatch,
+  decide, hasWaitChrome, hasPromptBox, applyLatch,
   applyHook, arbitrate, tickStatus,
 };
