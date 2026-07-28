@@ -84,6 +84,24 @@ function pairingMatch(msg, code) {
 // to — the reply is the routing key, so it survives into `replyToId`.
 function readUpdate(u) {
   if (!u || typeof u !== 'object') return null;
+  // A tapped button. Its `message` is the one the keyboard hangs on, so the chat and the
+  // topic come from there — the same routing keys a plain message has.
+  if (u.callback_query) {
+    const q = u.callback_query;
+    const m = q.message || {};
+    const chat = m.chat || {};
+    return {
+      updateId: u.update_id,
+      kind: 'callback',
+      callbackId: q.id,
+      data: String(q.data || ''),
+      fromId: (q.from || {}).id,
+      chatId: chat.id,
+      threadId: m.is_topic_message ? (m.message_thread_id || null) : null,
+      messageId: m.message_id,
+      text: String(m.text || ''),
+    };
+  }
   const msg = u.message || u.edited_message || null;
   if (!msg) return { updateId: u.update_id, kind: 'other', msg: null };
   const from = msg.from || {};
@@ -174,6 +192,45 @@ function tagInput(opts) {
   return text ? `${head} ${text}` : head;
 }
 
+// --- buttons under a permission request ---------------------------------------
+// One button per option Claude offered, and nothing else: the payload carries the option
+// NUMBER, so tapping can only ever choose from that list. It also carries the tab and the
+// prompt's fingerprint, because by the time you tap, that prompt may be gone — main
+// re-checks both before typing anything (see the plan: «одобряешь то, что видишь»).
+//
+// callback_data is capped at 64 bytes by Telegram, so the payload is deliberately terse:
+//   p|<tab id>|<fingerprint>|<option number>
+const CB_PREFIX = 'p';
+const CB_MAX = 64;
+
+function callbackData(tab, fingerprint, n) {
+  const data = [CB_PREFIX, tab, fingerprint, n].join('|');
+  return data.length <= CB_MAX ? data : null;
+}
+
+function parseCallbackData(raw) {
+  const parts = String(raw == null ? '' : raw).split('|');
+  if (parts.length !== 4 || parts[0] !== CB_PREFIX) return null;
+  const n = Number(parts[3]);
+  if (!parts[1] || !parts[2] || !Number.isInteger(n) || n < 1) return null;
+  return { tab: parts[1], fingerprint: parts[2], n };
+}
+
+// `options` is what screen.js parsed: [{ n, text }]. Two per row keeps «1. Yes / 2. No»
+// side by side and still fits a long «3. No, and tell Claude what to do» on its own line.
+function inlineKeyboard(options, tab, fingerprint) {
+  const rows = [];
+  let row = [];
+  for (const o of Array.isArray(options) ? options : []) {
+    const data = callbackData(tab, fingerprint, o.n);
+    if (!data) continue;                       // can't address it => don't offer it
+    row.push({ text: `${o.n}. ${o.text}`, callback_data: data });
+    if (o.text.length > 24 || row.length === 2) { rows.push(row); row = []; }
+  }
+  if (row.length) rows.push(row);
+  return rows.length ? { inline_keyboard: rows } : null;
+}
+
 // --- outbound text -----------------------------------------------------------
 // Telegram rejects anything over 4096 chars. Split on paragraph, then line, then hard
 // — a question from an agent is prose, so breaking mid-word is the last resort.
@@ -252,7 +309,7 @@ function createPoller(deps) {
 
   async function once() {
     const res = await fetchJson(apiUrl(token, 'getUpdates'), {
-      offset, timeout: timeoutS, allowed_updates: ['message'],
+      offset, timeout: timeoutS, allowed_updates: ['message', 'callback_query'],
     });
     if (!res || !res.ok || !res.body || res.body.ok !== true) {
       const err = classifyError(res && res.status, res && res.body);
@@ -296,6 +353,6 @@ module.exports = {
   API_HOST, MAX_TEXT, POLL_TIMEOUT_S, BACKOFF_MAX_MS, CODE_LEN, TG_TAG, tagInput,
   apiUrl, looksLikeToken, maskToken,
   pairCode, deepLink, pairingMatch,
-  readUpdate, routeMessage, chunkText, backoffMs, retryAfterMs, classifyError,
+  readUpdate, routeMessage, chunkText, inlineKeyboard, callbackData, parseCallbackData, CB_MAX, backoffMs, retryAfterMs, classifyError,
   createPoller,
 };

@@ -184,6 +184,60 @@ test('tagInput: no instruction, or no text, still yields something sane', () => 
   assert.strictEqual(T.tagInput({ text: '', instruction: 'коротко' }), '[тлг: коротко]');
 });
 
+// --- buttons under a permission request ---------------------------------------
+
+test('inlineKeyboard offers exactly the options Claude gave, carrying tab + fingerprint', () => {
+  const kb = T.inlineKeyboard([{ n: 1, text: 'Yes' }, { n: 2, text: 'No' }], '3', 'abc123');
+  const flat = kb.inline_keyboard.flat();
+  assert.deepStrictEqual(flat.map((b) => b.text), ['1. Yes', '2. No']);
+  assert.deepStrictEqual(T.parseCallbackData(flat[1].callback_data), { tab: '3', fingerprint: 'abc123', n: 2 });
+});
+
+test('inlineKeyboard puts a long option on its own row', () => {
+  const kb = T.inlineKeyboard([
+    { n: 1, text: 'Yes' }, { n: 2, text: 'Yes, and don\'t ask again for rm commands' }, { n: 3, text: 'No' },
+  ], '3', 'abc123');
+  assert.strictEqual(kb.inline_keyboard.length, 2, JSON.stringify(kb.inline_keyboard));
+});
+
+test('inlineKeyboard drops an option it cannot address, and nothing means no keyboard', () => {
+  const huge = 'f'.repeat(T.CB_MAX);
+  assert.strictEqual(T.inlineKeyboard([{ n: 1, text: 'Yes' }], '3', huge), null);
+  assert.strictEqual(T.inlineKeyboard([], '3', 'abc'), null);
+  assert.strictEqual(T.inlineKeyboard(null, '3', 'abc'), null);
+});
+
+test('callbackData stays inside Telegram’s 64-byte limit', () => {
+  assert.ok(T.callbackData('12', 'zzzzzzz', 3).length <= T.CB_MAX);
+});
+
+test('parseCallbackData rejects anything that is not ours', () => {
+  for (const junk of ['', 'x|3|abc|1', 'p|3|abc', 'p||abc|1', 'p|3|abc|0', 'p|3|abc|нет', null]) {
+    assert.strictEqual(T.parseCallbackData(junk), null, String(junk));
+  }
+});
+
+test('readUpdate turns a tapped button into a routable callback', () => {
+  const u = T.readUpdate({
+    update_id: 7,
+    callback_query: {
+      id: 'q1', data: 'p|3|abc123|2', from: { id: 42 },
+      message: { message_id: 9, is_topic_message: true, message_thread_id: 5, chat: { id: -100123 } },
+    },
+  });
+  assert.strictEqual(u.kind, 'callback');
+  assert.strictEqual(u.callbackId, 'q1');
+  assert.strictEqual(u.chatId, -100123);
+  assert.strictEqual(u.threadId, 5, 'the topic must survive: it is still the routing key');
+  assert.strictEqual(u.data, 'p|3|abc123|2');
+});
+
+test('the poller subscribes to button taps, not just messages', async () => {
+  const h = harness([okUpdates([])]);
+  await h.poller.start();
+  assert.deepStrictEqual(h.calls[0].body.allowed_updates, ['message', 'callback_query']);
+});
+
 // --- outbound text -----------------------------------------------------------
 
 test('chunkText leaves a short message alone', () => {
