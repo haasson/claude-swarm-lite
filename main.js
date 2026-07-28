@@ -215,7 +215,7 @@ process.on('unhandledRejection', (reason) => reportMainError(reason));
 // tell "waiting for a prompt" apart from "idle/done". We deliberately do NOT
 // surface Claude's token counter or activity words — just the four states.
 const { Terminal: HeadlessTerminal } = require('@xterm/headless');
-const { extractQuestion, countSubagents, contentEnd, snapshotRows, setAskPhrases } = require('./screen');
+const { extractQuestion, countSubagents, contentEnd, snapshotRows, setAskPhrases, parsePrompt } = require('./screen');
 // The status state machine + «ждёт» latch + hook arbitration live in a pure,
 // unit-tested module; osc.js sniffs hook markers out of the raw pty stream.
 const { tickStatus, applyHook, applyTranscript } = require('./detector');
@@ -648,10 +648,13 @@ async function tgSend(opts) {
   const chatId = o.chatId != null ? o.chatId : TG.chatId;
   if (!TG.token || chatId == null) return null;
   let last = null;
-  for (const part of telegram.chunkText(o.text, telegram.MAX_TEXT)) {
+  const parts = telegram.chunkText(o.text, telegram.MAX_TEXT);
+  for (const part of parts) {
     const body = { chat_id: chatId, text: part, disable_notification: !!o.silent };
     if (o.threadId) body.message_thread_id = o.threadId;
     if (o.replyTo) body.reply_to_message_id = o.replyTo;
+    // Buttons go on the LAST chunk: that's the one the answer hangs off.
+    if (o.replyMarkup && part === parts[parts.length - 1]) body.reply_markup = o.replyMarkup;
     let res = await tgFetchJson(telegram.apiUrl(TG.token, 'sendMessage'), body);
     // The user deleted the topic we remembered. Don't swallow the message: forget the
     // mapping (a fresh topic gets made next time) and deliver this one to General.
@@ -1031,20 +1034,66 @@ async function tgNotifyDone(id, d) {
 
 async function tgNotifyWaiting(id, d) {
   const permission = d.waitingKind === 'permission';
+  const threadId = await tgTopicFor(id);
+  // A permission is answered with BUTTONS carrying Claude's own options — never with free
+  // text. You approve what you see: the request (with the command in it) is in the message,
+  // and nothing that wasn't on Claude's list can be chosen. Typing «да» here still gets
+  // refused, because a word is not a choice from a list.
+  const prompt = permission ? parsePrompt(snapshot(d)) : null;
+  if (prompt && prompt.options.length) {
+    const kb = telegram.inlineKeyboard(prompt.options, String(id), prompt.fingerprint);
+    if (kb) {
+      const msgId = await tgSend({
+        threadId,
+        text: `🔐 ${tgTabName(id)} просит разрешение\n\n${prompt.title}`,
+        replyMarkup: kb,
+      });
+      tgRemember(msgId, id);
+      return;
+    }
+  }
   const head = permission ? '🔐 просит разрешение' : '❓ вопрос';
   const body = d.question ? '\n\n' + d.question : '';
-  // Permissions are deliberately NOT answerable from here: typing «да» into a
-  // permission dialog from a phone is handing out command execution blind, with no way
-  // to see what's being approved. It's a separate decision, not a default.
   const tail = permission
-    ? '\n\nОтветить можно только за компьютером.'
+    ? '\n\nВариантов не разобрал — ответь за компьютером.'
     : '\n\nОтветь реплаем на это сообщение.';
-  const threadId = await tgTopicFor(id);
-  const msgId = await tgSend({
-    threadId,
-    text: `${head} · ${tgTabName(id)}${body}${tail}`,
-  });
+  const msgId = await tgSend({ threadId, text: `${head} · ${tgTabName(id)}${body}${tail}` });
   if (!permission) tgRemember(msgId, id);
+}
+
+// A tapped button. Everything is re-checked here, because a lot can happen between the
+// message going out and your thumb landing on it: the tab may be gone, the prompt may have
+// been answered at the keyboard, or a DIFFERENT prompt may now be on screen. Printing the
+// number into that would be the worst thing this bridge could do — so the fingerprint of
+// what's on screen right now must equal the one the button was built with.
+async function tgOnCallback(u) {
+  const ack = (text) => tgFetchJson(telegram.apiUrl(TG.token, 'answerCallbackQuery'),
+    { callback_query_id: u.callbackId, text, show_alert: false }).catch(reportMainError);
+  const cb = telegram.parseCallbackData(u.data);
+  if (!cb) { await ack('Не понял эту кнопку.'); return; }
+  const routed = tgRoute(u);
+  const d = det.get(cb.tab);
+  if (!d || d.dead || !sessions.has(cb.tab) || (routed != null && String(routed) !== cb.tab)) {
+    await ack('Эта вкладка уже закрыта.');
+    return;
+  }
+  const now = parsePrompt(snapshot(d));
+  if (!now || now.fingerprint !== cb.fingerprint) {
+    await ack('Запрос уже закрыт — на экране другое.');
+    tgLog(`  нажатие мимо: отпечаток ${cb.fingerprint} ≠ ${now ? now.fingerprint : 'нет запроса'}`);
+    return;
+  }
+  const chosen = now.options.find((o) => o.n === cb.n);
+  if (!chosen) { await ack('Такого варианта здесь нет.'); return; }
+  tgAnswer(cb.tab, String(cb.n));
+  tgLog(`  нажатие: вкладка ${cb.tab} → вариант ${cb.n}`);
+  await ack(`Выбрано: ${cb.n}. ${chosen.text}`);
+  // Freeze the message: the choice is made, the buttons must not invite a second tap.
+  await tgFetchJson(telegram.apiUrl(TG.token, 'editMessageText'), {
+    chat_id: u.chatId,
+    message_id: u.messageId,
+    text: `${u.text}\n\n✅ выбрано: ${cb.n}. ${chosen.text}`,
+  }).catch(reportMainError);
 }
 
 // Why a pairing attempt didn't take. Told to the chat that tried, because the person
@@ -1102,7 +1151,12 @@ async function tgBindChat(chatId, threadId) {
 }
 
 function tgOnUpdate(u) {
-  if (!u || u.kind !== 'message') return;
+  if (!u) return;
+  if (u.kind === 'callback') {
+    if (TG.chatId != null && u.chatId === TG.chatId) tgOnCallback(u).catch(reportMainError);
+    return;
+  }
+  if (u.kind !== 'message') return;
   tgLog(`← chat=${u.chatId} thread=${u.threadId == null ? '-' : u.threadId}`
     + ` reply=${u.replyToId == null ? '-' : u.replyToId} cmd=${u.command || '-'}`
     + ` text=${JSON.stringify(String(u.text || '').slice(0, 60))}`);
@@ -1162,7 +1216,8 @@ function tgOnUpdate(u) {
   if (d && d.status === 'waiting' && d.waitingKind === 'permission') {
     tgSend({
       threadId: u.threadId, replyTo: u.messageId,
-      text: `${tgTabName(id)} ждёт разрешения — это только за компьютером.`,
+      text: `${tgTabName(id)} ждёт разрешения: выбери вариант кнопкой под запросом.`
+        + ' Словами разрешение не даётся — одобрять можно только то, что предложил Клод.',
     }).catch(reportMainError);
     return;
   }
