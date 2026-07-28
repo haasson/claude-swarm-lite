@@ -532,7 +532,24 @@ setInterval(() => {
 const telegram = require('./telegram');
 const qrcode = require('qrcode-generator');   // one file, no deps: the pairing QR
 
-const TG_PAIR_TTL_MS = 120_000;   // a pairing code is good for two minutes
+// How long a pairing code lives. NOT two minutes: the realistic path is «отправил код →
+// бот сказал, что он не админ → пошёл в настройки группы, нашёл бота, выдал права,
+// проверил, что включены темы → вернулся», and that takes longer than two minutes. A code
+// that dies mid-fix looked exactly like a broken bridge, because an unknown code hits the
+// «this chat isn't ours» branch and is dropped in silence.
+const TG_PAIR_TTL_MS = 900_000;   // 15 minutes
+// Diagnostics for the bridge: SWARM_TG_LOG=1 npm start writes every incoming message and
+// what we did with it to <userData>/telegram.log. Added after a pairing attempt failed
+// silently and the only way to tell «не дошло» from «дошло и отброшено» was to read code.
+const TG_DEBUG = process.env.SWARM_TG_LOG === '1';
+
+function tgLog(line) {
+  if (!TG_DEBUG) return;
+  try {
+    fs.appendFileSync(path.join(app.getPath('userData'), 'telegram.log'),
+      new Date().toISOString().slice(11, 23) + ' ' + line + '\n');
+  } catch (_) { /* diagnostics must never break the bridge */ }
+}
 
 // What we tell an agent when its input arrives from a phone. Editable in the Telegram
 // panel — «покороче» is a matter of taste — and kept on one line, because it's injected
@@ -977,6 +994,25 @@ async function tgNotifyWaiting(id, d) {
   if (!permission) tgRemember(msgId, id);
 }
 
+// Why a pairing attempt didn't take. Told to the chat that tried, because the person
+// holding the phone is the only one who can act on it.
+function tgPairHint() {
+  if (!tgPair) return 'Окно привязки закрыто. Открой «Настройки → Телеграм» → «Привязать чат»'
+    + ' и пришли новый код.';
+  const left = TG_PAIR_TTL_MS - (Date.now() - tgPair.at);
+  if (left <= 0) return 'Код истёк. Нажми «Привязать чат» ещё раз и пришли новый —'
+    + ' он живёт 15 минут.';
+  return `Этот код не подходит. Пришли тот, что показан в настройках (действует ещё`
+    + ` ${Math.ceil(left / 60000)} мин).`;
+}
+
+// Minutes a live pairing code still has, for messages that ask the user to go fix
+// something and come back.
+function tgPairLeftMin() {
+  if (!tgPair) return 0;
+  return Math.max(0, Math.ceil((TG_PAIR_TTL_MS - (Date.now() - tgPair.at)) / 60000));
+}
+
 // Bind a chat — from the pairing code or from a hand-typed id. The check is a GATE, not
 // advice: binding a chat where the bot can't create topics or can't see messages would
 // look like a working bridge that silently does nothing. On refusal we say exactly what to
@@ -985,8 +1021,13 @@ async function tgBindChat(chatId, threadId) {
   const check = await tgCheckChat(chatId);
   tgCheck = check;
   if (!check || !check.ok) {
-    if (tgPair) tgPair.at = Date.now();          // another two minutes to fix and retry
-    await tgSend({ chatId, threadId, text: (check && check.note) || 'Не удалось проверить чат.' });
+    tgLog(`  привязка отклонена: ${(check && check.note) || 'проверка не прошла'}`);
+    // Keep the window open: the user is about to go fix exactly what we just named, and a
+    // code that dies while they're in the group settings is how this looked broken.
+    if (tgPair) tgPair.at = Date.now();
+    const note = (check && check.note) || 'Не удалось проверить чат.';
+    const tail = tgPair ? ` Поправь и пришли этот же код снова — он действует ещё ${tgPairLeftMin()} мин.` : '';
+    await tgSend({ chatId, threadId, text: note + tail });
     tgPush();
     return false;
   }
@@ -1008,15 +1049,30 @@ async function tgBindChat(chatId, threadId) {
 
 function tgOnUpdate(u) {
   if (!u || u.kind !== 'message') return;
+  tgLog(`← chat=${u.chatId} thread=${u.threadId == null ? '-' : u.threadId}`
+    + ` reply=${u.replyToId == null ? '-' : u.replyToId} cmd=${u.command || '-'}`
+    + ` text=${JSON.stringify(String(u.text || '').slice(0, 60))}`);
   // Pairing wins over everything: the chat that brings the code becomes THE chat. Until
   // then nothing is bound, so no message can be mistaken for an answer to an agent.
   if (tgPair && Date.now() - tgPair.at < TG_PAIR_TTL_MS && telegram.pairingMatch(u, tgPair.code)) {
+    tgLog('  код совпал — проверяю чат');
     tgBindChat(u.chatId, u.threadId).catch(reportMainError);
+    return;
+  }
+  // Nothing bound yet, and the code didn't match above: this is almost always someone
+  // trying to pair and getting it slightly wrong (a stale code, a code from a previous
+  // click, no open window at all). Silence here reads as «мост сломан», so say which of
+  // those it is. Nothing can be bound by this reply, so it's safe to answer.
+  if (TG.chatId == null) {
+    tgLog(`  чат не привязан; код ${tgPair ? 'открыт, не совпал или истёк' : 'не запрашивали'}`);
+    if (u.command === 'start' || /^[A-Za-z0-9]{4,10}$/.test(String(u.text || '').trim())) {
+      tgSend({ chatId: u.chatId, threadId: u.threadId, text: tgPairHint() }).catch(reportMainError);
+    }
     return;
   }
   // Anything from another chat is not ours to listen to — a stranger who found the bot
   // gets silence, not a prompt injected into somebody's session.
-  if (TG.chatId == null || u.chatId !== TG.chatId) return;
+  if (u.chatId !== TG.chatId) { tgLog('  чужой чат — игнорирую'); return; }
 
   if (u.command === 'tabs') { tgSendTabs(u.threadId).catch(reportMainError); return; }
   if (u.command === 'start') { tgSend({ threadId: u.threadId, text: 'Уже на связи. /tabs — что сейчас у агентов.' }).catch(reportMainError); return; }
@@ -1028,6 +1084,7 @@ function tgOnUpdate(u) {
   if (!text) return;
 
   const id = tgRoute(u);
+  tgLog(`  адресат: ${id == null ? 'не определён' : 'вкладка ' + id + ' (' + tgTabName(id) + ')'}`);
   if (id == null) {
     tgSend({
       threadId: u.threadId,
