@@ -907,6 +907,19 @@ function tgRemember(messageId, id) {
   while (tgSent.size > TG_SENT_CAP) tgSent.delete(tgSent.keys().next().value);
 }
 
+// Both maps are keyed by ids that belong to ONE chat, so they have to die with the mapping
+// they describe. Telegram numbers topics and messages from small integers inside each
+// group, so a fresh group hands out thread 2 and message 3 immediately — and a leftover
+// `2 → вкладка 7` from the previous group routes the new group's first message into an
+// unrelated tab. Whoever clears TG.topics clears these.
+function tgResetRouting() {
+  tgTopicSession.clear();
+  tgSent.clear();
+  // The per-tab memory of «this tab already has a live topic» belongs to the old chat too:
+  // without this a tab would skip reopening/renaming its topic in the new group.
+  for (const d of det.values()) { d.tgTopicLive = false; d.tgTopicName = ''; }
+}
+
 function tgTabName(id) {
   const d = det.get(id);
   return (d && d.name) || `вкладка ${id}`;
@@ -1224,6 +1237,7 @@ async function tgBindChat(chatId, threadId) {
   TG.chatId = chatId;
   TG.isForum = true;
   TG.topics = {};
+  tgResetRouting();          // ids from the previous group must not address this one
   tgPair = null;
   try { tgSave(); } catch (e) { reportMainError(e); }
   await tgSend({
@@ -1415,6 +1429,7 @@ ipcMain.handle('telegram:setToken', async (_e, raw) => {
     return tgState();
   }
   TG = Object.assign(tgBlank(), { token });   // a new token means a new bot: unbind
+  tgResetRouting();                           // …and its chat's thread/message ids
   try { tgSave(); } catch (e) { tgError = String(e.message || e); return tgState(); }
   await tgConnect();
   return tgState();
@@ -1423,6 +1438,7 @@ ipcMain.handle('telegram:setToken', async (_e, raw) => {
 ipcMain.handle('telegram:forget', async () => {
   tgStop();
   TG = tgBlank();
+  tgResetRouting();
   tgBot = ''; tgPair = null; tgError = null; tgCheck = null;
   try { fs.unlinkSync(tgPath()); } catch (_) { /* already gone */ }
   tgApplyKeepAwake();
@@ -1472,6 +1488,7 @@ ipcMain.handle('telegram:setKeepAwake', (_e, on) => {
 
 ipcMain.handle('telegram:unpair', async () => {
   TG.chatId = null; TG.isForum = false; TG.topics = {}; tgCheck = null;
+  tgResetRouting();
   try { tgSave(); } catch (e) { reportMainError(e); }
   tgApplyKeepAwake();
   return tgState();
