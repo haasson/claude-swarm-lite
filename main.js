@@ -1269,14 +1269,23 @@ function tgRoute(u) {
 // from the clipboard). Without it the first newline submits, so half the message went to
 // the agent and the rest was typed on top as a second one. Single-line text — the common
 // case — takes the plain path, so nothing new can break there.
-const PASTE_ON = '\x1b[200~';
-const PASTE_OFF = '\x1b[201~';
+// Пауза между текстом и Enter. Смысл в том, чтобы Enter пришёл ОТДЕЛЬНЫМ чтением stdin, а
+// не хвостом вставки — почему это важно, написано у telegram.inputWrites. Достаточно
+// маленькая, чтобы человек не заметил, и достаточно большая, чтобы Ink успел разобрать
+// первый кусок как ввод, а не склеить оба в один.
+const TG_ENTER_DELAY_MS = 90;
 
 function tgAnswer(id, text) {
   const p = sessions.get(id);
   if (!p) return false;
-  const body = String(text).replace(/\r\n?/g, '\n');
-  p.write(body.includes('\n') ? PASTE_ON + body + PASTE_OFF + '\r' : body + '\r');
+  const [body, enter] = telegram.inputWrites(text);
+  if (!body) return false;
+  p.write(body);
+  setTimeout(() => {
+    // Вкладка могла умереть за эти миллисекунды — тогда Enter уже некому.
+    const live = sessions.get(id);
+    if (live) { try { live.write(enter); } catch (_) {} }
+  }, TG_ENTER_DELAY_MS);
   const d = det.get(id);
   if (d) {
     d.graceUntil = 0; d.lastDataAt = Date.now(); d.answeredAt = Date.now();
@@ -1518,12 +1527,19 @@ function tgOnUpdate(u) {
   const id = tgRoute(u);
   tgLog(`  адресат: ${id == null ? 'не определён' : 'вкладка ' + id + ' (' + tgTabName(id) + ')'}`);
   if (id == null) {
-    tgSend({
-      threadId: u.threadId,
-      replyTo: u.messageId,
-      text: 'Это общая тема — здесь я не знаю, к какому агенту обращаться. Напиши в тему нужной'
-        + ' вкладки (список — /tabs) или ответь реплаем на сообщение агента.',
-    }).catch(reportMainError);
+    // Отказ должен называть НАСТОЯЩУЮ причину: «это общая тема» в ответ на сообщение,
+    // отправленное в тему вкладки, отправляет человека искать не ту проблему.
+    const why = telegram.routeFailure(u, { topics: TG.topics });
+    const text = why === 'general'
+      ? 'Это общая тема — здесь я не знаю, к какому агенту обращаться. Напиши в тему нужной'
+        + ' вкладки (список — /tabs) или ответь реплаем на сообщение агента.'
+      : why === 'topic-closed'
+        ? 'Вкладка этой темы уже закрыта, писать некому. Открытые — /tabs, а /sync приведёт'
+          + ' темы в соответствие с ними.'
+        : 'Эта тема ни с одной вкладкой не связана. Скажи /sync — я заново сведу темы с'
+          + ' открытыми вкладками, и сюда снова можно будет писать.';
+    tgLog(`  отказ: ${why}`);
+    tgSend({ threadId: u.threadId, replyTo: u.messageId, text }).catch(reportMainError);
     return;
   }
   const d = det.get(id);
@@ -2017,7 +2033,12 @@ ipcMain.on('session:input', (_event, { id, data }) => {
   // You're at the keyboard for this tab, so it is no longer «driven from the phone»:
   // full-size answers and interactive pickers are useful again. The mode follows where
   // YOU are, not where the last message came from.
-  tgClearMode(d);
+  //
+  // Кроме ПУСТОГО Enter: он ничего не печатает, а лишь отправляет то, что уже лежит в
+  // поле ввода — как правило, ровно текст из телеги, которому не хватило отправки. Снимать
+  // на нём режим значило «помог мосту руками и этим отрезал себе ответ»: агент отвечал, а
+  // в телегу не приходило ничего. Печатаешь что-то своё — режим снимается, как и раньше.
+  if (/[^\r\n]/.test(String(data || ''))) tgClearMode(d);
   const now = Date.now();
   if (/[\r\n]/.test(String(data || ''))) {
     // Enter: you SENT something. Don't sit out the grace window — that froze the

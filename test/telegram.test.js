@@ -161,6 +161,47 @@ test('route: a message in General names no tab — it is the control channel', (
   assert.strictEqual(T.routeMessage({ text: 'сделай X' }, ctx()), null);
 });
 
+// --- почему отказали: сообщение об ошибке не должно врать ----------------------
+// Раньше на любое «не знаю адресата» уходило «это общая тема» — включая случай, когда
+// человек писал в НАСТОЯЩУЮ тему вкладки. Он шёл искать несуществующую проблему.
+
+test('routeFailure: вне тем — это правда общая тема', () => {
+  assert.strictEqual(T.routeFailure({ text: 'привет' }, { topics: { a: 9 } }), 'general');
+  assert.strictEqual(T.routeFailure({ threadId: null }, { topics: {} }), 'general');
+  assert.strictEqual(T.routeFailure(null, {}), 'general');
+});
+
+test('routeFailure: тема известна, но вкладки нет — «вкладка закрыта», а не «общая тема»', () => {
+  assert.strictEqual(T.routeFailure({ threadId: 9 }, { topics: { 'tab-a': 9 } }), 'topic-closed');
+});
+
+test('routeFailure: тема нам неизвестна — предлагаем /sync', () => {
+  assert.strictEqual(T.routeFailure({ threadId: 42 }, { topics: { 'tab-a': 9 } }), 'topic-alien');
+  assert.strictEqual(T.routeFailure({ threadId: 42 }, {}), 'topic-alien');
+});
+
+// --- как текст попадает в pty -------------------------------------------------
+// Один кусок `текст\r` не отправляется: Claude Code принимает крупный быстрый ввод за
+// вставку и хвостовой возврат каретки кладёт в буфер переводом строки. Снаружи это
+// «сообщение из телеги легло в поле ввода и осталось там».
+
+test('inputWrites отдаёт текст и Enter ОТДЕЛЬНЫМИ записями', () => {
+  assert.deepStrictEqual(T.inputWrites('посмотри тест'), ['посмотри тест', '\r']);
+});
+
+test('inputWrites оборачивает многострочное в bracketed paste, Enter — снаружи', () => {
+  const w = T.inputWrites('первая\nвторая');
+  assert.deepStrictEqual(w, [T.PASTE_ON + 'первая\nвторая' + T.PASTE_OFF, '\r']);
+  // Enter обязан быть ВНЕ маркеров вставки, иначе он часть вставленного текста.
+  assert.ok(!w[0].endsWith('\r'));
+});
+
+test('inputWrites нормализует переводы строк и не пишет пустое', () => {
+  assert.deepStrictEqual(T.inputWrites('а\r\nб'), [T.PASTE_ON + 'а\nб' + T.PASTE_OFF, '\r']);
+  assert.deepStrictEqual(T.inputWrites(''), []);
+  assert.deepStrictEqual(T.inputWrites(null), []);
+});
+
 // --- tagging the injected text ------------------------------------------------
 
 test('tagInput: the first message carries the whole convention', () => {

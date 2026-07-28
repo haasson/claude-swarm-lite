@@ -192,6 +192,42 @@ function tagInput(opts) {
   return text ? `${head} ${text}` : head;
 }
 
+// Почему адресат не определился. Нужно, чтобы отказ не врал: раньше на любое «не знаю»
+// уходило «это общая тема», в том числе когда человек писал в НАСТОЯЩУЮ тему вкладки. Это
+// худший вид сообщения об ошибке — оно уверенно называет неверную причину, и человек идёт
+// искать несуществующую проблему.
+//
+//   general      — сообщение вне тем (в форуме это General): адресата и правда нет
+//   topic-closed — тема есть в карте, но её вкладка уже не живая
+//   topic-alien  — тема нам неизвестна: карта потерялась или тему создали руками
+function routeFailure(u, ctx) {
+  const c = ctx || {};
+  if (!u || u.threadId == null) return 'general';
+  const topics = c.topics || {};
+  return Object.keys(topics).some((k) => topics[k] === u.threadId) ? 'topic-closed' : 'topic-alien';
+}
+
+// --- как текст попадает в pty -------------------------------------------------
+// Раздельно: сначала текст, ПОТОМ Enter отдельной записью. Одним куском `текст\r` не
+// работает — Claude Code считает крупный быстрый ввод вставкой, и хвостовой возврат
+// каретки уходит в буфер как перевод строки внутри текста. Снаружи это выглядит так:
+// сообщение из телеги появилось в поле ввода и там осталось. Человек за маком жмёт Enter
+// руками — и этим снимает с вкладки режим «отвечаем в телегу», так что итог хода уже
+// никуда не уезжает. Один пропущенный Enter выключает половину моста.
+//
+// Многострочный текст оборачивается в bracketed paste (то, что присылает терминал при
+// вставке из буфера): без этого первый же перевод строки отправляет сообщение, и половина
+// уезжает агенту, а остаток печатается сверху как следующее.
+const PASTE_ON = '\x1b[200~';
+const PASTE_OFF = '\x1b[201~';
+const ENTER = '\r';
+
+function inputWrites(text) {
+  const body = String(text == null ? '' : text).replace(/\r\n?/g, '\n');
+  if (!body) return [];
+  return [body.includes('\n') ? PASTE_ON + body + PASTE_OFF : body, ENTER];
+}
+
 // --- buttons under a permission request ---------------------------------------
 // One button per option Claude offered, and nothing else: the payload carries the option
 // NUMBER, so tapping can only ever choose from that list. It also carries the tab and the
@@ -354,5 +390,6 @@ module.exports = {
   apiUrl, looksLikeToken, maskToken,
   pairCode, deepLink, pairingMatch,
   readUpdate, routeMessage, chunkText, inlineKeyboard, callbackData, parseCallbackData, CB_MAX, backoffMs, retryAfterMs, classifyError,
+  inputWrites, PASTE_ON, PASTE_OFF, ENTER, routeFailure,
   createPoller,
 };
