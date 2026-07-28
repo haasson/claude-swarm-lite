@@ -148,7 +148,31 @@ function routeMessage(u, ctx) {
     const byReply = get(c.sent, u.replyToId);
     if (byReply != null && alive(byReply)) return byReply;
   }
+  // Last: a target the user NAMED with /use. Still explicit — they said «дальше в api»
+  // and the bot confirmed it — which is why it's allowed where «last active tab» isn't.
+  // Scoped per topic, so /use in one topic can't hijack another.
+  const named = get(c.named, String(u.threadId == null ? 'main' : u.threadId));
+  if (named != null && alive(named)) return named;
   return null;
+}
+
+// --- telling the agent where the question came from ---------------------------
+// A phone is not a terminal: a page of code, a list of file paths or an interactive
+// «choose 1/2/3» is useless there. The agent can only adapt if it KNOWS, so every line
+// injected from Telegram is tagged.
+//
+// The first message of a session carries the whole convention; later ones carry a short
+// tag. Not decoration: after a context compaction the convention can fall out of
+// context, and the tag re-anchors it. It also makes provenance visible — sitting at the
+// Mac you can see in the scrollback which instructions arrived from the phone.
+const TG_TAG = 'тлг';
+
+function tagInput(opts) {
+  const o = opts || {};
+  const text = String(o.text == null ? '' : o.text).trim();
+  const instruction = String(o.instruction || '').replace(/\s+/g, ' ').trim();
+  const head = !o.primed && instruction ? `[${TG_TAG}: ${instruction}]` : `[${TG_TAG}]`;
+  return text ? `${head} ${text}` : head;
 }
 
 // --- outbound text -----------------------------------------------------------
@@ -270,7 +294,7 @@ function createPoller(deps) {
 }
 
 module.exports = {
-  API_HOST, MAX_TEXT, POLL_TIMEOUT_S, BACKOFF_MAX_MS, CODE_LEN,
+  API_HOST, MAX_TEXT, POLL_TIMEOUT_S, BACKOFF_MAX_MS, CODE_LEN, TG_TAG, tagInput,
   apiUrl, looksLikeToken, maskToken,
   pairCode, deepLink, pairingMatch,
   readUpdate, routeMessage, chunkText, backoffMs, retryAfterMs, classifyError,

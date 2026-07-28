@@ -16,6 +16,10 @@ function test(name, fn) { tests.push([name, fn]); }
 
 const SCRIPT = path.join(__dirname, '..', 'hooks', 'swarm-signal.mjs');
 
+// The hook is ESM; its pure helpers are imported once below and used as H.*. Importing it
+// does NOT run it — main() is gated on being invoked directly.
+let H = null;
+
 // Run the hook with `payload` on stdin; return the parsed signal (or null if the
 // hook emitted nothing), by feeding its terminalSequence back through osc.js.
 function runHook(payload) {
@@ -116,8 +120,73 @@ test('a custom phrase file replaces the default marker', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-for (const [name, fn] of tests) {
-  try { fn(); passed++; }
-  catch (e) { console.error('FAIL: ' + name + '\n  ' + e.message); process.exitCode = 1; }
-}
-console.log(passed + '/' + tests.length + ' hook tests passed');
+// --- last_assistant_message comes in more than one shape ----------------------
+
+test('messageText unwraps a string, an object and content blocks alike', () => {
+  assert.strictEqual(H.messageText('готово'), 'готово');
+  assert.strictEqual(H.messageText({ type: 'text', text: 'готово' }), 'готово');
+  assert.strictEqual(H.messageText({ content: [{ type: 'text', text: 'готово' }] }), 'готово');
+  assert.strictEqual(H.messageText([{ type: 'text', text: 'а' }, { type: 'text', text: 'б' }]), 'а\nб');
+  assert.strictEqual(H.messageText(null), '');
+  assert.strictEqual(H.messageText({ nope: 1 }), '', 'no text anywhere → empty, never "[object Object]"');
+});
+
+test('the call phrase is found in an OBJECT last_assistant_message', () => {
+  const m = H.loadMatcher(() => null);   // shipped default
+  assert.strictEqual(H.callsUser(m, { type: 'text', text: 'Сейчас от тебя: путь' }), true);
+  assert.strictEqual(H.tokenFor({ hook_event_name: 'Stop', last_assistant_message: { type: 'text', text: 'Сейчас от тебя: путь' } }, m), 'ask');
+});
+
+// --- refusing the interactive picker while driven from Telegram ----------------
+
+test('deniesPicker only fires for AskUserQuestion in a listed session', () => {
+  const ask = { hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', session_id: 's1' };
+  assert.strictEqual(H.deniesPicker(ask, ['s1']), true);
+  assert.strictEqual(H.deniesPicker(ask, ['other']), false, 'another tab is not affected');
+  assert.strictEqual(H.deniesPicker(ask, []), false);
+  assert.strictEqual(H.deniesPicker({ ...ask, tool_name: 'Bash' }, ['s1']), false, 'only the picker');
+  assert.strictEqual(H.deniesPicker({ ...ask, session_id: '' }, ['']), false, 'no session id, no deny');
+});
+
+test('the deny payload carries the status marker AND the decision', () => {
+  const m = H.loadMatcher(() => null);
+  const out = H.outputFor({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', session_id: 's1' }, m, ['s1']);
+  assert.strictEqual(out.hookSpecificOutput.hookEventName, 'PreToolUse');
+  assert.strictEqual(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.ok(/Telegram/.test(out.hookSpecificOutput.permissionDecisionReason));
+  assert.ok(out.terminalSequence, 'status must still be reported while denying');
+});
+
+test('without Telegram mode the payload is exactly what it was before', () => {
+  const m = H.loadMatcher(() => null);
+  const out = H.outputFor({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', session_id: 's1' }, m, []);
+  assert.deepStrictEqual(Object.keys(out), ['terminalSequence']);
+});
+
+test('an event we do not care about still produces nothing', () => {
+  const m = H.loadMatcher(() => null);
+  assert.strictEqual(H.outputFor({ hook_event_name: 'SessionStart' }, m, ['s1']), null);
+});
+
+test('end to end: the script denies the picker for a session listed on disk', () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-hook-tg-')));
+  const staged = path.join(dir, 'swarm-signal.mjs');
+  fs.copyFileSync(SCRIPT, staged);
+  fs.writeFileSync(path.join(dir, 'swarm-tgmode.json'), JSON.stringify({ sessions: ['sid-1'] }));
+  const run = (sid) => JSON.parse(execFileSync(process.execPath, [staged], {
+    input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', session_id: sid }),
+    encoding: 'utf8',
+  }));
+  assert.strictEqual(run('sid-1').hookSpecificOutput.permissionDecision, 'deny');
+  assert.strictEqual(run('sid-2').hookSpecificOutput, undefined, 'a tab at the keyboard keeps its picker');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+(async () => {
+  H = await import(pathToFileURL(SCRIPT).href);
+  for (const [name, fn] of tests) {
+    try { await fn(); passed++; }
+    catch (e) { console.error('FAIL: ' + name + '\n  ' + e.message); process.exitCode = 1; }
+  }
+  console.log(passed + '/' + tests.length + ' hook tests passed');
+})();

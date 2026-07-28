@@ -1243,10 +1243,12 @@ function showSettingsModal(tab) {
         <div class="modal-msg">Свой бот, чтобы отвечать агентам с телефона. Токен хранится
           зашифрованным на этом компьютере и наружу не уходит.</div>
         <div class="set-field">
-          <span class="set-label">Токен бота</span>
-          <span class="set-hint set-hint-top">В Телеграме напишите <code>@BotFather</code> →
-            <code>/newbot</code> → скопируйте строку вида <span class="set-mono">1234567890:AA…</span>
-            Бот ваш, сервер ничей: приложение само стучится в Telegram, наружу ничего не открывается.</span>
+          <span class="set-label">Шаг 1. Токен бота</span>
+          <span class="set-hint set-hint-top">Бот — это аккаунт в Телеграме, а не программа на
+            сервере: размещать и оплачивать нечего. Напишите <a class="tg-link" id="set-tg-bf"
+            href="#">@BotFather</a> → <code>/newbot</code> → скопируйте строку вида
+            <span class="set-mono">1234567890:AA…</span> Работает всё на этом компьютере: приложение
+            само стучится в Telegram, наружу не открывается ни порт, ни адрес.</span>
           <div class="tg-row">
             <input class="set-input" type="password" id="set-tg-token" spellcheck="false"
                    autocapitalize="off" autocorrect="off" placeholder="1234567890:AA…" />
@@ -1255,10 +1257,13 @@ function showSettingsModal(tab) {
           <div class="tg-state" id="set-tg-state"></div>
         </div>
         <div class="set-field" id="set-tg-chat-field" hidden>
-          <span class="set-label">Куда писать</span>
+          <span class="set-label">Шаг 2. Куда писать</span>
           <span class="set-hint set-hint-top">Отсканируйте код телефоном — откроется чат с ботом,
             нажмёте «Начать», и сворм запомнит именно этот чат. Ссылку можно и просто нажать,
-            если Телеграм стоит на этом маке. Код одноразовый и живёт две минуты.</span>
+            если Телеграм стоит на этом маке. Код одноразовый и живёт две минуты.
+            Хотите вкладки отдельными темами — создайте форум-супергруппу, добавьте бота
+            <b>администратором с правом управлять темами</b> и отсканируйте код там: без админства
+            Телеграм не даст боту увидеть обычные сообщения в топиках, только реплаи.</span>
           <div class="tg-pair" id="set-tg-pair" hidden>
             <img class="tg-qr" id="set-tg-qr" alt="QR для привязки чата" />
             <div class="tg-pair-side">
@@ -1270,9 +1275,31 @@ function showSettingsModal(tab) {
           </div>
           <div class="tg-row">
             <button type="button" class="set-check-btn" id="set-tg-pair-btn">Привязать чат</button>
+            <button type="button" class="set-check-btn" id="set-tg-check" hidden>Проверить права</button>
             <button type="button" class="set-check-btn" id="set-tg-unpair" hidden>Отвязать чат</button>
             <button type="button" class="set-check-btn danger" id="set-tg-forget">Удалить токен</button>
           </div>
+          <div class="tg-state" id="set-tg-check-note"></div>
+          <span class="set-hint set-hint-top">Знаете id группы — можно без кода:</span>
+          <div class="tg-row">
+            <input class="set-input" type="text" id="set-tg-chatid" spellcheck="false"
+                   placeholder="-1001234567890" />
+            <button type="button" class="set-check-btn" id="set-tg-chatid-save">Привязать по id</button>
+          </div>
+        </div>
+        <div class="set-field" id="set-tg-extra" hidden>
+          <span class="set-label">Как агент отвечает в телегу</span>
+          <span class="set-hint set-hint-top">Эта строка подставляется к первому сообщению из
+            телеги, чтобы агент понимал: он отвечает на телефон. Дальше к каждому сообщению
+            добавляется короткая метка <span class="set-mono">[тлг]</span>. Пусто — вернётся
+            формулировка по умолчанию.</span>
+          <textarea class="set-input" id="set-tg-prompt" rows="2" spellcheck="false"></textarea>
+          <label class="set-check">
+            <input type="checkbox" id="set-tg-awake" />
+            <span class="set-check-tx">Не давать маку засыпать, пока чат привязан
+              <span class="set-check-sub">со спящим маком отвечать некому: агенты живут здесь. Ответы из
+                телеги Телеграм придержит и отдаст, когда мак проснётся</span></span>
+          </label>
         </div>
       </div>
 
@@ -1336,6 +1363,12 @@ function showSettingsModal(tab) {
   const tgGLinkA = overlay.querySelector('#set-tg-glink');
   const tgTtlEl = overlay.querySelector('#set-tg-ttl');
   const tgUnpairB = overlay.querySelector('#set-tg-unpair');
+  const tgCheckB = overlay.querySelector('#set-tg-check');
+  const tgCheckNote = overlay.querySelector('#set-tg-check-note');
+  const tgExtra = overlay.querySelector('#set-tg-extra');
+  const tgPromptI = overlay.querySelector('#set-tg-prompt');
+  const tgAwakeI = overlay.querySelector('#set-tg-awake');
+  const tgChatIdI = overlay.querySelector('#set-tg-chatid');
   let tgTtlTimer = null;
 
   function tgStatusText(st) {
@@ -1356,6 +1389,14 @@ function showSettingsModal(tab) {
     tgTokenI.placeholder = st.configured ? st.masked : '1234567890:AA…';
     tgChatField.hidden = !st.configured;
     tgUnpairB.hidden = st.chatId == null;
+    tgCheckB.hidden = st.chatId == null;
+    tgExtra.hidden = st.chatId == null;
+    // The rights check: the one place where «бот молчит в топике» gets a name.
+    tgCheckNote.textContent = st.check ? st.check.note : '';
+    tgCheckNote.className = 'tg-state' + (st.check ? (st.check.ok ? ' is-good' : ' is-bad') : '');
+    if (document.activeElement !== tgPromptI) tgPromptI.value = st.prompt || '';
+    tgPromptI.placeholder = st.promptDefault || '';
+    tgAwakeI.checked = !!st.keepAwake;
   }
 
   function stopTgTtl() {
@@ -1397,6 +1438,33 @@ function showSettingsModal(tab) {
 
   tgUnpairB.addEventListener('click', async () => {
     renderTg(await window.swarm.telegram.unpair());
+  });
+
+  tgCheckB.addEventListener('click', async () => {
+    tgCheckNote.textContent = 'Проверяю…';
+    renderTg(await window.swarm.telegram.check());
+  });
+
+  overlay.querySelector('#set-tg-chatid-save').addEventListener('click', async () => {
+    const id = tgChatIdI.value.trim();
+    if (!id) return;
+    tgCheckNote.textContent = 'Проверяю чат…';
+    const st = await window.swarm.telegram.setChat(id);
+    tgChatIdI.value = '';
+    renderTg(st);
+  });
+
+  overlay.querySelector('#set-tg-bf').addEventListener('click', (e) => {
+    e.preventDefault();
+    window.swarm.openExternal('https://t.me/BotFather');
+  });
+
+  // Both apply on blur, not on «Сохранить» — same as the rest of this panel.
+  tgPromptI.addEventListener('change', async () => {
+    renderTg(await window.swarm.telegram.setPrompt(tgPromptI.value));
+  });
+  tgAwakeI.addEventListener('change', async () => {
+    renderTg(await window.swarm.telegram.keepAwake(tgAwakeI.checked));
   });
 
   overlay.querySelector('#set-tg-forget').addEventListener('click', async () => {

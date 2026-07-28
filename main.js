@@ -18,7 +18,7 @@
 //   just type `claude` into it. Bonus: auth "just works" because it's the same
 //   environment you log in from.
 
-const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeImage, shell, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeImage, shell, safeStorage, powerSaveBlocker } = require('electron');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
@@ -247,7 +247,7 @@ function makeDetector(cols, rows) {
     // .jsonl bound to it, and the last verdict read out of it.
     // Identity for the Telegram bridge: the tab's visible name and the key that outlives
     // the process (the forum topic hangs on it). tgTimer debounces the «ждёт» message.
-    tabKey: '', name: '', tgTimer: null,
+    tabKey: '', name: '', tgTimer: null, tgMode: false, tgPrimed: false, trReply: '',
     cwd: '', startedAt: Date.now(), claudeSessionId: null,
     trFile: null, trMtime: 0, trEntries: null, trState: null, trText: '', trWhy: '', trTryAt: 0,
   };
@@ -289,7 +289,12 @@ function feedDetector(id, chunk) {
     // The marker carries Claude's own session_id. Routing doesn't need it (each agent
     // has its own pty), but the transcript reader does: it's the exact file name. This
     // is how a RESUMED session — where we didn't choose the id — still binds precisely.
-    if (sig.sessionId) d.claudeSessionId = sig.sessionId;
+    if (sig.sessionId && sig.sessionId !== d.claudeSessionId) {
+      d.claudeSessionId = sig.sessionId;
+      // If this tab is already being driven from Telegram, the hook needs to know its id
+      // to refuse the interactive picker — rewrite the list now that we have one.
+      if (d.tgMode) tgWriteModes();
+    }
     applyHook(d, sig.token, Date.now());
   }
   // A resize makes Claude repaint the whole screen — a burst of output that is
@@ -331,6 +336,7 @@ setInterval(() => {
       if (next.status !== d.status || next.detail !== d.detail
           || statusline !== d.statusline || question !== d.question || sub !== d.sub
           || kind !== d.waitingKind) {
+        const prev = d.status;
         d.status = next.status;
         d.detail = next.detail;
         d.statusline = statusline;
@@ -342,6 +348,10 @@ setInterval(() => {
         // a delay (see tgOnWaiting) and cancelled if you answer at the keyboard first.
         if (next.status === 'waiting') tgOnWaiting(id);
         else tgCancelWaiting(d);
+        // Turn finished on a task that came from the phone → report back there.
+        if (next.status === 'ready' && prev === 'running' && d.tgMode && TG.chatId != null) {
+          tgNotifyDone(id, d).catch(reportMainError);
+        }
       }
     } catch (_) {
       // A detector hiccup must never crash the app or freeze the UI.
@@ -363,6 +373,7 @@ const transcript = require('./transcript');
 const TR_TICK_MS = 500;
 const TR_TAIL_BYTES = 64 * 1024;   // plenty for the last few entries of a big file
 const TR_TEXT_MAX = 500;           // question excerpt sent to the renderer
+const TR_REPLY_MAX = 3000;         // finished-turn report relayed to Telegram
 const TR_BIND_EVERY_MS = 2000;     // don't rescan a folder on every tick while unbound
 // A bound file this quiet, while the pty is clearly talking, means we're reading a dead
 // session — /clear starts a NEW one. Long enough that a slow tool (which writes nothing
@@ -492,6 +503,9 @@ setInterval(() => {
       // The question, word for word — only for a turn that ended asking. Anything else
       // would be quoting streamed prose back at the user.
       d.trText = v && v.status === 'waiting' ? askExcerpt(ASK_MATCHER, v.text, TR_TEXT_MAX) : '';
+      // The finished turn's closing message — what the Telegram bridge sends back as
+      // «вот что получилось». Kept whole-ish: it's a report, not a chip label.
+      if (v && v.status === 'ready') d.trReply = String(v.text || '').trim().slice(0, TR_REPLY_MAX);
       const why = v ? v.status + (v.kind ? ':' + v.kind : '') + ' (' + v.why + ')' : 'no entries';
       if (why !== d.trWhy) { d.trWhy = why; trLog(`tab=${id} ${why}`); }
     } catch (_) {
@@ -519,6 +533,13 @@ const qrcode = require('qrcode-generator');   // one file, no deps: the pairing 
 
 const TG_PAIR_TTL_MS = 120_000;   // a pairing code is good for two minutes
 
+// What we tell an agent when its input arrives from a phone. Editable in the Telegram
+// panel — «покороче» is a matter of taste — and kept on one line, because it's injected
+// as one line of terminal input.
+const TG_PROMPT_DEFAULT = 'из Telegram — отвечай коротко, текстом на телефон: без длинных'
+  + ' блоков кода и путей к файлам, без вариантов с выбором клавиатурой, вопросы задавай прозой';
+let TG_PROMPT = TG_PROMPT_DEFAULT;
+
 let TG = { token: '', chatId: null, isForum: false, topics: {} };
 let tgPoller = null;
 let tgBot = '';        // bot username from getMe — shown in settings, used in the link
@@ -527,7 +548,11 @@ let tgError = null;    // last error, verbatim for the settings panel
 
 function tgPath() { return path.join(app.getPath('userData'), 'telegram.dat'); }
 
-function tgBlank() { return { token: '', chatId: null, isForum: false, topics: {} }; }
+function tgBlank() { return { token: '', chatId: null, isForum: false, topics: {}, prompt: '', keepAwake: true }; }
+
+// The last result of tgCheckChat(), so the settings panel can show «бот администратор,
+// темы доступны» without re-asking Telegram on every render.
+let tgCheck = null;
 
 // Anything unreadable — no keychain access, a file copied from another machine, a
 // half-written save — means «not configured». Never a crash on launch.
@@ -539,8 +564,11 @@ function tgLoad() {
       chatId: Number.isFinite(d.chatId) ? d.chatId : null,
       isForum: !!d.isForum,
       topics: (d.topics && typeof d.topics === 'object') ? d.topics : {},
+      prompt: String(d.prompt || ''),
+      keepAwake: d.keepAwake !== false,
     };
   } catch (_) { TG = tgBlank(); }
+  TG_PROMPT = TG.prompt || TG_PROMPT_DEFAULT;
 }
 
 function tgSave() {
@@ -598,6 +626,44 @@ function tgQr(text) {
   return qr.createDataURL(6, 8);   // a GIF data URL: no canvas, no renderer work
 }
 
+// What the bot can actually DO in the bound chat. Worth checking explicitly, because the
+// two ways this fails are both silent: a bot that isn't an admin can't create topics, and
+// — the nasty one — Telegram's privacy mode means a non-admin bot in a group never even
+// receives plain messages, only replies to its own. «Бот молчит» is not a diagnosis a
+// user should have to reach on their own.
+async function tgCheckChat() {
+  if (!TG.token || TG.chatId == null) return null;
+  const chat = await tgFetchJson(telegram.apiUrl(TG.token, 'getChat'), { chat_id: TG.chatId });
+  if (!chat.ok || !chat.body || chat.body.ok !== true) {
+    return { ok: false, note: telegram.classifyError(chat.status, chat.body).message };
+  }
+  const info = chat.body.result || {};
+  const title = info.title || info.username || 'личный чат';
+  const isForum = !!info.is_forum;
+  TG.isForum = isForum;
+  if (info.type === 'private') {
+    return { ok: true, title, isForum, note: 'Личный чат — прав достаточно, бот видит все сообщения.' };
+  }
+  const me = await tgFetchJson(telegram.apiUrl(TG.token, 'getChatMember'),
+    { chat_id: TG.chatId, user_id: Number(String(TG.token).split(':')[0]) });
+  const member = (me.ok && me.body && me.body.ok === true && me.body.result) || null;
+  const status = member ? member.status : '';
+  if (!member || status === 'left' || status === 'kicked') {
+    return { ok: false, title, isForum, note: `Бота нет в «${title}» — добавь его в группу.` };
+  }
+  const admin = status === 'administrator' || status === 'creator';
+  if (!admin) {
+    return { ok: false, title, isForum, note: `В «${title}» бот не администратор. Из-за режима приватности`
+      + ' он не увидит обычных сообщений — только реплаи на свои. Сделай его админом.' };
+  }
+  if (isForum && member.can_manage_topics === false) {
+    return { ok: false, title, isForum, note: `В «${title}» у бота нет права управлять темами —`
+      + ' вкладки не получат отдельные топики.' };
+  }
+  return { ok: true, title, isForum, note: `«${title}»: бот администратор`
+    + (isForum ? ', темы доступны.' : '.') };
+}
+
 function tgState() {
   return {
     available: safeStorage.isEncryptionAvailable(),
@@ -608,11 +674,29 @@ function tgState() {
     isForum: TG.isForum,
     live: !!(tgPoller && tgPoller.alive),
     error: tgError,
+    prompt: TG_PROMPT,
+    promptDefault: TG_PROMPT_DEFAULT,
+    keepAwake: !!TG.keepAwake,
+    check: tgCheck,
     pairing: tgPair ? { code: tgPair.code, until: tgPair.at + TG_PAIR_TTL_MS } : null,
   };
 }
 
 function tgPush() { safeSend('telegram:state', tgState()); }
+
+// Hold off system sleep while a chat is bound. Only «app suspension» — the screen may
+// still turn off, we just need the process to keep polling.
+let tgAwakeId = null;
+
+function tgApplyKeepAwake() {
+  const want = !!(TG.keepAwake && TG.token && TG.chatId != null);
+  if (want && tgAwakeId == null) {
+    tgAwakeId = powerSaveBlocker.start('prevent-app-suspension');
+  } else if (!want && tgAwakeId != null) {
+    try { powerSaveBlocker.stop(tgAwakeId); } catch (_) {}
+    tgAwakeId = null;
+  }
+}
 
 function tgStop() {
   if (tgPoller) { tgPoller.stop(); tgPoller = null; }
@@ -644,6 +728,7 @@ async function tgConnect() {
     },
   });
   tgPoller.start();
+  tgApplyKeepAwake();
   tgPush();
 }
 
@@ -660,6 +745,7 @@ async function tgConnect() {
 const TG_SENT_CAP = 500;             // remembered outgoing messages (id → session)
 const tgSent = new Map();            // messageId → session id
 const tgTopicSession = new Map();    // threadId → session id (live sessions only)
+const tgNamed = new Map();           // topic key → session named with /use
 
 function tgRemember(messageId, id) {
   if (!messageId) return;
@@ -708,6 +794,7 @@ function tgRoute(u) {
     topicSession: tgTopicSession,
     sent: tgSent,
     topics: TG.topics,
+    named: tgNamed,
     tabs: [...det].map(([sid, d]) => ({ id: sid, tabKey: d.tabKey })),
     alive: (sid) => sessions.has(sid) && !(det.get(sid) || {}).dead,
   });
@@ -718,13 +805,53 @@ function tgRoute(u) {
 
 // Type the answer into the live pty, exactly as if it were typed at the keyboard —
 // same path as the app's own input, so there's no second way into a session.
+//
+// Multi-line text goes in as a bracketed paste (what a terminal sends when you paste
+// from the clipboard). Without it the first newline submits, so half the message went to
+// the agent and the rest was typed on top as a second one. Single-line text — the common
+// case — takes the plain path, so nothing new can break there.
+const PASTE_ON = '\x1b[200~';
+const PASTE_OFF = '\x1b[201~';
+
 function tgAnswer(id, text) {
   const p = sessions.get(id);
   if (!p) return false;
-  p.write(String(text) + '\r');
+  const body = String(text).replace(/\r\n?/g, '\n');
+  p.write(body.includes('\n') ? PASTE_ON + body + PASTE_OFF + '\r' : body + '\r');
   const d = det.get(id);
-  if (d) { d.graceUntil = 0; d.lastDataAt = Date.now(); d.answeredAt = Date.now(); }
+  if (d) {
+    d.graceUntil = 0; d.lastDataAt = Date.now(); d.answeredAt = Date.now();
+    // From now on this tab is being driven from a phone: the agent gets told to answer
+    // accordingly, and its finished turn is relayed back. Cleared the moment you touch
+    // the keyboard here (see the session:input handler) — the mode tracks where YOU are.
+    if (!d.tgMode) { d.tgMode = true; tgWriteModes(); }
+  }
   return true;
+}
+
+// The set of Claude sessions currently driven from Telegram, written next to the hook
+// script. The hook is a separate process, so a file is how it learns to refuse the
+// interactive AskUserQuestion tool: a «choose 1/2/3» box can't be answered from a chat.
+let tgModesWritten = '';
+
+function tgWriteModes() {
+  const ids = [];
+  for (const d of det.values()) {
+    if (d.tgMode && !d.dead && d.claudeSessionId) ids.push(d.claudeSessionId);
+  }
+  const body = JSON.stringify({ sessions: ids.sort() });
+  if (body === tgModesWritten) return;         // nothing changed — don't touch the disk
+  try {
+    fs.writeFileSync(path.join(app.getPath('userData'), 'swarm-tgmode.json'), body);
+    tgModesWritten = body;
+  } catch (e) { reportMainError(e); }
+}
+
+function tgClearMode(d) {
+  if (!d || !d.tgMode) return;
+  d.tgMode = false;
+  d.tgPrimed = false;
+  tgWriteModes();
 }
 
 // --- outbound: an agent is calling ---------------------------------------------
@@ -746,6 +873,19 @@ function tgOnWaiting(id) {
 
 function tgCancelWaiting(d) {
   if (d && d.tgTimer) { clearTimeout(d.tgTimer); d.tgTimer = null; }
+}
+
+// The agent finished a turn it was given from the phone: send back what it said. Only
+// for tabs in Telegram mode — otherwise every turn you run at your own desk would land
+// in the chat and the bridge would become a log nobody reads.
+async function tgNotifyDone(id, d) {
+  const text = String(d.trReply || '').trim();
+  const msgId = await tgSend({
+    threadId: await tgTopicFor(id),
+    text: `✅ ${tgTabName(id)}${text ? '\n\n' + text : ' — готов.'}`,
+  });
+  // Answerable too: replying to the report continues the same session.
+  tgRemember(msgId, id);
 }
 
 async function tgNotifyWaiting(id, d) {
@@ -781,6 +921,9 @@ function tgOnUpdate(u) {
       threadId: u.threadId,
       text: 'Сворм на связи. Отсюда будут приходить вопросы агентов; отвечать — реплаем на сообщение.',
     }).catch(reportMainError);
+    // Say right away whether the bot can actually work here (admin rights, topics).
+    tgCheckChat().then((r) => { tgCheck = r; tgPush(); }).catch(reportMainError);
+    tgApplyKeepAwake();
     tgPush();
     return;
   }
@@ -789,6 +932,7 @@ function tgOnUpdate(u) {
   if (TG.chatId == null || u.chatId !== TG.chatId) return;
 
   if (u.command === 'tabs') { tgSendTabs(u.threadId).catch(reportMainError); return; }
+  if (u.command === 'use') { tgUse(u).catch(reportMainError); return; }
   if (u.command === 'start') { tgSend({ threadId: u.threadId, text: 'Уже на связи. /tabs — что сейчас у агентов.' }).catch(reportMainError); return; }
   if (u.voice) {
     tgSend({ threadId: u.threadId, replyTo: u.messageId, text: 'Голос пока не умею — вторым этапом. Напиши текстом.' }).catch(reportMainError);
@@ -816,11 +960,49 @@ function tgOnUpdate(u) {
     }).catch(reportMainError);
     return;
   }
-  if (!tgAnswer(id, text)) {
+  // Tag the text so the agent knows it's answering into a phone (short answers, no
+  // interactive pickers). The first message of a session carries the whole convention.
+  const tagged = telegram.tagInput({ text, instruction: TG_PROMPT, primed: !!(d && d.tgPrimed) });
+  if (!tgAnswer(id, tagged)) {
     tgSend({ threadId: u.threadId, replyTo: u.messageId, text: 'Эта вкладка уже закрыта.' }).catch(reportMainError);
     return;
   }
+  if (d) d.tgPrimed = true;
   tgSend({ threadId: u.threadId, replyTo: u.messageId, text: `→ ${tgTabName(id)}`, silent: true }).catch(reportMainError);
+}
+
+// /use <вкладка> — name the tab that plain messages in THIS chat (or this topic) go to.
+// A task from scratch has no message to reply to, so without this there'd be nothing to
+// address it with. It's still explicit — you said it and the bot confirmed — unlike a
+// silent «last active tab» guess.
+async function tgUse(u) {
+  const key = String(u.threadId == null ? 'main' : u.threadId);
+  const want = String(u.args || '').trim().toLowerCase();
+  if (!want) {
+    const cur = tgNamed.get(key);
+    const now = cur != null && sessions.has(cur) ? `Сейчас пишу в «${tgTabName(cur)}».\n\n` : '';
+    await tgSend({ threadId: u.threadId, text: now + 'Кому писать: /use <имя вкладки>. Список — /tabs.' });
+    return;
+  }
+  const hits = [];
+  for (const [id, d] of det) {
+    if (d.dead || !sessions.has(id)) continue;
+    const name = tgTabName(id).toLowerCase();
+    if (name === want) { hits.length = 0; hits.push(id); break; }   // exact wins outright
+    if (name.includes(want)) hits.push(id);
+  }
+  if (!hits.length) {
+    await tgSend({ threadId: u.threadId, text: `Вкладки «${u.args}» нет. Список — /tabs.` });
+    return;
+  }
+  if (hits.length > 1) {
+    // Two tabs match => refuse rather than pick. Same rule as everywhere in this bridge.
+    await tgSend({ threadId: u.threadId, text: 'Под это подходит несколько вкладок: '
+      + hits.map((id) => tgTabName(id)).join(', ') + '. Уточни имя.' });
+    return;
+  }
+  tgNamed.set(key, hits[0]);
+  await tgSend({ threadId: u.threadId, text: `Пишу в «${tgTabName(hits[0])}». Ответы её агента приходят сюда.` });
 }
 
 // /tabs — what every agent is doing right now, so you can orient from the phone without
@@ -854,14 +1036,62 @@ ipcMain.handle('telegram:setToken', async (_e, raw) => {
 ipcMain.handle('telegram:forget', async () => {
   tgStop();
   TG = tgBlank();
-  tgBot = ''; tgPair = null; tgError = null;
+  tgBot = ''; tgPair = null; tgError = null; tgCheck = null;
   try { fs.unlinkSync(tgPath()); } catch (_) { /* already gone */ }
+  tgApplyKeepAwake();
+  return tgState();
+});
+
+// Bind a chat by id, for people who already know it (a group id looks like
+// -1001234567890). Same result as pairing; the check right after tells them whether the
+// bot can actually work there.
+ipcMain.handle('telegram:setChat', async (_e, raw) => {
+  const id = Number(String(raw == null ? '' : raw).trim());
+  if (!Number.isFinite(id) || id === 0) {
+    tgError = 'id чата — это число, обычно с минусом: -1001234567890';
+    return tgState();
+  }
+  if (!TG.token) { tgError = 'Сначала подключи бота'; return tgState(); }
+  TG.chatId = id; TG.topics = {}; tgPair = null; tgError = null;
+  tgCheck = await tgCheckChat();
+  if (tgCheck && tgCheck.ok) {
+    await tgSend({ text: 'Сворм на связи. Вопросы агентов будут приходить сюда.' });
+  }
+  try { tgSave(); } catch (e) { reportMainError(e); }
+  return tgState();
+});
+
+// Re-run the rights check on demand: the usual fix is «сделать бота админом», and the
+// user needs a way to confirm it took without restarting anything.
+ipcMain.handle('telegram:check', async () => {
+  tgCheck = await tgCheckChat();
+  try { tgSave(); } catch (e) { reportMainError(e); }   // isForum may have changed
+  return tgState();
+});
+
+// The «you're answering from a phone» instruction (Telegram panel). Empty → the default.
+ipcMain.handle('telegram:setPrompt', (_e, raw) => {
+  const text = String(raw == null ? '' : raw).replace(/\s+/g, ' ').trim().slice(0, 400);
+  TG.prompt = text;
+  TG_PROMPT = text || TG_PROMPT_DEFAULT;
+  try { tgSave(); } catch (e) { reportMainError(e); }
+  return tgState();
+});
+
+// Keep the Mac awake while the bridge is on: with the lid closed nothing polls, so the
+// «answer from the taxi» case quietly stops working. Off = normal sleep behaviour.
+ipcMain.handle('telegram:setKeepAwake', (_e, on) => {
+  TG.keepAwake = !!on;
+  try { tgSave(); } catch (e) { reportMainError(e); }
+  tgApplyKeepAwake();
   return tgState();
 });
 
 ipcMain.handle('telegram:unpair', async () => {
-  TG.chatId = null; TG.isForum = false; TG.topics = {};
+  TG.chatId = null; TG.isForum = false; TG.topics = {}; tgCheck = null;
+  tgNamed.clear();
   try { tgSave(); } catch (e) { reportMainError(e); }
+  tgApplyKeepAwake();
   return tgState();
 });
 
@@ -1107,7 +1337,7 @@ ipcMain.handle('session:create', (_event, opts = {}) => {
 
   child.onExit(({ exitCode }) => {
     const d = det.get(id);
-    if (d) { d.dead = true; tgCancelWaiting(d); }   // no «ждёт» ping for a closed tab
+    if (d) { d.dead = true; tgCancelWaiting(d); tgClearMode(d); }   // no pings for a closed tab
     sessions.delete(id);
     safeSend('session:exit', { id, code: exitCode });
   });
@@ -1134,6 +1364,10 @@ ipcMain.on('session:input', (_event, { id, data }) => {
   // agent working. Grace it so it isn't counted as activity.
   const d = det.get(id);
   if (!d) return;
+  // You're at the keyboard for this tab, so it is no longer «driven from the phone»:
+  // full-size answers and interactive pickers are useful again. The mode follows where
+  // YOU are, not where the last message came from.
+  tgClearMode(d);
   const now = Date.now();
   if (/[\r\n]/.test(String(data || ''))) {
     // Enter: you SENT something. Don't sit out the grace window — that froze the

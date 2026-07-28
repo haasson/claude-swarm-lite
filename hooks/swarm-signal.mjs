@@ -34,9 +34,25 @@ function loadMatcher(readJson) {
   }
 }
 
+// Stop's `last_assistant_message` is not reliably a plain string: depending on the Claude
+// Code version it's the text, an object `{ type, text }`, or the message's content blocks.
+// String()ing an object yields "[object Object]", which silently never matches a phrase —
+// so unwrap all three shapes instead of trusting one.
+function messageText(m) {
+  if (m == null) return '';
+  if (typeof m === 'string') return m;
+  if (Array.isArray(m)) return m.map(messageText).filter(Boolean).join('\n');
+  if (typeof m === 'object') {
+    if (typeof m.text === 'string') return m.text;
+    if (m.content != null) return messageText(m.content);
+    if (m.message != null) return messageText(m.message);
+  }
+  return '';
+}
+
 // Did the agent's closing message actually ask for something?
 function callsUser(matcher, text) {
-  const t = String(text == null ? '' : text);
+  const t = messageText(text);
   return matcher.mark.test(t) && !matcher.none.test(t);
 }
 
@@ -79,24 +95,62 @@ function markerFor(payload, matcher) {
   return `\x1b]777;notify;swarm;${token};${sid}\x07`;
 }
 
-// The phrase file the app writes beside this script (both live in userData).
-async function readPhrasesFile() {
+// --- refusing the picker while the user is on a phone -------------------------
+// AskUserQuestion paints an interactive «choose 1/2/3» box in the terminal. Over Telegram
+// that's a dead end: there's no way to press a key in a box that only exists on a screen
+// nobody is looking at. So while a session is being driven from the phone (the app lists
+// those in swarm-tgmode.json beside this script) we DENY the tool. Claude gets the reason
+// and asks in prose instead — which the bridge can deliver and answer.
+const DENY_REASON = 'Пользователь отвечает из Telegram: интерактивный выбор ему недоступен.'
+  + ' Задай тот же вопрос обычным текстом (варианты — списком в тексте) и заверши ход.';
+
+function deniesPicker(payload, tgSessions) {
+  if (!payload || payload.hook_event_name !== 'PreToolUse') return false;
+  if (payload.tool_name !== 'AskUserQuestion') return false;
+  const sid = String((payload && payload.session_id) || '');
+  return !!sid && Array.isArray(tgSessions) && tgSessions.includes(sid);
+}
+
+// The whole stdout payload for one event. terminalSequence sits at the top level (where
+// this hook has always put it) AND inside hookSpecificOutput, because which one a given
+// Claude Code version reads is not worth betting a status on — the token is idempotent,
+// so being read twice costs nothing, while being read zero times costs a wrong status.
+function outputFor(payload, matcher, tgSessions) {
+  const seq = markerFor(payload, matcher);
+  const deny = deniesPicker(payload, tgSessions);
+  if (!seq && !deny) return null;
+  const out = {};
+  if (seq) out.terminalSequence = seq;
+  if (deny) {
+    out.hookSpecificOutput = {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: DENY_REASON,
+    };
+    if (seq) out.hookSpecificOutput.terminalSequence = seq;
+  }
+  return out;
+}
+
+// The files the app writes beside this script (all three live in userData).
+async function readJsonBeside(name) {
   const { readFileSync } = await import('node:fs');
-  const url = new URL('./swarm-phrases.json', import.meta.url);
-  return JSON.parse(readFileSync(url, 'utf8'));
+  return JSON.parse(readFileSync(new URL('./' + name, import.meta.url), 'utf8'));
 }
 
 async function main() {
   let phrases = null;
-  try { phrases = await readPhrasesFile(); } catch (_) { /* → FALLBACK */ }
+  try { phrases = await readJsonBeside('swarm-phrases.json'); } catch (_) { /* → FALLBACK */ }
+  let tgSessions = [];
+  try { tgSessions = (await readJsonBeside('swarm-tgmode.json')).sessions || []; } catch (_) { /* none */ }
   const matcher = loadMatcher(() => phrases);
   let input = '';
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (c) => { input += c; });
   process.stdin.on('end', () => {
     try {
-      const seq = markerFor(JSON.parse(input || '{}'), matcher);
-      if (seq) process.stdout.write(JSON.stringify({ terminalSequence: seq }));
+      const out = outputFor(JSON.parse(input || '{}'), matcher, tgSessions);
+      if (out) process.stdout.write(JSON.stringify(out));
     } catch (_) { /* malformed payload → emit nothing */ }
     process.exit(0);
   });
@@ -105,4 +159,4 @@ async function main() {
 // Run only when invoked directly (so tests can import the pure helpers).
 if (import.meta.url === `file://${process.argv[1]}`) main();
 
-export { tokenFor, markerFor, loadMatcher, callsUser, FALLBACK };
+export { tokenFor, markerFor, loadMatcher, callsUser, messageText, deniesPicker, outputFor, DENY_REASON, FALLBACK };

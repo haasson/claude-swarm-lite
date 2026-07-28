@@ -54,12 +54,16 @@ contextBridge.exposeInMainWorld('swarm', {
   // into main, which stores it encrypted. Everything coming back is masked state —
   // `state` never carries the token, so the renderer can't leak what it doesn't have.
   telegram: {
-    state:    ()      => ipcRenderer.invoke('telegram:state'),
-    setToken: (token) => ipcRenderer.invoke('telegram:setToken', token),
-    forget:   ()      => ipcRenderer.invoke('telegram:forget'),
-    unpair:   ()      => ipcRenderer.invoke('telegram:unpair'),
-    pair:     ()      => ipcRenderer.invoke('telegram:pair'),
-    onState:  (cb)    => ipcRenderer.on('telegram:state', (_e, s) => cb(s)),
+    state:     ()      => ipcRenderer.invoke('telegram:state'),
+    setToken:  (token) => ipcRenderer.invoke('telegram:setToken', token),
+    forget:    ()      => ipcRenderer.invoke('telegram:forget'),
+    unpair:    ()      => ipcRenderer.invoke('telegram:unpair'),
+    pair:      ()      => ipcRenderer.invoke('telegram:pair'),
+    setChat:   (id)    => ipcRenderer.invoke('telegram:setChat', id),
+    check:     ()      => ipcRenderer.invoke('telegram:check'),
+    setPrompt: (text)  => ipcRenderer.invoke('telegram:setPrompt', text),
+    keepAwake: (on)    => ipcRenderer.invoke('telegram:setKeepAwake', on),
+    onState:   (cb)    => ipcRenderer.on('telegram:state', (_e, s) => cb(s)),
   },
 
   // Git plumbing for the branch status bar. Each call targets a folder path

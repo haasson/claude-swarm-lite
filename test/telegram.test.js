@@ -157,6 +157,41 @@ test('route: inside a known topic, the topic wins over a reply to another tab', 
   assert.strictEqual(T.routeMessage({ threadId: 9, replyToId: 77 }, c), 'tab-a');
 });
 
+test('route: a target named with /use is used when nothing else applies', () => {
+  const c = ctx({ named: new Map([['main', 'tab-e']]) });
+  assert.strictEqual(T.routeMessage({ text: 'сделай X' }, c), 'tab-e');
+});
+
+test('route: /use is scoped per topic and never overrides a reply', () => {
+  const c = ctx({ named: new Map([['main', 'tab-e']]), sent: new Map([[77, 'tab-b']]) });
+  assert.strictEqual(T.routeMessage({ replyToId: 77 }, c), 'tab-b', 'the reply is more specific');
+  assert.strictEqual(T.routeMessage({ threadId: 5, text: 'сделай X' }, c), null,
+    'a /use in the main chat does not leak into a topic');
+});
+
+// --- tagging the injected text ------------------------------------------------
+
+test('tagInput: the first message carries the whole convention', () => {
+  const out = T.tagInput({ text: 'сделай X', instruction: 'отвечай коротко', primed: false });
+  assert.strictEqual(out, '[тлг: отвечай коротко] сделай X');
+});
+
+test('tagInput: later messages carry only the short tag', () => {
+  assert.strictEqual(T.tagInput({ text: 'да, второй', instruction: 'отвечай коротко', primed: true }),
+    '[тлг] да, второй');
+});
+
+test('tagInput: the tag stays on ONE line — a newline would submit early', () => {
+  const out = T.tagInput({ text: 'x', instruction: 'коротко,\n  без кода' });
+  assert.ok(!out.includes('\n'), out);
+  assert.strictEqual(out, '[тлг: коротко, без кода] x');
+});
+
+test('tagInput: no instruction, or no text, still yields something sane', () => {
+  assert.strictEqual(T.tagInput({ text: 'привет' }), '[тлг] привет');
+  assert.strictEqual(T.tagInput({ text: '', instruction: 'коротко' }), '[тлг: коротко]');
+});
+
 // --- outbound text -----------------------------------------------------------
 
 test('chunkText leaves a short message alone', () => {
