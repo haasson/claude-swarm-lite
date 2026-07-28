@@ -139,22 +139,46 @@ function fingerprintOf(text) {
   return h.toString(36);
 }
 
+// Варианты — это НЕПРЕРЫВНЫЙ блок внутри рамки, а не любые строки «N. текст» на экране.
+// Иначе нумерованный список в прозе агента («Предлагаю план: 1. переписать оплату») попадал
+// в кнопки, а нажатие печатало «1» в диалог разрешения ниже — то есть кнопка одобряла не то,
+// что на ней написано. Отпечаток от этого не защищает: он ловит смену экрана, а не мусор в
+// разборе. Поэтому три требования: рамка, непрерывность, нумерация с 1 без дублей.
+const FRAME_RE = /[│┃╭╰┌└├]/;
+const GAP_MAX = 2;   // внутри бокса между вариантами бывает пустая строка рамки
+
 function parsePrompt(snapshot) {
   const lines = String(snapshot == null ? '' : snapshot).split('\n');
-  const options = [];
-  let firstAt = -1;
+  // 1. Все кандидаты вместе с сырой строкой: рамку проверяем по ней, до clean().
+  const hits = [];
   for (let i = 0; i < lines.length; i++) {
     const m = clean(lines[i]).match(OPTION_LINE_RE);
-    if (!m) continue;
-    if (firstAt === -1) firstAt = i;
-    const text = m[2].length > OPT_TEXT_MAX ? m[2].slice(0, OPT_TEXT_MAX - 1).trimEnd() + '…' : m[2];
-    options.push({ n: Number(m[1]), text });
+    if (m) hits.push({ i, n: Number(m[1]), text: m[2], framed: FRAME_RE.test(lines[i]) });
   }
-  if (options.length < 2) return null;   // one option is not a choice; likely a false hit
-  // Everything above the first option that still looks like prose: «Bash command»,
-  // the command itself, «Do you want to proceed?». That's what you're approving.
+  // 2. Разбиваем на непрерывные блоки.
+  const blocks = [];
+  for (const h of hits) {
+    const last = blocks[blocks.length - 1];
+    if (last && h.i - last[last.length - 1].i <= GAP_MAX) last.push(h);
+    else blocks.push([h]);
+  }
+  // 3. Годный блок: в рамке, минимум два варианта, номера идут 1..N без повторов. Живой
+  //    запрос всегда снизу, поэтому берём последний годный.
+  let block = null;
+  for (const b of blocks) {
+    if (b.length < 2 || !b.some((h) => h.framed)) continue;
+    if (b.some((h, k) => h.n !== k + 1)) continue;
+    block = b;
+  }
+  if (!block) return null;
+  const options = block.map((h) => ({
+    n: h.n,
+    text: h.text.length > OPT_TEXT_MAX ? h.text.slice(0, OPT_TEXT_MAX - 1).trimEnd() + '…' : h.text,
+  }));
+  // 4. Заголовок — над БЛОКОМ (там «Bash command», сама команда, «Do you want to proceed?»),
+  //    а не над первой цифрой на экране.
   const head = [];
-  for (let i = Math.max(0, firstAt - TITLE_LINES); i < firstAt; i++) {
+  for (let i = Math.max(0, block[0].i - TITLE_LINES); i < block[0].i; i++) {
     const t = clean(lines[i]);
     if (!t || !HAS_TEXT_RE.test(t)) continue;
     if (STATUSLINE_RE.test(t) || CHROME_RE.test(t) || HINT_RE.test(t)) continue;

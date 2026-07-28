@@ -254,6 +254,36 @@ test('parsePrompt keeps the command being approved in the title', () => {
   assert.ok(!/Esc to cancel/.test(p.title), 'chrome must not leak into the title');
 });
 
+test('parsePrompt НЕ берёт нумерованный список из прозы над запросом', () => {
+  // Ровно то, что нашло ревью: кнопка «1. переписать модуль оплаты» печатала бы «1»
+  // в диалог ниже, то есть одобряла бы rm -rf build.
+  const snap = [
+    'Предлагаю план:',
+    '1. переписать модуль оплаты',
+    '2. удалить старый клиент',
+    '╭──────────────────────────────────────────╮',
+    '│ Bash command                             │',
+    '│ rm -rf build                             │',
+    '│ Do you want to proceed?                  │',
+    '│ ❯ 1. Yes                                 │',
+    '│   2. No, and tell Claude what to do      │',
+    '╰──────────────────────────────────────────╯',
+  ].join('\n');
+  const p = S.parsePrompt(snap);
+  assert.deepStrictEqual(p.options.map((o) => o.text), ['Yes', 'No, and tell Claude what to do']);
+  assert.ok(p.title.includes('rm -rf build'), 'команда обязана быть в тексте: ' + p.title);
+  assert.ok(!/переписать/.test(p.title), 'проза не должна попадать в заголовок');
+});
+
+test('parsePrompt игнорирует список без рамки — это не запрос', () => {
+  assert.strictEqual(S.parsePrompt('Варианты:\n1. один\n2. два\n> '), null);
+});
+
+test('parsePrompt требует нумерацию с 1 без дублей', () => {
+  const snap = ['│ Do you want to proceed? │', '│ 2. Yes │', '│ 2. No │'].join('\n');
+  assert.strictEqual(S.parsePrompt(snap), null);
+});
+
 test('parsePrompt says null when there is no choice on screen', () => {
   assert.strictEqual(S.parsePrompt('Просто текст\n> '), null);
   assert.strictEqual(S.parsePrompt('❯ 1. Yes'), null, 'a single option is not a choice');
