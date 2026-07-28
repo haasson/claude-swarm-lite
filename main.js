@@ -1129,7 +1129,16 @@ function tgOnUpdate(u) {
   if (u.chatId !== TG.chatId) { tgLog('  чужой чат — игнорирую'); return; }
 
   if (u.command === 'tabs') { tgSendTabs(u.threadId).catch(reportMainError); return; }
-  if (u.command === 'start') { tgSend({ threadId: u.threadId, text: 'Уже на связи. /tabs — что сейчас у агентов.' }).catch(reportMainError); return; }
+  if (u.command === 'sync') { tgSync(u.threadId).catch(reportMainError); return; }
+  if (u.command === 'start' || u.command === 'help') {
+    tgSend({ threadId: u.threadId, text: [
+      'Уже на связи. Каждая вкладка живёт в своей теме — пиши в тему, попадёшь в её агента.',
+      '',
+      '/tabs — вкладки и что у них сейчас',
+      '/sync — подтянуть темы под открытые вкладки',
+    ].join('\n') }).catch(reportMainError);
+    return;
+  }
   if (u.voice) {
     tgSend({ threadId: u.threadId, replyTo: u.messageId, text: 'Голос пока не умею — вторым этапом. Напиши текстом.' }).catch(reportMainError);
     return;
@@ -1166,6 +1175,32 @@ function tgOnUpdate(u) {
   }
   if (d) d.tgPrimed = true;
   tgSend({ threadId: u.threadId, replyTo: u.messageId, text: `→ ${tgTabName(id)}`, silent: true }).catch(reportMainError);
+}
+
+// /sync — make the group match the machine. Normally topics keep themselves in step
+// (created with a tab, closed with it), but not across every accident: the app was killed
+// without closing them, the group was bound before topics existed, someone deleted a
+// topic by hand. This is the one command that reconciles both directions on demand.
+async function tgSync(threadId) {
+  if (!TG.isForum || TG.chatId == null) {
+    await tgSend({ threadId, text: 'Группа не привязана.' });
+    return;
+  }
+  await tgEnsureTopics();
+  // The other direction: topics whose tab is gone. Closed, not forgotten — the mapping
+  // stays so the same tab returning after a relaunch reopens its own topic.
+  const live = new Set();
+  for (const [id, d] of det) if (!d.dead && d.tabKey && sessions.has(id)) live.add(d.tabKey);
+  let closed = 0;
+  for (const [key, thread] of Object.entries(TG.topics)) {
+    if (live.has(key)) continue;
+    await tgTopicCall('closeForumTopic', thread);
+    closed++;
+  }
+  const names = [...det].filter(([id, d]) => !d.dead && sessions.has(id)).map(([id]) => tgTabName(id));
+  await tgSend({ threadId, text: `Тем под открытые вкладки: ${names.length}`
+    + (names.length ? ' — ' + names.join(', ') : '')
+    + (closed ? `\nЗакрыто тем от закрытых вкладок: ${closed}` : '') });
 }
 
 // /tabs — what every agent is doing right now, so you can orient from the phone without
