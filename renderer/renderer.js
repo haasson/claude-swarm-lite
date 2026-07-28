@@ -1316,15 +1316,26 @@ function showSettingsModal(tab) {
             идёт короткая метка <span class="set-mono">[тлг]</span>. Пусто — вернётся формулировка
             по умолчанию.</span>
           <textarea class="set-input" id="set-tg-prompt" rows="2" spellcheck="false"></textarea>
-          <span class="set-label">Голос</span>
+          <span class="set-label">Голосовые сообщения</span>
           <span class="set-hint set-hint-top" id="set-tg-voice-hint"></span>
           <div class="tg-row">
-            <input class="set-input" type="text" id="set-tg-wbin" spellcheck="false"
-                   placeholder="whisper-cli (пусто — искать в PATH)" />
+            <select class="set-input" id="set-voice-model"></select>
+            <button type="button" class="set-check-btn" id="set-voice-install">Включить голосовые</button>
+            <button type="button" class="set-check-btn" id="set-voice-cancel" hidden>Отменить</button>
+            <button type="button" class="set-check-btn danger" id="set-voice-remove" hidden>Удалить</button>
           </div>
-          <div class="tg-row">
-            <input class="set-input" type="text" id="set-tg-wmodel" spellcheck="false"
-                   placeholder="путь к модели ggml-*.bin" />
+          <div class="upd-progress" id="set-voice-progress" hidden><div class="upd-bar" id="set-voice-bar"></div></div>
+          <div class="tg-state" id="set-voice-note"></div>
+          <button type="button" class="set-check-btn" id="set-voice-manual">Указать пути вручную</button>
+          <div id="set-voice-manual-box" hidden>
+            <div class="tg-row">
+              <input class="set-input" type="text" id="set-tg-wbin" spellcheck="false"
+                     placeholder="whisper-cli (пусто — искать в PATH)" />
+            </div>
+            <div class="tg-row">
+              <input class="set-input" type="text" id="set-tg-wmodel" spellcheck="false"
+                     placeholder="путь к модели ggml-*.bin" />
+            </div>
           </div>
           <label class="set-check">
             <input type="checkbox" id="set-tg-mirror" />
@@ -1408,7 +1419,73 @@ function showSettingsModal(tab) {
   const tgWBinI = overlay.querySelector('#set-tg-wbin');
   const tgWModelI = overlay.querySelector('#set-tg-wmodel');
   const tgVoiceHintEl = overlay.querySelector('#set-tg-voice-hint');
+  const vModelSel = overlay.querySelector('#set-voice-model');
+  const vInstallB = overlay.querySelector('#set-voice-install');
+  const vCancelB = overlay.querySelector('#set-voice-cancel');
+  const vRemoveB = overlay.querySelector('#set-voice-remove');
+  const vProgress = overlay.querySelector('#set-voice-progress');
+  const vBar = overlay.querySelector('#set-voice-bar');
+  const vNote = overlay.querySelector('#set-voice-note');
+  const vManualB = overlay.querySelector('#set-voice-manual');
+  const vManualBox = overlay.querySelector('#set-voice-manual-box');
   let tgTtlTimer = null;
+
+  const vMb = (n) => (n >= 1e9 ? (n / 1e9).toFixed(1) + ' ГБ' : Math.round((n || 0) / 1e6) + ' МБ');
+
+  // Голос одной кнопкой. Всё состояние приходит из main вместе с остальным состоянием
+  // Телеграма, поэтому полоса прогресса живёт сама — отдельного канала событий нет.
+  function renderVoice(st) {
+    const v = st.voice || {};
+    const models = v.models || [];
+    if (vModelSel.options.length !== models.length) {
+      vModelSel.innerHTML = '';
+      for (const m of models) {
+        const o = document.createElement('option');
+        o.value = m.id;
+        o.textContent = `${m.label} — ${vMb(m.bytes)}${m.recommended ? ' (обычный выбор)' : ''}`;
+        o.title = m.note || '';
+        if (m.recommended) o.selected = true;
+        vModelSel.appendChild(o);
+      }
+    }
+    if (v.model && !v.busy) vModelSel.value = v.model;
+    const ready = !!(st.voiceReady && v.managed);
+    vModelSel.disabled = !!v.busy;
+    vInstallB.hidden = !!v.busy;
+    vInstallB.textContent = ready ? 'Сменить модель' : 'Включить голосовые';
+    vCancelB.hidden = !v.busy;
+    vRemoveB.hidden = !!v.busy || !v.diskBytes;
+    vRemoveB.textContent = v.diskBytes ? `Удалить (${vMb(v.diskBytes)})` : 'Удалить';
+    vProgress.hidden = !v.busy;
+    // Пока total неизвестен (ещё качаем список сборок) — полоса не врёт нулём, а ждёт.
+    vBar.style.width = v.busy && v.total ? Math.round((v.done / v.total) * 100) + '%' : '0%';
+    if (v.busy) {
+      vNote.textContent = v.total
+        ? `Качаю ${v.what}: ${vMb(v.done)} из ${vMb(v.total)}`
+        : 'Готовлюсь…';
+      vNote.className = 'tg-state';
+    } else if (v.error) {
+      vNote.textContent = '⚠ ' + v.error;
+      vNote.className = 'tg-state is-bad';
+    } else if (st.voiceReady) {
+      vNote.textContent = v.managed
+        ? `Голосовые работают: модель ${v.model}, распознавание на этой машине.`
+        : 'Голосовые работают: whisper.cpp настроен вручную.';
+      vNote.className = 'tg-state is-good';
+    } else {
+      vNote.textContent = 'Голосовые пока не распознаются. Нажми «Включить голосовые» —'
+        + ' скачается распознаватель и модель, звук останется на этой машине.';
+      vNote.className = 'tg-state';
+    }
+  }
+
+  vInstallB.addEventListener('click', async () => { renderTg(await window.swarm.voiceInstall(vModelSel.value)); });
+  vCancelB.addEventListener('click', async () => { renderTg(await window.swarm.voiceCancel()); });
+  vRemoveB.addEventListener('click', async () => { renderTg(await window.swarm.voiceRemove()); });
+  vManualB.addEventListener('click', () => {
+    vManualBox.hidden = !vManualBox.hidden;
+    vManualB.textContent = vManualBox.hidden ? 'Указать пути вручную' : 'Скрыть пути';
+  });
 
   function tgStatusText(st) {
     if (!st.available) return '⚠ Система не даёт безопасно хранить токен — мост недоступен';
@@ -1442,9 +1519,11 @@ function showSettingsModal(tab) {
     tgMirrorI.checked = !!st.mirrorAll;
     if (document.activeElement !== tgWBinI) tgWBinI.value = st.whisperBin || '';
     if (document.activeElement !== tgWModelI) tgWModelI.value = st.whisperModel || '';
-    // Инструкция своя на ОС (brew есть только на маке) — её присылает main.
-    tgVoiceHintEl.textContent = (st.voiceReady ? 'Голос готов. ' : 'Голосовые пока не распознаются. ')
-      + (st.voiceHint || '');
+    // Инструкция по ручной установке своя на ОС (brew есть только на маке) — её присылает
+    // main. Обычному пути она не нужна, поэтому висит над скрытыми полями.
+    tgVoiceHintEl.textContent = 'Распознавание идёт на этой машине: звук никуда не уходит.';
+    vManualB.title = st.voiceHint || '';
+    renderVoice(st);
   }
 
   function stopTgTtl() {

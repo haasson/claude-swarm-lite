@@ -75,6 +75,12 @@ contextBridge.exposeInMainWorld('swarm', {
   },
   audioDecoded: (reqId, samples, error) => ipcRenderer.send('audio:decoded', { reqId, samples, error }),
 
+  // Голос одной кнопкой: main качает распознаватель и модель в профиль пользователя и
+  // сам прописывает пути. Все три возвращают состояние Телеграма — панель рисуется из него.
+  voiceInstall: (modelId) => ipcRenderer.invoke('voice:install', modelId),
+  voiceCancel: () => ipcRenderer.invoke('voice:cancel'),
+  voiceRemove: () => ipcRenderer.invoke('voice:remove'),
+
   // main просит открыть вкладку (это /new из телеги: main не умеет делать xterm и DOM).
   onCreateTab: (cb) => {
     const handler = (_e, payload) => cb(payload);

@@ -701,6 +701,174 @@ function tgWhisperBin() {
   });
 }
 
+// --- Голос: установка одной кнопкой -------------------------------------------
+// Пользователь не ставит ничего руками и не вбивает путей: кнопка тянет распознаватель из
+// нашего же реестра (там, откуда ходят обновления) и модель с HuggingFace. В сборке нет ни
+// того, ни другого — кому голос не нужен, тот не платит за него ни размером приложения, ни
+// весом обновления. Ручные поля остаются для тех, у кого whisper.cpp уже стоит.
+const VOICE_REG = 'https://gitlab.internal/api/v4/projects/331/packages/generic/apps';
+const VOICE_MANIFEST_URL = `${VOICE_REG}/latest/whisper.json`;
+const VOICE_PROGRESS_MS = 200;      // как часто обновлять полосу, а не на каждый пакет
+
+let voiceJob = null;                // идущая установка; одна за раз
+let voiceError = null;
+
+function voiceDir() { return path.join(app.getPath('userData'), voice.RUNTIME_DIRNAME); }
+
+// Read-only токен реестра — тот же, которым обновлялка забирает app.asar.
+function voiceRegToken() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(app.getAppPath(), 'build-info.json'), 'utf8')).updateToken || '';
+  } catch (_) { return ''; }
+}
+
+// Свой загрузчик, а не тот, что внутри updater.js: модель отдаётся редиректом на CDN
+// HuggingFace, а `https.get` редиректы не ходит — fetch ходит. Плюс здесь нужен прогресс
+// по байтам через несколько файлов и отмена.
+async function voiceFetchFile(url, dest, opts) {
+  const o = opts || {};
+  const res = await fetch(url, { headers: o.token ? { 'PRIVATE-TOKEN': o.token } : {}, signal: o.signal });
+  if (!res.ok || !res.body) throw new Error(`не ответил сервер (HTTP ${res.status})`);
+  // Пишем в .part и переименовываем в конце: недокачанный файл никогда не должен
+  // выглядеть готовым — иначе следующий запуск сочтёт его моделью и «ничего не разберёт».
+  const part = dest + '.part';
+  const hash = crypto.createHash('sha256');
+  const out = fs.createWriteStream(part);
+  try {
+    for await (const chunk of res.body) {
+      hash.update(chunk);
+      if (o.onBytes) o.onBytes(chunk.length);
+      if (!out.write(chunk)) await new Promise((r, j) => { out.once('drain', r); out.once('error', j); });
+    }
+    await new Promise((r, j) => { out.end(); out.once('finish', r); out.once('error', j); });
+  } catch (e) {
+    out.destroy();
+    try { fs.unlinkSync(part); } catch (_) {}
+    throw e;
+  }
+  const got = hash.digest('hex');
+  if (o.sha256 && got !== String(o.sha256).toLowerCase()) {
+    try { fs.unlinkSync(part); } catch (_) {}
+    throw new Error('файл скачался битым (sha256 не совпал)');
+  }
+  fs.renameSync(part, dest);
+}
+
+// План установки с учётом того, что уже лежит: повторное нажатие после обрыва не тянет
+// заново 148 МБ. Целость по размеру, а не по хешу: хешировать модель при каждом открытии
+// настроек — ощутимая пауза, а битое отсекается при скачивании.
+async function voicePlan(modelId) {
+  const res = await fetch(VOICE_MANIFEST_URL, { headers: { 'PRIVATE-TOKEN': voiceRegToken() } });
+  if (!res.ok) throw new Error(`список сборок распознавателя недоступен (HTTP ${res.status})`);
+  const manifest = await res.json();
+  const args = {
+    dir: voiceDir(), platform: process.platform, arch: process.arch, modelId, manifest,
+    base: `${VOICE_REG}/whisper-${manifest.version}`, join: path.join,
+  };
+  const full = voice.installPlan(args);
+  if (!full.ok) return full;
+  const have = new Set();
+  for (const it of full.items) {
+    try { if (fs.statSync(it.target).size === it.bytes) have.add(it.name); } catch (_) {}
+  }
+  return voice.installPlan(Object.assign({ have }, args));
+}
+
+let voicePushAt = 0;
+function voicePush(force) {
+  const now = Date.now();
+  if (!force && now - voicePushAt < VOICE_PROGRESS_MS) return;
+  voicePushAt = now;
+  tgPush();
+}
+
+async function voiceInstall(modelId) {
+  if (voiceJob) return;
+  voiceError = null;
+  const ctl = new AbortController();
+  voiceJob = { total: 0, done: 0, what: 'подготовка', ctl };
+  voicePush(true);
+  try {
+    const plan = await voicePlan(modelId);
+    if (!plan.ok) {
+      throw new Error('для этой системы готовой сборки распознавателя нет —'
+        + ' поставь whisper.cpp сам и укажи путь вручную');
+    }
+    voiceJob.total = plan.bytes;
+    fs.mkdirSync(voiceDir(), { recursive: true });
+    for (const it of plan.items) {
+      voiceJob.what = it.kind === 'model' ? 'модель' : 'распознаватель';
+      voicePush(true);
+      await voiceFetchFile(it.url, it.target, {
+        token: it.kind === 'runtime' ? voiceRegToken() : '',
+        sha256: it.sha256,
+        signal: ctl.signal,
+        onBytes: (n) => { voiceJob.done += n; voicePush(); },
+      });
+      // Без +x скачанный бинарник просто не запустится, а «whisper не отработал» —
+      // бесполезная диагностика для того, кто ничего руками не делал.
+      if (it.exec) { try { fs.chmodSync(it.target, 0o755); } catch (_) {} }
+    }
+    TG.whisperBin = plan.bin;
+    TG.whisperModel = plan.model;
+    try { tgSave(); } catch (e) { reportMainError(e); }
+  } catch (e) {
+    voiceError = ctl.signal.aborted ? 'Установка отменена.'
+      : 'Не получилось установить голос: ' + ((e && e.message) || e);
+  } finally {
+    voiceJob = null;
+    voicePush(true);
+  }
+}
+
+// Вернуть мегабайты: удалить скачанное и забыть пути. Ровно то, чего не хватает, когда
+// функцию попробовали и решили, что она не нужна.
+function voiceRemove() {
+  if (voiceJob) { voiceJob.ctl.abort(); }
+  try { fs.rmSync(voiceDir(), { recursive: true, force: true }); } catch (e) { reportMainError(e); }
+  // Ручные пути (whisper из PATH) не трогаем — удаляем только то, что установили сами.
+  if (String(TG.whisperBin || '').startsWith(voiceDir())) TG.whisperBin = '';
+  if (String(TG.whisperModel || '').startsWith(voiceDir())) TG.whisperModel = '';
+  voiceError = null;
+  try { tgSave(); } catch (e) { reportMainError(e); }
+}
+
+// Сколько места занято скачанным — чтобы кнопка «Удалить» называла цифру.
+function voiceDiskBytes() {
+  let sum = 0;
+  try {
+    for (const f of fs.readdirSync(voiceDir())) {
+      try { sum += fs.statSync(path.join(voiceDir(), f)).size; } catch (_) {}
+    }
+  } catch (_) { /* папки нет — ноль */ }
+  return sum;
+}
+
+// Какая модель установлена: узнаём по имени файла, отдельного состояния не держим.
+function voiceInstalledModel() {
+  const m = /ggml-([a-z0-9.-]+)\.bin$/.exec(String(TG.whisperModel || ''));
+  return m ? m[1] : null;
+}
+
+function voiceState() {
+  return {
+    busy: !!voiceJob,
+    what: voiceJob ? voiceJob.what : '',
+    done: voiceJob ? voiceJob.done : 0,
+    total: voiceJob ? voiceJob.total : 0,
+    error: voiceError,
+    model: voiceInstalledModel(),
+    managed: String(TG.whisperModel || '').startsWith(voiceDir()),
+    diskBytes: voiceDiskBytes(),
+    models: voice.MODELS.map((m) => ({ id: m.id, label: m.label, bytes: m.bytes, note: m.note,
+      recommended: !!m.recommended })),
+  };
+}
+
+ipcMain.handle('voice:install', (_e, modelId) => { voiceInstall(String(modelId || 'base')).catch(reportMainError); return tgState(); });
+ipcMain.handle('voice:cancel', () => { if (voiceJob) voiceJob.ctl.abort(); return tgState(); });
+ipcMain.handle('voice:remove', () => { voiceRemove(); return tgState(); });
+
 // Декодирование Opus живёт в рендерере: Chromium умеет это сам, поэтому ffmpeg не нужен ни
 // на маке, ни на винде. Здесь только мостик «отправил байты — получил моно 16 кГц».
 let tgDecodeSeq = 1;
@@ -858,6 +1026,7 @@ function tgState() {
     whisperModel: TG.whisperModel,
     voiceHint: voice.setupHint(process.platform),
     voiceReady: !!(tgWhisperBin() && TG.whisperModel),
+    voice: voiceState(),
     check: tgCheck,
     pairing: tgPair ? { code: tgPair.code, until: tgPair.at + TG_PAIR_TTL_MS } : null,
   };
