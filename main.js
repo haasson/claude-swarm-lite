@@ -577,16 +577,26 @@ function tgAway() {
   try { return powerMonitor.getSystemIdleTime() >= TG_AWAY_S; }
   catch (_) { return false; }
 }
-// Diagnostics for the bridge: SWARM_TG_LOG=1 npm start writes every incoming message and
-// what we did with it to <userData>/telegram.log. Added after a pairing attempt failed
-// silently and the only way to tell «не дошло» from «дошло и отброшено» was to read code.
-const TG_DEBUG = process.env.SWARM_TG_LOG === '1';
+// Журнал моста: каждое входящее сообщение и что мы с ним сделали — в
+// <userData>/telegram.log. Пишется ВСЕГДА, и это осознанно: раньше он включался
+// переменной окружения SWARM_TG_LOG, то есть ровно в тот момент, когда журнал нужен —
+// «мост повёл себя странно только что» — его и не было, а включить его у уже запущенного
+// приложения нельзя. Диагностика, которую надо предусмотреть заранее, не диагностика.
+//
+// Цена — несколько строк на сообщение из телеги, поэтому файл ограничен по размеру и
+// переливается в .1: два файла, дальше старое пропадает. Ни одна ошибка здесь не имеет
+// права ронять мост — журнал не важнее работы.
+const TG_LOG_MAX = 512 * 1024;
+
+function tgLogPath() { return path.join(app.getPath('userData'), 'telegram.log'); }
 
 function tgLog(line) {
-  if (!TG_DEBUG) return;
   try {
-    fs.appendFileSync(path.join(app.getPath('userData'), 'telegram.log'),
-      new Date().toISOString().slice(11, 23) + ' ' + line + '\n');
+    const file = tgLogPath();
+    try {
+      if (fs.statSync(file).size > TG_LOG_MAX) fs.renameSync(file, file + '.1');
+    } catch (_) { /* файла ещё нет — обычное дело */ }
+    fs.appendFileSync(file, new Date().toISOString().slice(11, 23) + ' ' + line + '\n');
   } catch (_) { /* diagnostics must never break the bridge */ }
 }
 
@@ -868,6 +878,17 @@ function voiceState() {
 ipcMain.handle('voice:install', (_e, modelId) => { voiceInstall(String(modelId || 'base')).catch(reportMainError); return tgState(); });
 ipcMain.handle('voice:cancel', () => { if (voiceJob) voiceJob.ctl.abort(); return tgState(); });
 ipcMain.handle('voice:remove', () => { voiceRemove(); return tgState(); });
+
+// Показать журнал моста в Finder/Проводнике. Нужно, чтобы «пришли журнал» не означало
+// «открой терминал и найди папку профиля приложения».
+ipcMain.handle('telegram:showLog', () => {
+  const file = tgLogPath();
+  try {
+    if (!fs.existsSync(file)) fs.writeFileSync(file, 'журнал пуст — мост ещё ничего не делал\n');
+    shell.showItemInFolder(file);
+    return true;
+  } catch (e) { reportMainError(e); return false; }
+});
 
 // Декодирование Opus живёт в рендерере: Chromium умеет это сам, поэтому ffmpeg не нужен ни
 // на маке, ни на винде. Здесь только мостик «отправил байты — получил моно 16 кГц».

@@ -1327,6 +1327,7 @@ function showSettingsModal(tab) {
           <div class="upd-progress" id="set-voice-progress" hidden><div class="upd-bar" id="set-voice-bar"></div></div>
           <div class="tg-state" id="set-voice-note"></div>
           <button type="button" class="set-check-btn" id="set-voice-manual">Указать пути вручную</button>
+          <button type="button" class="set-check-btn" id="set-tg-log">Показать журнал моста</button>
           <div id="set-voice-manual-box" hidden>
             <div class="tg-row">
               <input class="set-input" type="text" id="set-tg-wbin" spellcheck="false"
@@ -1482,6 +1483,8 @@ function showSettingsModal(tab) {
   vInstallB.addEventListener('click', async () => { renderTg(await window.swarm.voiceInstall(vModelSel.value)); });
   vCancelB.addEventListener('click', async () => { renderTg(await window.swarm.voiceCancel()); });
   vRemoveB.addEventListener('click', async () => { renderTg(await window.swarm.voiceRemove()); });
+  // Журнал пишется всегда, поэтому его надо просто показать — включать нечего.
+  overlay.querySelector('#set-tg-log').addEventListener('click', () => { window.swarm.showTgLog(); });
   vManualB.addEventListener('click', () => {
     vManualBox.hidden = !vManualBox.hidden;
     vManualB.textContent = vManualBox.hidden ? 'Указать пути вручную' : 'Скрыть пути';

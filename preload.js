@@ -81,6 +81,9 @@ contextBridge.exposeInMainWorld('swarm', {
   voiceCancel: () => ipcRenderer.invoke('voice:cancel'),
   voiceRemove: () => ipcRenderer.invoke('voice:remove'),
 
+  // Показать журнал моста в Finder: «пришли журнал» не должно означать «открой терминал».
+  showTgLog: () => ipcRenderer.invoke('telegram:showLog'),
+
   // main просит открыть вкладку (это /new из телеги: main не умеет делать xterm и DOM).
   onCreateTab: (cb) => {
     const handler = (_e, payload) => cb(payload);
