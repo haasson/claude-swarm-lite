@@ -66,6 +66,13 @@ contextBridge.exposeInMainWorld('swarm', {
   // to sign its messages — pushed on create and on rename.
   setTabName: (id, name) => ipcRenderer.send('tabs:name', { id, name }),
 
+  // main просит открыть вкладку (это /new из телеги: main не умеет делать xterm и DOM).
+  onCreateTab: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('app:createTab', handler);
+    return () => ipcRenderer.removeListener('app:createTab', handler);
+  },
+
   // Telegram bridge (Settings → Телеграм). The token itself only ever travels ONE way:
   // into main, which stores it encrypted. Everything coming back is masked state —
   // `state` never carries the token, so the renderer can't leak what it doesn't have.
@@ -78,6 +85,7 @@ contextBridge.exposeInMainWorld('swarm', {
     check:     ()      => ipcRenderer.invoke('telegram:check'),
     setPrompt: (text)  => ipcRenderer.invoke('telegram:setPrompt', text),
     keepAwake: (on)    => ipcRenderer.invoke('telegram:setKeepAwake', on),
+    mirrorAll: (on)    => ipcRenderer.invoke('telegram:setMirrorAll', on),
     onState:   (cb)    => ipcRenderer.on('telegram:state', (_e, s) => cb(s)),
   },
 

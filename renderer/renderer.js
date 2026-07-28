@@ -1315,6 +1315,11 @@ function showSettingsModal(tab) {
             по умолчанию.</span>
           <textarea class="set-input" id="set-tg-prompt" rows="2" spellcheck="false"></textarea>
           <label class="set-check">
+            <input type="checkbox" id="set-tg-mirror" />
+            <span class="set-check-tx">Присылать итоги всех ходов
+              <span class="set-check-sub">по умолчанию — только когда тебя нет за маком дольше пяти минут</span></span>
+          </label>
+          <label class="set-check">
             <input type="checkbox" id="set-tg-awake" />
             <span class="set-check-tx">Не давать маку засыпать, пока группа привязана
               <span class="set-check-sub">со спящим маком отвечать некому: агенты живут здесь</span></span>
@@ -1387,6 +1392,7 @@ function showSettingsModal(tab) {
   const tgExtra = overlay.querySelector('#set-tg-extra');
   const tgPromptI = overlay.querySelector('#set-tg-prompt');
   const tgAwakeI = overlay.querySelector('#set-tg-awake');
+  const tgMirrorI = overlay.querySelector('#set-tg-mirror');
   let tgTtlTimer = null;
 
   function tgStatusText(st) {
@@ -1418,6 +1424,7 @@ function showSettingsModal(tab) {
     if (document.activeElement !== tgPromptI) tgPromptI.value = st.prompt || '';
     tgPromptI.placeholder = st.promptDefault || '';
     tgAwakeI.checked = !!st.keepAwake;
+    tgMirrorI.checked = !!st.mirrorAll;
   }
 
   function stopTgTtl() {
@@ -1475,6 +1482,9 @@ function showSettingsModal(tab) {
   // Both apply on blur, not on «Сохранить» — same as the rest of this panel.
   tgPromptI.addEventListener('change', async () => {
     renderTg(await window.swarm.telegram.setPrompt(tgPromptI.value));
+  });
+  tgMirrorI.addEventListener('change', async () => {
+    renderTg(await window.swarm.telegram.mirrorAll(tgMirrorI.checked));
   });
   tgAwakeI.addEventListener('change', async () => {
     renderTg(await window.swarm.telegram.keepAwake(tgAwakeI.checked));
@@ -3379,6 +3389,8 @@ applyNotify(localStorage.getItem('swarm.notify') !== '0'); // master notificatio
 // carries (or omits) the hooks block before the first claude spawn.
 window.swarm.setHooksEnabled(hooksEnabled);
 window.swarm.setAskPhrases(askPhrases); // same reason: the hook file must be current
+// /new из телеги: main знает папку, но вкладку умеет делать только рендерер.
+window.swarm.onCreateTab(({ cwd }) => createSession({ cwd }));
 try { JSON.parse(localStorage.getItem('swarm.collapsed') || '[]').forEach((c) => collapsedFolders.add(c)); } catch (_) {}
 restoreOrStart();
 

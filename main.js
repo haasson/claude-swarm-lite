@@ -18,7 +18,7 @@
 //   just type `claude` into it. Bonus: auth "just works" because it's the same
 //   environment you log in from.
 
-const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeImage, shell, safeStorage, powerSaveBlocker } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeImage, shell, safeStorage, powerSaveBlocker, powerMonitor } = require('electron');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
@@ -354,7 +354,8 @@ setInterval(() => {
         if (next.status === 'waiting') tgOnWaiting(id);
         else tgCancelWaiting(d);
         // Turn finished on a task that came from the phone → report back there.
-        if (next.status === 'ready' && prev === 'running' && d.tgMode && TG.chatId != null) {
+        if (next.status === 'ready' && prev === 'running' && TG.chatId != null
+            && (d.tgMode || TG.mirrorAll || tgAway())) {
           tgNotifyDone(id, d).catch(reportMainError);
         }
       }
@@ -564,6 +565,16 @@ const qrcode = require('qrcode-generator');   // one file, no deps: the pairing 
 // that dies mid-fix looked exactly like a broken bridge, because an unknown code hits the
 // «this chat isn't ours» branch and is dropped in silence.
 const TG_PAIR_TTL_MS = 900_000;   // 15 minutes
+// «Ты не за столом» — не по фокусу окна (окно часто так и остаётся впереди, когда человек
+// ушёл), а по отсутствию любого ввода на маке. Тогда в группу идут итоги ВСЕХ ходов: это и
+// есть зеркало, которого ждёшь из дороги. Вернулся за клавиатуру — снова только вопросы,
+// иначе телефон жужжал бы весь рабочий день.
+const TG_AWAY_S = 300;
+
+function tgAway() {
+  try { return powerMonitor.getSystemIdleTime() >= TG_AWAY_S; }
+  catch (_) { return false; }
+}
 // Diagnostics for the bridge: SWARM_TG_LOG=1 npm start writes every incoming message and
 // what we did with it to <userData>/telegram.log. Added after a pairing attempt failed
 // silently and the only way to tell «не дошло» from «дошло и отброшено» was to read code.
@@ -592,7 +603,7 @@ let tgError = null;    // last error, verbatim for the settings panel
 
 function tgPath() { return path.join(app.getPath('userData'), 'telegram.dat'); }
 
-function tgBlank() { return { token: '', chatId: null, isForum: false, topics: {}, prompt: '', keepAwake: true }; }
+function tgBlank() { return { token: '', chatId: null, isForum: false, topics: {}, prompt: '', keepAwake: true, mirrorAll: false }; }
 
 // The last result of tgCheckChat(), so the settings panel can show «бот администратор,
 // темы доступны» without re-asking Telegram on every render.
@@ -610,6 +621,7 @@ function tgLoad() {
       topics: (d.topics && typeof d.topics === 'object') ? d.topics : {},
       prompt: String(d.prompt || ''),
       keepAwake: d.keepAwake !== false,
+      mirrorAll: !!d.mirrorAll,
     };
   } catch (_) { TG = tgBlank(); }
   TG_PROMPT = TG.prompt || TG_PROMPT_DEFAULT;
@@ -741,6 +753,7 @@ function tgState() {
     prompt: TG_PROMPT,
     promptDefault: TG_PROMPT_DEFAULT,
     keepAwake: !!TG.keepAwake,
+    mirrorAll: !!TG.mirrorAll,
     check: tgCheck,
     pairing: tgPair ? { code: tgPair.code, until: tgPair.at + TG_PAIR_TTL_MS } : null,
   };
@@ -1184,12 +1197,14 @@ function tgOnUpdate(u) {
 
   if (u.command === 'tabs') { tgSendTabs(u.threadId).catch(reportMainError); return; }
   if (u.command === 'sync') { tgSync(u.threadId).catch(reportMainError); return; }
+  if (u.command === 'new') { tgNewTab(u).catch(reportMainError); return; }
   if (u.command === 'start' || u.command === 'help') {
     tgSend({ threadId: u.threadId, text: [
       'Уже на связи. Каждая вкладка живёт в своей теме — пиши в тему, попадёшь в её агента.',
       '',
       '/tabs — вкладки и что у них сейчас',
       '/sync — подтянуть темы под открытые вкладки',
+      '/new — ещё один агент в папке этой темы',
     ].join('\n') }).catch(reportMainError);
     return;
   }
@@ -1230,6 +1245,23 @@ function tgOnUpdate(u) {
   }
   if (d) d.tgPrimed = true;
   tgSend({ threadId: u.threadId, replyTo: u.messageId, text: `→ ${tgTabName(id)}`, silent: true }).catch(reportMainError);
+}
+
+// /new в теме — ещё один агент в ТОЙ ЖЕ папке. Папку называть не надо: тема = вкладка =
+// папка, и это самый естественный жест с телефона. Вкладки рождаются в рендерере (там
+// xterm и DOM), поэтому main просит его, а не создаёт сам; тема новой вкладке создастся
+// сама, как только у неё появится имя.
+async function tgNewTab(u) {
+  const id = tgRoute(u);
+  const d = id == null ? null : det.get(id);
+  if (!d || !d.cwd) {
+    await tgSend({ threadId: u.threadId, text: '/new работает в теме вкладки — оттуда я знаю папку.'
+      + ' Список тем — /tabs.' });
+    return;
+  }
+  safeSend('app:createTab', { cwd: d.cwd });
+  await tgSend({ threadId: u.threadId, text: `Открываю ещё одного агента в ${d.cwd}.`
+    + ' Его тема появится в группе через пару секунд.' });
 }
 
 // /sync — make the group match the machine. Normally topics keep themselves in step
@@ -1314,6 +1346,13 @@ ipcMain.handle('telegram:setPrompt', (_e, raw) => {
 
 // Keep the Mac awake while the bridge is on: with the lid closed nothing polls, so the
 // «answer from the taxi» case quietly stops working. Off = normal sleep behaviour.
+// Зеркалить итоги всегда, а не только когда тебя нет за маком.
+ipcMain.handle('telegram:setMirrorAll', (_e, on) => {
+  TG.mirrorAll = !!on;
+  try { tgSave(); } catch (e) { reportMainError(e); }
+  return tgState();
+});
+
 ipcMain.handle('telegram:setKeepAwake', (_e, on) => {
   TG.keepAwake = !!on;
   try { tgSave(); } catch (e) { reportMainError(e); }
