@@ -557,6 +557,8 @@ setInterval(() => {
 // telegram.js holds everything protocol-shaped (and is unit-tested); this block is the
 // part that has to touch Electron, the disk and the sessions.
 const telegram = require('./telegram');
+const voice = require('./voice');
+const { execFile } = require('child_process');
 const qrcode = require('qrcode-generator');   // one file, no deps: the pairing QR
 
 // How long a pairing code lives. NOT two minutes: the realistic path is «отправил код →
@@ -603,7 +605,7 @@ let tgError = null;    // last error, verbatim for the settings panel
 
 function tgPath() { return path.join(app.getPath('userData'), 'telegram.dat'); }
 
-function tgBlank() { return { token: '', chatId: null, isForum: false, topics: {}, prompt: '', keepAwake: true, mirrorAll: false }; }
+function tgBlank() { return { token: '', chatId: null, isForum: false, topics: {}, prompt: '', keepAwake: true, mirrorAll: false, whisperBin: '', whisperModel: '' }; }
 
 // The last result of tgCheckChat(), so the settings panel can show «бот администратор,
 // темы доступны» without re-asking Telegram on every render.
@@ -622,6 +624,8 @@ function tgLoad() {
       prompt: String(d.prompt || ''),
       keepAwake: d.keepAwake !== false,
       mirrorAll: !!d.mirrorAll,
+      whisperBin: String(d.whisperBin || ''),
+      whisperModel: String(d.whisperModel || ''),
     };
   } catch (_) { TG = tgBlank(); }
   TG_PROMPT = TG.prompt || TG_PROMPT_DEFAULT;
@@ -684,6 +688,73 @@ async function tgSend(opts) {
     last = res.body.result && res.body.result.message_id;
   }
   return last;
+}
+
+// Бинарник whisper: путь из настроек, иначе поиск в PATH (имена и .exe — в voice.js).
+function tgWhisperBin() {
+  return voice.findBinary({
+    configured: TG.whisperBin || '',
+    pathEnv: process.env.PATH || '',
+    isWin: process.platform === 'win32',
+    join: path.join,
+    exists: (p) => { try { return fs.statSync(p).isFile(); } catch (_) { return false; } },
+  });
+}
+
+// Декодирование Opus живёт в рендерере: Chromium умеет это сам, поэтому ffmpeg не нужен ни
+// на маке, ни на винде. Здесь только мостик «отправил байты — получил моно 16 кГц».
+let tgDecodeSeq = 1;
+const tgDecodeWaiting = new Map();
+
+ipcMain.on('audio:decoded', (_e, { reqId, samples, error } = {}) => {
+  const done = tgDecodeWaiting.get(reqId);
+  if (!done) return;
+  tgDecodeWaiting.delete(reqId);
+  done(error ? { error } : { samples });
+});
+
+function tgDecodeAudio(bytes) {
+  return new Promise((resolve) => {
+    const reqId = tgDecodeSeq++;
+    tgDecodeWaiting.set(reqId, resolve);
+    safeSend('audio:decode', { reqId, bytes });
+    // Окно может быть закрыто или занято — не держим голос вечно.
+    setTimeout(() => {
+      if (tgDecodeWaiting.delete(reqId)) resolve({ error: 'декодирование не ответило' });
+    }, 20000);
+  });
+}
+
+// Голосовое → текст. Возвращает { text } или { error } — текст ошибки уходит в чат как
+// есть, потому что человек с телефоном должен понимать, что чинить.
+async function tgVoiceToText(fileId) {
+  const bin = tgWhisperBin();
+  if (!bin || !TG.whisperModel) {
+    return { error: 'Голос не настроен: укажи путь к whisper.cpp и модели в «Настройки → Телеграм».' };
+  }
+  const info = await tgFetchJson(telegram.apiUrl(TG.token, 'getFile'), { file_id: fileId });
+  const fpath = info.ok && info.body && info.body.ok === true && info.body.result && info.body.result.file_path;
+  if (!fpath) return { error: 'Не смог забрать файл у Telegram.' };
+  const res = await fetch(`${telegram.API_HOST}/file/bot${TG.token}/${fpath}`);
+  if (!res.ok) return { error: 'Не смог скачать голосовое.' };
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  const decoded = await tgDecodeAudio(bytes);
+  if (decoded.error || !decoded.samples) return { error: 'Не смог декодировать запись: ' + (decoded.error || 'пусто') };
+  const wav = path.join(os.tmpdir(), `swarm-voice-${Date.now()}.wav`);
+  fs.writeFileSync(wav, voice.wavFromFloat32(decoded.samples, voice.SAMPLE_RATE));
+  try {
+    const out = await new Promise((resolve, reject) => {
+      execFile(bin, voice.whisperArgs({ model: TG.whisperModel, wav }),
+        { timeout: 120000, maxBuffer: 4 << 20 },
+        (err, stdout, stderr) => (err && !stdout ? reject(new Error(String(stderr || err.message).slice(0, 200))) : resolve(stdout)));
+    });
+    const text = voice.parseOutput(out);
+    return text ? { text } : { error: 'Ничего не разобрал — тишина или слишком коротко.' };
+  } catch (e) {
+    return { error: 'whisper не отработал: ' + ((e && e.message) || e) };
+  } finally {
+    try { fs.unlinkSync(wav); } catch (_) {}
+  }
 }
 
 function tgQr(text) {
@@ -754,6 +825,10 @@ function tgState() {
     promptDefault: TG_PROMPT_DEFAULT,
     keepAwake: !!TG.keepAwake,
     mirrorAll: !!TG.mirrorAll,
+    whisperBin: TG.whisperBin,
+    whisperModel: TG.whisperModel,
+    voiceHint: voice.setupHint(process.platform),
+    voiceReady: !!(tgWhisperBin() && TG.whisperModel),
     check: tgCheck,
     pairing: tgPair ? { code: tgPair.code, until: tgPair.at + TG_PAIR_TTL_MS } : null,
   };
@@ -1208,10 +1283,7 @@ function tgOnUpdate(u) {
     ].join('\n') }).catch(reportMainError);
     return;
   }
-  if (u.voice) {
-    tgSend({ threadId: u.threadId, replyTo: u.messageId, text: 'Голос пока не умею — вторым этапом. Напиши текстом.' }).catch(reportMainError);
-    return;
-  }
+  if (u.voice) { tgOnVoice(u).catch(reportMainError); return; }
   const text = String(u.text || '').trim();
   if (!text) return;
 
@@ -1245,6 +1317,36 @@ function tgOnUpdate(u) {
   }
   if (d) d.tgPrimed = true;
   tgSend({ threadId: u.threadId, replyTo: u.messageId, text: `→ ${tgTabName(id)}`, silent: true }).catch(reportMainError);
+}
+
+// Голосовое: сначала адресат (иначе незачем и распознавать), потом эхо распознанного и
+// только затем печать в сессию. Эхо обязательно: «RoseVPN» легко становится «розовым пн», и
+// увидеть это надо ДО того, как агент начнёт по нему работать.
+async function tgOnVoice(u) {
+  const id = tgRoute(u);
+  if (id == null) {
+    await tgSend({ threadId: u.threadId, replyTo: u.messageId,
+      text: 'Не понял, какой вкладке это. Пришли голосовое в тему нужной вкладки.' });
+    return;
+  }
+  const d = det.get(id);
+  if (d && d.status === 'waiting' && d.waitingKind === 'permission') {
+    await tgSend({ threadId: u.threadId, replyTo: u.messageId,
+      text: `${tgTabName(id)} ждёт разрешения — выбери вариант кнопкой, голосом это не даётся.` });
+    return;
+  }
+  const r = await tgVoiceToText(u.voice.fileId);
+  if (r.error) {
+    await tgSend({ threadId: u.threadId, replyTo: u.messageId, text: r.error });
+    return;
+  }
+  const tagged = telegram.tagInput({ text: r.text, instruction: TG_PROMPT, primed: !!(d && d.tgPrimed) });
+  if (!tgAnswer(id, tagged)) {
+    await tgSend({ threadId: u.threadId, replyTo: u.messageId, text: 'Эта вкладка уже закрыта.' });
+    return;
+  }
+  if (d) d.tgPrimed = true;
+  await tgSend({ threadId: u.threadId, replyTo: u.messageId, text: `🎙 → ${tgTabName(id)}: ${r.text}` });
 }
 
 // /new в теме — ещё один агент в ТОЙ ЖЕ папке. Папку называть не надо: тема = вкладка =
@@ -1349,6 +1451,14 @@ ipcMain.handle('telegram:setPrompt', (_e, raw) => {
 // Зеркалить итоги всегда, а не только когда тебя нет за маком.
 ipcMain.handle('telegram:setMirrorAll', (_e, on) => {
   TG.mirrorAll = !!on;
+  try { tgSave(); } catch (e) { reportMainError(e); }
+  return tgState();
+});
+
+// Пути к whisper.cpp и модели. Пусто в поле бинарника = искать в PATH.
+ipcMain.handle('telegram:setWhisper', (_e, { bin, model } = {}) => {
+  TG.whisperBin = String(bin || '').trim();
+  TG.whisperModel = String(model || '').trim();
   try { tgSave(); } catch (e) { reportMainError(e); }
   return tgState();
 });

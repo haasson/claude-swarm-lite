@@ -1314,6 +1314,16 @@ function showSettingsModal(tab) {
             идёт короткая метка <span class="set-mono">[тлг]</span>. Пусто — вернётся формулировка
             по умолчанию.</span>
           <textarea class="set-input" id="set-tg-prompt" rows="2" spellcheck="false"></textarea>
+          <span class="set-label">Голос</span>
+          <span class="set-hint set-hint-top" id="set-tg-voice-hint"></span>
+          <div class="tg-row">
+            <input class="set-input" type="text" id="set-tg-wbin" spellcheck="false"
+                   placeholder="whisper-cli (пусто — искать в PATH)" />
+          </div>
+          <div class="tg-row">
+            <input class="set-input" type="text" id="set-tg-wmodel" spellcheck="false"
+                   placeholder="путь к модели ggml-*.bin" />
+          </div>
           <label class="set-check">
             <input type="checkbox" id="set-tg-mirror" />
             <span class="set-check-tx">Присылать итоги всех ходов
@@ -1393,6 +1403,9 @@ function showSettingsModal(tab) {
   const tgPromptI = overlay.querySelector('#set-tg-prompt');
   const tgAwakeI = overlay.querySelector('#set-tg-awake');
   const tgMirrorI = overlay.querySelector('#set-tg-mirror');
+  const tgWBinI = overlay.querySelector('#set-tg-wbin');
+  const tgWModelI = overlay.querySelector('#set-tg-wmodel');
+  const tgVoiceHintEl = overlay.querySelector('#set-tg-voice-hint');
   let tgTtlTimer = null;
 
   function tgStatusText(st) {
@@ -1425,6 +1438,11 @@ function showSettingsModal(tab) {
     tgPromptI.placeholder = st.promptDefault || '';
     tgAwakeI.checked = !!st.keepAwake;
     tgMirrorI.checked = !!st.mirrorAll;
+    if (document.activeElement !== tgWBinI) tgWBinI.value = st.whisperBin || '';
+    if (document.activeElement !== tgWModelI) tgWModelI.value = st.whisperModel || '';
+    // Инструкция своя на ОС (brew есть только на маке) — её присылает main.
+    tgVoiceHintEl.textContent = (st.voiceReady ? 'Голос готов. ' : 'Голосовые пока не распознаются. ')
+      + (st.voiceHint || '');
   }
 
   function stopTgTtl() {
@@ -1483,6 +1501,11 @@ function showSettingsModal(tab) {
   tgPromptI.addEventListener('change', async () => {
     renderTg(await window.swarm.telegram.setPrompt(tgPromptI.value));
   });
+  const saveWhisper = async () => {
+    renderTg(await window.swarm.telegram.setWhisper(tgWBinI.value, tgWModelI.value));
+  };
+  tgWBinI.addEventListener('change', saveWhisper);
+  tgWModelI.addEventListener('change', saveWhisper);
   tgMirrorI.addEventListener('change', async () => {
     renderTg(await window.swarm.telegram.mirrorAll(tgMirrorI.checked));
   });
@@ -3389,6 +3412,28 @@ applyNotify(localStorage.getItem('swarm.notify') !== '0'); // master notificatio
 // carries (or omits) the hooks block before the first claude spawn.
 window.swarm.setHooksEnabled(hooksEnabled);
 window.swarm.setAskPhrases(askPhrases); // same reason: the hook file must be current
+// Голос из телеги. Chromium декодирует Opus сам, поэтому ffmpeg приложению не нужен:
+// декодируем как есть, потом пересобираем в моно 16 кГц через OfflineAudioContext — ровно
+// то, что ест whisper.cpp. Обратно уходит Float32, WAV собирает main.
+window.swarm.onDecodeAudio(async ({ reqId, bytes }) => {
+  try {
+    const raw = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    const ctx = new AudioContext();
+    const decoded = await ctx.decodeAudioData(raw);
+    ctx.close();
+    const frames = Math.max(1, Math.ceil(decoded.duration * 16000));
+    const off = new OfflineAudioContext(1, frames, 16000);
+    const src = off.createBufferSource();
+    src.buffer = decoded;
+    src.connect(off.destination);
+    src.start();
+    const out = await off.startRendering();
+    window.swarm.audioDecoded(reqId, out.getChannelData(0));
+  } catch (e) {
+    window.swarm.audioDecoded(reqId, null, String((e && e.message) || e));
+  }
+});
+
 // /new из телеги: main знает папку, но вкладку умеет делать только рендерер.
 window.swarm.onCreateTab(({ cwd }) => createSession({ cwd }));
 try { JSON.parse(localStorage.getItem('swarm.collapsed') || '[]').forEach((c) => collapsedFolders.add(c)); } catch (_) {}

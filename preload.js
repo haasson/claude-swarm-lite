@@ -66,6 +66,15 @@ contextBridge.exposeInMainWorld('swarm', {
   // to sign its messages — pushed on create and on rename.
   setTabName: (id, name) => ipcRenderer.send('tabs:name', { id, name }),
 
+  // Голос из телеги: main присылает байты OGG, рендерер декодирует их силами Chromium
+  // (ffmpeg не нужен) и отдаёт моно 16 кГц обратно.
+  onDecodeAudio: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('audio:decode', handler);
+    return () => ipcRenderer.removeListener('audio:decode', handler);
+  },
+  audioDecoded: (reqId, samples, error) => ipcRenderer.send('audio:decoded', { reqId, samples, error }),
+
   // main просит открыть вкладку (это /new из телеги: main не умеет делать xterm и DOM).
   onCreateTab: (cb) => {
     const handler = (_e, payload) => cb(payload);
@@ -86,6 +95,7 @@ contextBridge.exposeInMainWorld('swarm', {
     setPrompt: (text)  => ipcRenderer.invoke('telegram:setPrompt', text),
     keepAwake: (on)    => ipcRenderer.invoke('telegram:setKeepAwake', on),
     mirrorAll: (on)    => ipcRenderer.invoke('telegram:setMirrorAll', on),
+    setWhisper: (bin, model) => ipcRenderer.invoke('telegram:setWhisper', { bin, model }),
     onState:   (cb)    => ipcRenderer.on('telegram:state', (_e, s) => cb(s)),
   },
 
