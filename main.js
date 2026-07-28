@@ -248,6 +248,7 @@ function makeDetector(cols, rows) {
     // Identity for the Telegram bridge: the tab's visible name and the key that outlives
     // the process (the forum topic hangs on it). tgTimer debounces the «ждёт» message.
     tabKey: '', name: '', tgTimer: null, tgMode: false, tgPrimed: false, trReply: '',
+    tgTopicLive: false, tgTopicName: '',
     cwd: '', startedAt: Date.now(), claudeSessionId: null,
     trFile: null, trMtime: 0, trEntries: null, trState: null, trText: '', trWhy: '', trTryAt: 0,
   };
@@ -608,7 +609,15 @@ async function tgSend(opts) {
     const body = { chat_id: chatId, text: part, disable_notification: !!o.silent };
     if (o.threadId) body.message_thread_id = o.threadId;
     if (o.replyTo) body.reply_to_message_id = o.replyTo;
-    const res = await tgFetchJson(telegram.apiUrl(TG.token, 'sendMessage'), body);
+    let res = await tgFetchJson(telegram.apiUrl(TG.token, 'sendMessage'), body);
+    // The user deleted the topic we remembered. Don't swallow the message: forget the
+    // mapping (a fresh topic gets made next time) and deliver this one to General.
+    if (!res.ok && body.message_thread_id && /thread not found/i.test(
+      (res.body && res.body.description) || '')) {
+      tgForgetTopic(body.message_thread_id);
+      delete body.message_thread_id;
+      res = await tgFetchJson(telegram.apiUrl(TG.token, 'sendMessage'), body);
+    }
     if (!res.ok || !res.body || res.body.ok !== true) {
       tgError = telegram.classifyError(res.status, res.body).message;
       tgPush();
@@ -626,26 +635,36 @@ function tgQr(text) {
   return qr.createDataURL(6, 8);   // a GIF data URL: no canvas, no renderer work
 }
 
-// What the bot can actually DO in the bound chat. Worth checking explicitly, because the
-// two ways this fails are both silent: a bot that isn't an admin can't create topics, and
-// — the nasty one — Telegram's privacy mode means a non-admin bot in a group never even
-// receives plain messages, only replies to its own. «Бот молчит» is not a diagnosis a
-// user should have to reach on their own.
-async function tgCheckChat() {
-  if (!TG.token || TG.chatId == null) return null;
-  const chat = await tgFetchJson(telegram.apiUrl(TG.token, 'getChat'), { chat_id: TG.chatId });
+// The bridge only works in a FORUM supergroup, and that's a hard requirement, not a
+// preference: the swarm is many tabs at once, so «one tab = one topic» is the only shape
+// where a phone can tell them apart, address them and count unread per agent. A single
+// linear chat would need the user to remember who they're talking to on every message.
+//
+// Two of the three ways this can be misconfigured are silent, which is why we check
+// instead of hoping: a non-admin bot can't create topics, and — the nasty one — Telegram's
+// privacy mode means a non-admin bot in a group never even receives plain messages, only
+// replies to its own. «Бот молчит» is not a diagnosis a user should have to reach alone.
+async function tgCheckChat(chatId) {
+  const target = chatId != null ? chatId : TG.chatId;
+  if (!TG.token || target == null) return null;
+  const chat = await tgFetchJson(telegram.apiUrl(TG.token, 'getChat'), { chat_id: target });
   if (!chat.ok || !chat.body || chat.body.ok !== true) {
     return { ok: false, note: telegram.classifyError(chat.status, chat.body).message };
   }
   const info = chat.body.result || {};
-  const title = info.title || info.username || 'личный чат';
+  const title = info.title || info.username || 'чат';
   const isForum = !!info.is_forum;
-  TG.isForum = isForum;
   if (info.type === 'private') {
-    return { ok: true, title, isForum, note: 'Личный чат — прав достаточно, бот видит все сообщения.' };
+    return { ok: false, title, isForum: false, note: 'Личный чат не подойдёт: вкладок много, и'
+      + ' различать их нужно темами. Создай группу, включи в ней «Темы», добавь туда бота'
+      + ' администратором — и привяжи её.' };
+  }
+  if (info.type !== 'supergroup' || !isForum) {
+    return { ok: false, title, isForum, note: `В «${title}» не включены темы. Настройки группы →`
+      + ' «Темы» → включить. Обычная группа без тем не подойдёт: каждая вкладка живёт в своей теме.' };
   }
   const me = await tgFetchJson(telegram.apiUrl(TG.token, 'getChatMember'),
-    { chat_id: TG.chatId, user_id: Number(String(TG.token).split(':')[0]) });
+    { chat_id: target, user_id: Number(String(TG.token).split(':')[0]) });
   const member = (me.ok && me.body && me.body.ok === true && me.body.result) || null;
   const status = member ? member.status : '';
   if (!member || status === 'left' || status === 'kicked') {
@@ -653,15 +672,14 @@ async function tgCheckChat() {
   }
   const admin = status === 'administrator' || status === 'creator';
   if (!admin) {
-    return { ok: false, title, isForum, note: `В «${title}» бот не администратор. Из-за режима приватности`
-      + ' он не увидит обычных сообщений — только реплаи на свои. Сделай его админом.' };
+    return { ok: false, title, isForum, note: `В «${title}» бот не администратор. Без этого Телеграм`
+      + ' не покажет ему обычные сообщения в темах (режим приватности) и не даст создавать темы.' };
   }
-  if (isForum && member.can_manage_topics === false) {
-    return { ok: false, title, isForum, note: `В «${title}» у бота нет права управлять темами —`
-      + ' вкладки не получат отдельные топики.' };
+  if (member.can_manage_topics === false) {
+    return { ok: false, title, isForum, note: `В «${title}» у бота нет права «Управление темами» —`
+      + ' вкладки не получат своих тем. Включи это право в его админ-настройках.' };
   }
-  return { ok: true, title, isForum, note: `«${title}»: бот администратор`
-    + (isForum ? ', темы доступны.' : '.') };
+  return { ok: true, title, isForum: true, note: `«${title}»: бот администратор, темы доступны.` };
 }
 
 function tgState() {
@@ -745,7 +763,6 @@ async function tgConnect() {
 const TG_SENT_CAP = 500;             // remembered outgoing messages (id → session)
 const tgSent = new Map();            // messageId → session id
 const tgTopicSession = new Map();    // threadId → session id (live sessions only)
-const tgNamed = new Map();           // topic key → session named with /use
 
 function tgRemember(messageId, id) {
   if (!messageId) return;
@@ -767,7 +784,17 @@ async function tgTopicFor(id) {
   const key = d.tabKey || '';
   if (!key) return null;
   const known = TG.topics[key];
-  if (known) { tgTopicSession.set(known, id); return known; }
+  if (known) {
+    tgTopicSession.set(known, id);
+    // First use in this run: the topic may have been closed when the tab last went away.
+    if (!d.tgTopicLive) {
+      d.tgTopicLive = true;
+      d.tgTopicName = d.name;
+      tgTopicCall('reopenForumTopic', known).catch(reportMainError);
+      tgRenameTopic(id);          // the tab may have been renamed while we were away
+    }
+    return known;
+  }
   const res = await tgFetchJson(telegram.apiUrl(TG.token, 'createForumTopic'), {
     chat_id: TG.chatId,
     name: tgTabName(id).slice(0, 128),
@@ -784,7 +811,52 @@ async function tgTopicFor(id) {
   TG.topics[key] = threadId;
   try { tgSave(); } catch (e) { reportMainError(e); }
   tgTopicSession.set(threadId, id);
+  d.tgTopicLive = true;
+  d.tgTopicName = tgTabName(id);
   return threadId;
+}
+
+// --- topic lifecycle: the group's topic list should BE the tab list ------------
+// Created on a tab's first message, renamed when you rename the tab, closed when the tab
+// closes (Telegram collapses closed topics, so what's open in the group is what's open in
+// the swarm), reopened if that same tab comes back after a relaunch.
+function tgForgetTopic(threadId) {
+  for (const [key, thread] of Object.entries(TG.topics)) {
+    if (thread === threadId) delete TG.topics[key];
+  }
+  tgTopicSession.delete(threadId);
+  try { tgSave(); } catch (e) { reportMainError(e); }
+}
+
+async function tgTopicCall(method, threadId, extra) {
+  if (!TG.token || TG.chatId == null || !threadId) return;
+  const body = Object.assign({ chat_id: TG.chatId, message_thread_id: threadId }, extra || {});
+  // Failures here are cosmetic (a title that stayed, a topic that stayed open) — never a
+  // reason to interrupt what the app was doing.
+  try { await tgFetchJson(telegram.apiUrl(TG.token, method), body); } catch (_) {}
+}
+
+function tgTopicOf(d) {
+  return (d && d.tabKey && TG.topics[d.tabKey]) || null;
+}
+
+// Rename the topic after the tab. Without this «claude» stays «claude» in the group after
+// you've renamed the tab to «api», and the list stops matching what you see on screen.
+function tgRenameTopic(id) {
+  const d = det.get(id);
+  const threadId = tgTopicOf(d);
+  if (!threadId || !d.name || d.name === d.tgTopicName) return;
+  d.tgTopicName = d.name;
+  tgTopicCall('editForumTopic', threadId, { name: d.name.slice(0, 128) }).catch(reportMainError);
+}
+
+// The tab is gone: say so in its topic and close it.
+function tgCloseTopic(d) {
+  const threadId = tgTopicOf(d);
+  if (!threadId || TG.chatId == null) return;
+  tgSend({ threadId, text: '⚪ вкладка закрыта', silent: true })
+    .then(() => tgTopicCall('closeForumTopic', threadId))
+    .catch(reportMainError);
 }
 
 // The decision itself is in telegram.js (and unit-tested there); main only supplies the
@@ -794,7 +866,6 @@ function tgRoute(u) {
     topicSession: tgTopicSession,
     sent: tgSent,
     topics: TG.topics,
-    named: tgNamed,
     tabs: [...det].map(([sid, d]) => ({ id: sid, tabKey: d.tabKey })),
     alive: (sid) => sessions.has(sid) && !(det.get(sid) || {}).dead,
   });
@@ -906,25 +977,41 @@ async function tgNotifyWaiting(id, d) {
   if (!permission) tgRemember(msgId, id);
 }
 
+// Bind a chat — from the pairing code or from a hand-typed id. The check is a GATE, not
+// advice: binding a chat where the bot can't create topics or can't see messages would
+// look like a working bridge that silently does nothing. On refusal we say exactly what to
+// fix and keep the pairing window open, so the user can fix it and send the code again.
+async function tgBindChat(chatId, threadId) {
+  const check = await tgCheckChat(chatId);
+  tgCheck = check;
+  if (!check || !check.ok) {
+    if (tgPair) tgPair.at = Date.now();          // another two minutes to fix and retry
+    await tgSend({ chatId, threadId, text: (check && check.note) || 'Не удалось проверить чат.' });
+    tgPush();
+    return false;
+  }
+  TG.chatId = chatId;
+  TG.isForum = true;
+  TG.topics = {};
+  tgPair = null;
+  try { tgSave(); } catch (e) { reportMainError(e); }
+  await tgSend({
+    chatId,
+    threadId,
+    text: 'Сворм на связи. Каждая вкладка получит свою тему: пиши в тему — попадёшь в её агента.'
+      + ' Список вкладок — /tabs.',
+  });
+  tgApplyKeepAwake();
+  tgPush();
+  return true;
+}
+
 function tgOnUpdate(u) {
   if (!u || u.kind !== 'message') return;
   // Pairing wins over everything: the chat that brings the code becomes THE chat. Until
   // then nothing is bound, so no message can be mistaken for an answer to an agent.
   if (tgPair && Date.now() - tgPair.at < TG_PAIR_TTL_MS && telegram.pairingMatch(u, tgPair.code)) {
-    TG.chatId = u.chatId;
-    TG.isForum = u.isForum;
-    TG.topics = {};
-    tgPair = null;
-    try { tgSave(); } catch (e) { reportMainError(e); }
-    tgSend({
-      chatId: u.chatId,
-      threadId: u.threadId,
-      text: 'Сворм на связи. Отсюда будут приходить вопросы агентов; отвечать — реплаем на сообщение.',
-    }).catch(reportMainError);
-    // Say right away whether the bot can actually work here (admin rights, topics).
-    tgCheckChat().then((r) => { tgCheck = r; tgPush(); }).catch(reportMainError);
-    tgApplyKeepAwake();
-    tgPush();
+    tgBindChat(u.chatId, u.threadId).catch(reportMainError);
     return;
   }
   // Anything from another chat is not ours to listen to — a stranger who found the bot
@@ -932,7 +1019,6 @@ function tgOnUpdate(u) {
   if (TG.chatId == null || u.chatId !== TG.chatId) return;
 
   if (u.command === 'tabs') { tgSendTabs(u.threadId).catch(reportMainError); return; }
-  if (u.command === 'use') { tgUse(u).catch(reportMainError); return; }
   if (u.command === 'start') { tgSend({ threadId: u.threadId, text: 'Уже на связи. /tabs — что сейчас у агентов.' }).catch(reportMainError); return; }
   if (u.voice) {
     tgSend({ threadId: u.threadId, replyTo: u.messageId, text: 'Голос пока не умею — вторым этапом. Напиши текстом.' }).catch(reportMainError);
@@ -946,8 +1032,8 @@ function tgOnUpdate(u) {
     tgSend({
       threadId: u.threadId,
       replyTo: u.messageId,
-      text: 'Не понял, какой вкладке это адресовано. Ответь реплаем на сообщение агента'
-        + (TG.isForum ? ' или напиши в топик вкладки.' : '.'),
+      text: 'Это общая тема — здесь я не знаю, к какому агенту обращаться. Напиши в тему нужной'
+        + ' вкладки (список — /tabs) или ответь реплаем на сообщение агента.',
     }).catch(reportMainError);
     return;
   }
@@ -969,40 +1055,6 @@ function tgOnUpdate(u) {
   }
   if (d) d.tgPrimed = true;
   tgSend({ threadId: u.threadId, replyTo: u.messageId, text: `→ ${tgTabName(id)}`, silent: true }).catch(reportMainError);
-}
-
-// /use <вкладка> — name the tab that plain messages in THIS chat (or this topic) go to.
-// A task from scratch has no message to reply to, so without this there'd be nothing to
-// address it with. It's still explicit — you said it and the bot confirmed — unlike a
-// silent «last active tab» guess.
-async function tgUse(u) {
-  const key = String(u.threadId == null ? 'main' : u.threadId);
-  const want = String(u.args || '').trim().toLowerCase();
-  if (!want) {
-    const cur = tgNamed.get(key);
-    const now = cur != null && sessions.has(cur) ? `Сейчас пишу в «${tgTabName(cur)}».\n\n` : '';
-    await tgSend({ threadId: u.threadId, text: now + 'Кому писать: /use <имя вкладки>. Список — /tabs.' });
-    return;
-  }
-  const hits = [];
-  for (const [id, d] of det) {
-    if (d.dead || !sessions.has(id)) continue;
-    const name = tgTabName(id).toLowerCase();
-    if (name === want) { hits.length = 0; hits.push(id); break; }   // exact wins outright
-    if (name.includes(want)) hits.push(id);
-  }
-  if (!hits.length) {
-    await tgSend({ threadId: u.threadId, text: `Вкладки «${u.args}» нет. Список — /tabs.` });
-    return;
-  }
-  if (hits.length > 1) {
-    // Two tabs match => refuse rather than pick. Same rule as everywhere in this bridge.
-    await tgSend({ threadId: u.threadId, text: 'Под это подходит несколько вкладок: '
-      + hits.map((id) => tgTabName(id)).join(', ') + '. Уточни имя.' });
-    return;
-  }
-  tgNamed.set(key, hits[0]);
-  await tgSend({ threadId: u.threadId, text: `Пишу в «${tgTabName(hits[0])}». Ответы её агента приходят сюда.` });
 }
 
 // /tabs — what every agent is doing right now, so you can orient from the phone without
@@ -1052,12 +1104,8 @@ ipcMain.handle('telegram:setChat', async (_e, raw) => {
     return tgState();
   }
   if (!TG.token) { tgError = 'Сначала подключи бота'; return tgState(); }
-  TG.chatId = id; TG.topics = {}; tgPair = null; tgError = null;
-  tgCheck = await tgCheckChat();
-  if (tgCheck && tgCheck.ok) {
-    await tgSend({ text: 'Сворм на связи. Вопросы агентов будут приходить сюда.' });
-  }
-  try { tgSave(); } catch (e) { reportMainError(e); }
+  tgError = null;
+  await tgBindChat(id, null);      // same gate as the code path: forum + admin, or nothing
   return tgState();
 });
 
@@ -1089,7 +1137,6 @@ ipcMain.handle('telegram:setKeepAwake', (_e, on) => {
 
 ipcMain.handle('telegram:unpair', async () => {
   TG.chatId = null; TG.isForum = false; TG.topics = {}; tgCheck = null;
-  tgNamed.clear();
   try { tgSave(); } catch (e) { reportMainError(e); }
   tgApplyKeepAwake();
   return tgState();
@@ -1101,14 +1148,16 @@ ipcMain.handle('telegram:unpair', async () => {
 ipcMain.handle('telegram:pair', () => {
   if (!TG.token || !tgBot) return { error: 'Сначала подключи бота' };
   tgPair = { code: telegram.pairCode((n) => crypto.randomInt(n)), at: Date.now() };
-  const link = telegram.deepLink(tgBot, tgPair.code);
+  // The QR carries the ?startgroup= link, because a group is the only thing we bind to:
+  // scanning it offers to add the bot to a group and delivers the code from there.
+  const groupLink = telegram.deepLink(tgBot, tgPair.code, { group: true });
   const state = tgState();
   tgPush();
   return {
     code: tgPair.code,
-    link,
-    groupLink: telegram.deepLink(tgBot, tgPair.code, { group: true }),
-    qr: tgQr(link),
+    link: groupLink,
+    botLink: telegram.deepLink(tgBot, tgPair.code),
+    qr: tgQr(groupLink),
     ttlMs: TG_PAIR_TTL_MS,
     state,
   };
@@ -1337,7 +1386,12 @@ ipcMain.handle('session:create', (_event, opts = {}) => {
 
   child.onExit(({ exitCode }) => {
     const d = det.get(id);
-    if (d) { d.dead = true; tgCancelWaiting(d); tgClearMode(d); }   // no pings for a closed tab
+    if (d) {
+      d.dead = true;
+      tgCancelWaiting(d);
+      tgClearMode(d);
+      tgCloseTopic(d);           // the topic list mirrors the open tabs
+    }
     sessions.delete(id);
     safeSend('session:exit', { id, code: exitCode });
   });
@@ -1476,7 +1530,9 @@ ipcMain.on('settings:hooks', (_e, enabled) => {
 // its messages, so «→ api» in the chat means the tab you call api.
 ipcMain.on('tabs:name', (_e, { id, name } = {}) => {
   const d = det.get(String(id));
-  if (d) d.name = String(name || '');
+  if (!d) return;
+  d.name = String(name || '');
+  tgRenameTopic(String(id));     // the group's topic follows the tab's name
 });
 
 ipcMain.on('settings:askPhrases', (_e, list) => {

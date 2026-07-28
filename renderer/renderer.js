@@ -1258,18 +1258,19 @@ function showSettingsModal(tab) {
         </div>
         <div class="set-field" id="set-tg-chat-field" hidden>
           <span class="set-label">Шаг 2. Куда писать</span>
-          <span class="set-hint set-hint-top">Отсканируйте код телефоном — откроется чат с ботом,
-            нажмёте «Начать», и сворм запомнит именно этот чат. Ссылку можно и просто нажать,
-            если Телеграм стоит на этом маке. Код одноразовый и живёт две минуты.
-            Хотите вкладки отдельными темами — создайте форум-супергруппу, добавьте бота
-            <b>администратором с правом управлять темами</b> и отсканируйте код там: без админства
-            Телеграм не даст боту увидеть обычные сообщения в топиках, только реплаи.</span>
+          <span class="set-hint set-hint-top">Нужна <b>группа с темами</b>: у сворма много вкладок,
+            и различать их на телефоне можно только темами — каждая вкладка получит свою.
+            Создайте группу, включите в её настройках «Темы», добавьте туда бота
+            <b>администратором с правом «Управление темами»</b>. Дальше отсканируйте код (или
+            нажмите ссылку, если Телеграм на этом маке) и отправьте его в группу. Код
+            одноразовый и живёт две минуты. Личный чат с ботом не подойдёт — приложение
+            откажется привязываться и скажет, чего не хватает.</span>
           <div class="tg-pair" id="set-tg-pair" hidden>
             <img class="tg-qr" id="set-tg-qr" alt="QR для привязки чата" />
             <div class="tg-pair-side">
               <div class="tg-code" id="set-tg-code"></div>
-              <a class="tg-link" id="set-tg-link" href="#" target="_blank" rel="noreferrer">открыть чат с ботом</a>
-              <a class="tg-link" id="set-tg-glink" href="#" target="_blank" rel="noreferrer">добавить в группу</a>
+              <a class="tg-link" id="set-tg-link" href="#" target="_blank" rel="noreferrer">добавить бота в группу</a>
+              <a class="tg-link" id="set-tg-glink" href="#" target="_blank" rel="noreferrer">открыть чат с ботом</a>
               <div class="set-hint" id="set-tg-ttl"></div>
             </div>
           </div>
@@ -1280,7 +1281,7 @@ function showSettingsModal(tab) {
             <button type="button" class="set-check-btn danger" id="set-tg-forget">Удалить токен</button>
           </div>
           <div class="tg-state" id="set-tg-check-note"></div>
-          <span class="set-hint set-hint-top">Знаете id группы — можно без кода:</span>
+          <span class="set-hint set-hint-top">Знаете id группы — можно без кода (проверки те же):</span>
           <div class="tg-row">
             <input class="set-input" type="text" id="set-tg-chatid" spellcheck="false"
                    placeholder="-1001234567890" />
@@ -1377,8 +1378,8 @@ function showSettingsModal(tab) {
     if (st.error) return '⚠ ' + st.error;
     if (!st.live) return 'Подключаюсь…';
     const who = st.bot ? '@' + st.bot : 'бот';
-    if (st.chatId == null) return `${who} на связи. Чат не привязан — нажмите «Привязать чат».`;
-    return `${who} на связи, чат привязан${st.isForum ? ' (форум — вкладки станут топиками)' : ''}.`;
+    if (st.chatId == null) return `${who} на связи. Группа не привязана — нажмите «Привязать чат».`;
+    return `${who} на связи, группа привязана: вкладки получают свои темы.`;
   }
 
   function renderTg(st) {
@@ -1423,7 +1424,7 @@ function showSettingsModal(tab) {
     tgQrI.src = r.qr;
     tgCodeEl.textContent = r.code;
     tgLinkA.href = r.link;
-    tgGLinkA.href = r.groupLink;
+    tgGLinkA.href = r.botLink;
     tgPairBox.hidden = false;
     const until = Date.now() + r.ttlMs;
     stopTgTtl();

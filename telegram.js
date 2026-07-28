@@ -119,11 +119,15 @@ function readUpdate(u) {
 // the WRONG route: «да, вариант 2» typed into another agent's task. So only explicit
 // evidence counts, and there is deliberately no «last active tab» guess:
 //
-//   1. the forum topic the message sits in — one topic per tab;
-//   2. the message it replies to — we remember what each outgoing message was about.
+//   1. the forum topic the message sits in — one topic per tab, which is the whole shape
+//      of the bridge: the group's topic list IS the tab list;
+//   2. the message it replies to — kept because replying inside a topic is natural, and
+//      because it still names a tab exactly.
 //
 // A topic mapped in an earlier run is re-attached through the tab's persistent key, so
 // answering in an old topic after a relaunch reaches the same tab, not its neighbour.
+// A message in the group's General topic (no threadId, no reply) names no tab at all —
+// that's the control channel, not a session.
 // `ctx`: { topicSession: Map, sent: Map, topics: {tabKey→threadId}, tabs: [{id, tabKey}],
 //          alive: (id)=>boolean }
 function routeMessage(u, ctx) {
@@ -148,11 +152,6 @@ function routeMessage(u, ctx) {
     const byReply = get(c.sent, u.replyToId);
     if (byReply != null && alive(byReply)) return byReply;
   }
-  // Last: a target the user NAMED with /use. Still explicit — they said «дальше в api»
-  // and the bot confirmed it — which is why it's allowed where «last active tab» isn't.
-  // Scoped per topic, so /use in one topic can't hijack another.
-  const named = get(c.named, String(u.threadId == null ? 'main' : u.threadId));
-  if (named != null && alive(named)) return named;
   return null;
 }
 

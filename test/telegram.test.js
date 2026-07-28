@@ -157,16 +157,8 @@ test('route: inside a known topic, the topic wins over a reply to another tab', 
   assert.strictEqual(T.routeMessage({ threadId: 9, replyToId: 77 }, c), 'tab-a');
 });
 
-test('route: a target named with /use is used when nothing else applies', () => {
-  const c = ctx({ named: new Map([['main', 'tab-e']]) });
-  assert.strictEqual(T.routeMessage({ text: 'сделай X' }, c), 'tab-e');
-});
-
-test('route: /use is scoped per topic and never overrides a reply', () => {
-  const c = ctx({ named: new Map([['main', 'tab-e']]), sent: new Map([[77, 'tab-b']]) });
-  assert.strictEqual(T.routeMessage({ replyToId: 77 }, c), 'tab-b', 'the reply is more specific');
-  assert.strictEqual(T.routeMessage({ threadId: 5, text: 'сделай X' }, c), null,
-    'a /use in the main chat does not leak into a topic');
+test('route: a message in General names no tab — it is the control channel', () => {
+  assert.strictEqual(T.routeMessage({ text: 'сделай X' }, ctx()), null);
 });
 
 // --- tagging the injected text ------------------------------------------------
