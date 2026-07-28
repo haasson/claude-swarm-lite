@@ -245,6 +245,9 @@ function makeDetector(cols, rows) {
     // Transcript channel (see the reader below): the folder this tab runs in, the
     // Claude session id we pinned at launch (or learned from a hook marker), the
     // .jsonl bound to it, and the last verdict read out of it.
+    // Identity for the Telegram bridge: the tab's visible name and the key that outlives
+    // the process (the forum topic hangs on it). tgTimer debounces the «ждёт» message.
+    tabKey: '', name: '', tgTimer: null,
     cwd: '', startedAt: Date.now(), claudeSessionId: null,
     trFile: null, trMtime: 0, trEntries: null, trState: null, trText: '', trWhy: '', trTryAt: 0,
   };
@@ -335,6 +338,10 @@ setInterval(() => {
         d.sub = sub;
         d.waitingKind = kind;
         safeSend('session:status', { id, status: next.status, detail: next.detail, statusline, question, sub, waitingKind: kind });
+        // Telegram: an agent starting to wait is the whole point of the bridge. Sent on
+        // a delay (see tgOnWaiting) and cancelled if you answer at the keyboard first.
+        if (next.status === 'waiting') tgOnWaiting(id);
+        else tgCancelWaiting(d);
       }
     } catch (_) {
       // A detector hiccup must never crash the app or freeze the UI.
@@ -640,6 +647,125 @@ async function tgConnect() {
   tgPush();
 }
 
+// --- routing ------------------------------------------------------------------
+// An answer landing in the WRONG session is the failure mode that matters here: «да,
+// вариант 2» arriving in the middle of another agent's task. So there are exactly two
+// ways to name a session, both explicit, and NO «last active tab» fallback:
+//
+//   • the forum topic the message sits in — one topic per tab;
+//   • the message it replies to — we remember which session each outgoing message was
+//     about.
+//
+// Anything else gets a hint back, not a guess.
+const TG_SENT_CAP = 500;             // remembered outgoing messages (id → session)
+const tgSent = new Map();            // messageId → session id
+const tgTopicSession = new Map();    // threadId → session id (live sessions only)
+
+function tgRemember(messageId, id) {
+  if (!messageId) return;
+  tgSent.set(messageId, id);
+  while (tgSent.size > TG_SENT_CAP) tgSent.delete(tgSent.keys().next().value);
+}
+
+function tgTabName(id) {
+  const d = det.get(id);
+  return (d && d.name) || `вкладка ${id}`;
+}
+
+// The topic for this tab, created on first need. The mapping is keyed by the tab's
+// persistent key (not the per-run session id), so after a relaunch the same tab keeps
+// writing into the same topic instead of littering the group with new ones.
+async function tgTopicFor(id) {
+  const d = det.get(id);
+  if (!d || !TG.isForum || TG.chatId == null) return null;
+  const key = d.tabKey || '';
+  if (!key) return null;
+  const known = TG.topics[key];
+  if (known) { tgTopicSession.set(known, id); return known; }
+  const res = await tgFetchJson(telegram.apiUrl(TG.token, 'createForumTopic'), {
+    chat_id: TG.chatId,
+    name: tgTabName(id).slice(0, 128),
+  });
+  if (!res.ok || !res.body || res.body.ok !== true) {
+    // No rights to manage topics, or not a forum after all: fall back to the main chat
+    // rather than going silent. Reply-routing still works there.
+    tgError = telegram.classifyError(res.status, res.body).message;
+    tgPush();
+    return null;
+  }
+  const threadId = res.body.result && res.body.result.message_thread_id;
+  if (!threadId) return null;
+  TG.topics[key] = threadId;
+  try { tgSave(); } catch (e) { reportMainError(e); }
+  tgTopicSession.set(threadId, id);
+  return threadId;
+}
+
+// The decision itself is in telegram.js (and unit-tested there); main only supplies the
+// live picture: which topics belong to which tabs, what we sent, and who's still alive.
+function tgRoute(u) {
+  const id = telegram.routeMessage(u, {
+    topicSession: tgTopicSession,
+    sent: tgSent,
+    topics: TG.topics,
+    tabs: [...det].map(([sid, d]) => ({ id: sid, tabKey: d.tabKey })),
+    alive: (sid) => sessions.has(sid) && !(det.get(sid) || {}).dead,
+  });
+  // Cache a re-attached topic so the next message skips the scan.
+  if (id != null && u && u.threadId != null) tgTopicSession.set(u.threadId, id);
+  return id;
+}
+
+// Type the answer into the live pty, exactly as if it were typed at the keyboard —
+// same path as the app's own input, so there's no second way into a session.
+function tgAnswer(id, text) {
+  const p = sessions.get(id);
+  if (!p) return false;
+  p.write(String(text) + '\r');
+  const d = det.get(id);
+  if (d) { d.graceUntil = 0; d.lastDataAt = Date.now(); d.answeredAt = Date.now(); }
+  return true;
+}
+
+// --- outbound: an agent is calling ---------------------------------------------
+// Debounced: the status flips to «ждёт» a beat before the transcript reader has the
+// question text, and a repaint can flicker the status for one tick. Waiting ~1s means
+// one message with the real question instead of two with half of it.
+const TG_NOTIFY_DELAY_MS = 1200;
+
+function tgOnWaiting(id) {
+  const d = det.get(id);
+  if (!d || TG.chatId == null || !TG.token) return;
+  if (d.tgTimer) return;                       // already scheduled
+  d.tgTimer = setTimeout(() => {
+    d.tgTimer = null;
+    if (d.dead || d.status !== 'waiting') return;   // resolved at the keyboard already
+    tgNotifyWaiting(id, d).catch(reportMainError);
+  }, TG_NOTIFY_DELAY_MS);
+}
+
+function tgCancelWaiting(d) {
+  if (d && d.tgTimer) { clearTimeout(d.tgTimer); d.tgTimer = null; }
+}
+
+async function tgNotifyWaiting(id, d) {
+  const permission = d.waitingKind === 'permission';
+  const head = permission ? '🔐 просит разрешение' : '❓ вопрос';
+  const body = d.question ? '\n\n' + d.question : '';
+  // Permissions are deliberately NOT answerable from here: typing «да» into a
+  // permission dialog from a phone is handing out command execution blind, with no way
+  // to see what's being approved. It's a separate decision, not a default.
+  const tail = permission
+    ? '\n\nОтветить можно только за компьютером.'
+    : '\n\nОтветь реплаем на это сообщение.';
+  const threadId = await tgTopicFor(id);
+  const msgId = await tgSend({
+    threadId,
+    text: `${head} · ${tgTabName(id)}${body}${tail}`,
+  });
+  if (!permission) tgRemember(msgId, id);
+}
+
 function tgOnUpdate(u) {
   if (!u || u.kind !== 'message') return;
   // Pairing wins over everything: the chat that brings the code becomes THE chat. Until
@@ -661,7 +787,53 @@ function tgOnUpdate(u) {
   // Anything from another chat is not ours to listen to — a stranger who found the bot
   // gets silence, not a prompt injected into somebody's session.
   if (TG.chatId == null || u.chatId !== TG.chatId) return;
-  // Routing answers back into a session lands in the next step.
+
+  if (u.command === 'tabs') { tgSendTabs(u.threadId).catch(reportMainError); return; }
+  if (u.command === 'start') { tgSend({ threadId: u.threadId, text: 'Уже на связи. /tabs — что сейчас у агентов.' }).catch(reportMainError); return; }
+  if (u.voice) {
+    tgSend({ threadId: u.threadId, replyTo: u.messageId, text: 'Голос пока не умею — вторым этапом. Напиши текстом.' }).catch(reportMainError);
+    return;
+  }
+  const text = String(u.text || '').trim();
+  if (!text) return;
+
+  const id = tgRoute(u);
+  if (id == null) {
+    tgSend({
+      threadId: u.threadId,
+      replyTo: u.messageId,
+      text: 'Не понял, какой вкладке это адресовано. Ответь реплаем на сообщение агента'
+        + (TG.isForum ? ' или напиши в топик вкладки.' : '.'),
+    }).catch(reportMainError);
+    return;
+  }
+  const d = det.get(id);
+  // The one thing that never travels from a phone: approving a command. See tgNotifyWaiting.
+  if (d && d.status === 'waiting' && d.waitingKind === 'permission') {
+    tgSend({
+      threadId: u.threadId, replyTo: u.messageId,
+      text: `${tgTabName(id)} ждёт разрешения — это только за компьютером.`,
+    }).catch(reportMainError);
+    return;
+  }
+  if (!tgAnswer(id, text)) {
+    tgSend({ threadId: u.threadId, replyTo: u.messageId, text: 'Эта вкладка уже закрыта.' }).catch(reportMainError);
+    return;
+  }
+  tgSend({ threadId: u.threadId, replyTo: u.messageId, text: `→ ${tgTabName(id)}`, silent: true }).catch(reportMainError);
+}
+
+// /tabs — what every agent is doing right now, so you can orient from the phone without
+// waiting for someone to call you.
+async function tgSendTabs(threadId) {
+  const marks = { running: '🟠 работает', waiting: '🟡 ждёт', ready: '🟢 готов' };
+  const lines = [];
+  for (const [id, d] of det) {
+    if (d.dead) continue;
+    const kind = d.status === 'waiting' && d.waitingKind ? ` (${d.waitingKind === 'permission' ? 'разрешение' : 'вопрос'})` : '';
+    lines.push(`${marks[d.status] || '⚪'}${kind} · ${tgTabName(id)}`);
+  }
+  await tgSend({ threadId, text: lines.length ? lines.join('\n') : 'Открытых вкладок нет.' });
 }
 
 // --- IPC: the settings panel ---------------------------------------------------
@@ -924,6 +1096,8 @@ ipcMain.handle('session:create', (_event, opts = {}) => {
   sessions.set(id, child);
   const d0 = makeDetector(opts.cols, opts.rows);
   d0.cwd = cwd;                       // the transcript lives under a slug of this path
+  d0.tabKey = String(opts.tabKey || '');   // survives relaunch: the Telegram topic key
+  d0.name = String(opts.name || '');
   det.set(id, d0);
 
   child.onData((data) => {
@@ -933,7 +1107,7 @@ ipcMain.handle('session:create', (_event, opts = {}) => {
 
   child.onExit(({ exitCode }) => {
     const d = det.get(id);
-    if (d) d.dead = true;
+    if (d) { d.dead = true; tgCancelWaiting(d); }   // no «ждёт» ping for a closed tab
     sessions.delete(id);
     safeSend('session:exit', { id, code: exitCode });
   });
@@ -1064,6 +1238,13 @@ ipcMain.on('settings:hooks', (_e, enabled) => {
 // Renderer pushes the «agent is calling me» phrases (on startup and on save). Takes
 // effect immediately for screen scraping; the hook picks the new file up on its next
 // run, so it applies within the current session too.
+// The tab's visible name (create + rename). Used to title its Telegram topic and to sign
+// its messages, so «→ api» in the chat means the tab you call api.
+ipcMain.on('tabs:name', (_e, { id, name } = {}) => {
+  const d = det.get(String(id));
+  if (d) d.name = String(name || '');
+});
+
 ipcMain.on('settings:askPhrases', (_e, list) => {
   ASK_PHRASES = normalizePhrases(list);
   try { applyAskPhrases(); } catch (e) { reportMainError(e); }

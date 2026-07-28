@@ -114,6 +114,43 @@ function readUpdate(u) {
   };
 }
 
+// --- routing -----------------------------------------------------------------
+// WHICH tab does this message answer? The dangerous failure here isn't «no route», it's
+// the WRONG route: «да, вариант 2» typed into another agent's task. So only explicit
+// evidence counts, and there is deliberately no «last active tab» guess:
+//
+//   1. the forum topic the message sits in — one topic per tab;
+//   2. the message it replies to — we remember what each outgoing message was about.
+//
+// A topic mapped in an earlier run is re-attached through the tab's persistent key, so
+// answering in an old topic after a relaunch reaches the same tab, not its neighbour.
+// `ctx`: { topicSession: Map, sent: Map, topics: {tabKey→threadId}, tabs: [{id, tabKey}],
+//          alive: (id)=>boolean }
+function routeMessage(u, ctx) {
+  if (!u) return null;
+  const c = ctx || {};
+  const alive = typeof c.alive === 'function' ? c.alive : () => true;
+  const get = (m, k) => (m && typeof m.get === 'function' ? m.get(k) : undefined);
+
+  if (u.threadId != null) {
+    const byTopic = get(c.topicSession, u.threadId);
+    if (byTopic != null && alive(byTopic)) return byTopic;
+    const topics = c.topics || {};
+    const key = Object.keys(topics).find((k) => topics[k] === u.threadId);
+    if (key) {
+      const tab = (c.tabs || []).find((t) => t && t.tabKey === key && alive(t.id));
+      if (tab) return tab.id;
+    }
+    // A topic we don't know is NOT a reason to fall through to the reply chain of some
+    // other tab — but a reply inside it is still explicit, so let that be checked below.
+  }
+  if (u.replyToId != null) {
+    const byReply = get(c.sent, u.replyToId);
+    if (byReply != null && alive(byReply)) return byReply;
+  }
+  return null;
+}
+
 // --- outbound text -----------------------------------------------------------
 // Telegram rejects anything over 4096 chars. Split on paragraph, then line, then hard
 // — a question from an agent is prose, so breaking mid-word is the last resort.
@@ -236,6 +273,6 @@ module.exports = {
   API_HOST, MAX_TEXT, POLL_TIMEOUT_S, BACKOFF_MAX_MS, CODE_LEN,
   apiUrl, looksLikeToken, maskToken,
   pairCode, deepLink, pairingMatch,
-  readUpdate, chunkText, backoffMs, retryAfterMs, classifyError,
+  readUpdate, routeMessage, chunkText, backoffMs, retryAfterMs, classifyError,
   createPoller,
 };

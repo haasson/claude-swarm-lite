@@ -105,6 +105,58 @@ test('readUpdate survives junk and non-message updates', () => {
   assert.strictEqual(T.readUpdate({ update_id: 1, poll: {} }).kind, 'other');
 });
 
+// --- routing -----------------------------------------------------------------
+// The rule that matters most: an answer must reach the tab it was written for, or no tab
+// at all. These tests exist to make «last active tab» impossible to reintroduce.
+
+const ctx = (over) => Object.assign({
+  topicSession: new Map(),
+  sent: new Map(),
+  topics: {},
+  tabs: [],
+  alive: () => true,
+}, over);
+
+test('route: a message in a tab’s topic goes to that tab', () => {
+  const c = ctx({ topicSession: new Map([[9, 'tab-a']]) });
+  assert.strictEqual(T.routeMessage({ threadId: 9 }, c), 'tab-a');
+});
+
+test('route: a reply to our message goes to the session it was about', () => {
+  const c = ctx({ sent: new Map([[77, 'tab-b']]) });
+  assert.strictEqual(T.routeMessage({ replyToId: 77 }, c), 'tab-b');
+});
+
+test('route: a topic from an earlier run re-attaches through the tab key', () => {
+  const c = ctx({ topics: { 'key-1': 9 }, tabs: [{ id: 'tab-c', tabKey: 'key-1' }] });
+  assert.strictEqual(T.routeMessage({ threadId: 9 }, c), 'tab-c');
+});
+
+test('route: a topic whose tab is gone does not fall through to a neighbour', () => {
+  const c = ctx({
+    topics: { 'key-1': 9 },
+    tabs: [{ id: 'tab-c', tabKey: 'key-1' }, { id: 'tab-d', tabKey: 'key-2' }],
+    alive: (id) => id !== 'tab-c',
+  });
+  assert.strictEqual(T.routeMessage({ threadId: 9 }, c), null);
+});
+
+test('route: a dead session is never a target, even with a valid reply', () => {
+  const c = ctx({ sent: new Map([[77, 'tab-b']]), alive: () => false });
+  assert.strictEqual(T.routeMessage({ replyToId: 77 }, c), null);
+});
+
+test('route: a bare message with no topic and no reply routes NOWHERE', () => {
+  assert.strictEqual(T.routeMessage({ text: 'да, вариант 2' }, ctx()), null);
+  assert.strictEqual(T.routeMessage({ threadId: 999 }, ctx()), null, 'unknown topic is not a guess');
+  assert.strictEqual(T.routeMessage(null, ctx()), null);
+});
+
+test('route: inside a known topic, the topic wins over a reply to another tab', () => {
+  const c = ctx({ topicSession: new Map([[9, 'tab-a']]), sent: new Map([[77, 'tab-b']]) });
+  assert.strictEqual(T.routeMessage({ threadId: 9, replyToId: 77 }, c), 'tab-a');
+});
+
 // --- outbound text -----------------------------------------------------------
 
 test('chunkText leaves a short message alone', () => {

@@ -793,11 +793,17 @@ async function createSession(opts = {}) {
         sessionKey: canPin ? sessionKey : null,
         resume: doResume,
       });
+  // A key that outlives the process, unlike the per-run session id: the Telegram
+  // bridge hangs a forum topic on it, so the same tab lands in the same topic after a
+  // relaunch instead of spawning a new one. Restored tabs bring theirs back.
+  const tabKey = opts.tabKey || (crypto.randomUUID ? crypto.randomUUID() : 'tab-' + Date.now() + '-' + Math.random().toString(16).slice(2));
   const { id, cwd: resolvedCwd } = await window.swarm.createSession({
     cols: term.cols,
     rows: term.rows,
     cwd,
     command,
+    tabKey,
+    name: opts.name || null,      // main only needs it to title the topic
   });
 
   // Wire keystrokes -> pty. Strip focus in/out reports (CSI I / CSI O): with
@@ -860,6 +866,7 @@ async function createSession(opts = {}) {
   // Name: restored name if given, else folder basename (de-duplicated).
   const folderName = resolvedCwd ? basename(resolvedCwd) : 'claude';
   tab.querySelector('.label').textContent = opts.name || defaultName(folderName);
+  window.swarm.setTabName(id, tab.querySelector('.label').textContent);
   tab.addEventListener('click', (e) => {
     if (e.target.classList.contains('close')) { requestCloseSession(id); return; }
     activate(id);
@@ -877,7 +884,7 @@ async function createSession(opts = {}) {
 
   sessions.set(id, {
     term, fit, holder, tab, alive: true, status: null, cwd: resolvedCwd, id, sumDot: null,
-    cmd, flags, blank, sessionKey: sessionKey || null, sub: 0, rawStatus: null, rawDetail: null,
+    cmd, flags, blank, sessionKey: sessionKey || null, tabKey, sub: 0, rawStatus: null, rawDetail: null,
   });
   const okey = resolvedCwd || '';
   if (!folderOrder.includes(okey)) folderOrder.push(okey);
@@ -1979,6 +1986,7 @@ function persistTabs() {
         flags: s.flags != null ? s.flags : null,
         blank: s.blank || false,
         sessionKey: s.sessionKey || null,
+        tabKey: s.tabKey || null,
       });
     }
   }
@@ -2365,6 +2373,9 @@ function attachRename(labelEl) {
     const text = labelEl.textContent.replace(/\s+/g, ' ').trim();
     labelEl.textContent = text || 'claude';
     persistTabs();
+    // The Telegram bridge titles a topic after the tab, so a rename has to travel.
+    const t = labelEl.closest('.tab');
+    if (t && t.dataset.sid) window.swarm.setTabName(t.dataset.sid, labelEl.textContent);
   });
 }
 
@@ -3266,6 +3277,7 @@ async function restoreOrStart() {
       cmd: t.blank ? undefined : (t.cmd || launch.cmd),
       flags: t.blank ? undefined : (t.flags != null ? t.flags : undefined),
       sessionKey: t.sessionKey || undefined,
+      tabKey: t.tabKey || undefined,   // same tab → same Telegram topic as before
       resume: !!(resumeSessions && t.sessionKey),
     });
   }

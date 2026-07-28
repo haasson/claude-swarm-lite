@@ -46,6 +46,10 @@ contextBridge.exposeInMainWorld('swarm', {
   // startup and on save; main feeds both the screen detector and the Stop hook.
   setAskPhrases: (list) => ipcRenderer.send('settings:askPhrases', list),
 
+  // The tab's visible name. main keeps it only to title this tab's Telegram topic and
+  // to sign its messages — pushed on create and on rename.
+  setTabName: (id, name) => ipcRenderer.send('tabs:name', { id, name }),
+
   // Telegram bridge (Settings → Телеграм). The token itself only ever travels ONE way:
   // into main, which stores it encrypted. Everything coming back is masked state —
   // `state` never carries the token, so the renderer can't leak what it doesn't have.
