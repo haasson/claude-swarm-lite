@@ -44,6 +44,16 @@ function snapshotRows(buf, rows) {
 // Cursor / some terminals use an arrow (→ ▸ ▶) or a plain ">".
 const OPTION_RE = /^\s*[❯>→➜▸►▶]?\s*\d+\.\s/;
 const HINT_RE = /Esc to cancel|Enter to confirm/i;
+// Claude Code's own furniture around the input box: the mode line, the shortcut hints,
+// the context meter. It sits BELOW the agent's prose, so a bottom-up scan hits it first
+// and would happily quote «⏵⏵ auto mode on (shift+tab to cycle) · ← for agents» to the
+// user as if that were the question. It's chrome, never a sentence anyone wrote.
+const CHROME_RE = new RegExp([
+  'shift\\+tab', 'ctrl\\+[a-z]', 'esc to ', ' for shortcuts', ' for agents',
+  '(?:auto|plan|accept edits|bypass permissions|bypassing permissions) mode on',
+  'auto-compact', 'context left until', 'tokens? (?:used|remaining)',
+  '^[⏵⏸⧉⎿✻✽✶✳·]',
+].join('|'), 'i');
 // After edge trimming, a leftover │ or a progress bar means we're looking at the
 // user's Claude statusline ("model │ dir │ ███░ 65%"), not at a question.
 const STATUSLINE_RE = /[│┃█░]/;
@@ -72,6 +82,7 @@ function extractQuestion(snapshot) {
     if (STATUSLINE_RE.test(t)) continue;  // the user's statusline
     if (OPTION_RE.test(t)) continue;      // "❯ 1. Yes"
     if (HINT_RE.test(t)) continue;        // "Esc to cancel"
+    if (CHROME_RE.test(t)) continue;      // "⏵⏵ auto mode on (shift+tab to cycle)"
     return t.length > MAX ? t.slice(0, MAX - 1).trimEnd() + '…' : t;
   }
   return null;

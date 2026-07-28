@@ -195,6 +195,37 @@ test('snapshotRows keeps blank rows that sit BETWEEN content', () => {
   assert.strictEqual(S.snapshotRows(fakeBuf(['a', '', 'b', '']), 16), 'a\n\nb');
 });
 
+// --- the input box's own furniture is not a question --------------------------
+// Straight from a live run: this is what got sent to Telegram as «❓ вопрос».
+
+test('extractQuestion skips the mode line under the input box', () => {
+  const snap = [
+    'Сейчас от тебя: катать миграцию сразу или ждать релиза?',
+    '',
+    '> ',
+    '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents',
+  ].join('\n');
+  assert.strictEqual(S.extractQuestion(snap), 'Сейчас от тебя: катать миграцию сразу или ждать релиза?');
+});
+
+test('extractQuestion skips the rest of Claude Code chrome', () => {
+  for (const junk of [
+    '⏵⏵ accept edits on (shift+tab to cycle)',
+    '⏸ plan mode on (shift+tab to cycle)',
+    '? for shortcuts',
+    'Context left until auto-compact: 25%',
+    'esc to interrupt',
+    'ctrl+r to expand',
+    '✻ Cooking… (12s · esc to interrupt)',
+  ]) {
+    assert.strictEqual(S.extractQuestion('Какой вариант берём?\n' + junk), 'Какой вариант берём?', junk);
+  }
+});
+
+test('extractQuestion returns null rather than chrome when there is no prose', () => {
+  assert.strictEqual(S.extractQuestion('> \n  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents'), null);
+});
+
 // Runs LAST: it swaps the module-level matcher, and restores it at the end.
 test('setAskPhrases swaps the marker the scraper looks for', () => {
   try {
