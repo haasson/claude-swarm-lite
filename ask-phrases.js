@@ -76,12 +76,28 @@ function asksWith(matcher, text) {
   return matcher.mark.test(t) && !matcher.none.test(t);
 }
 
+// WHAT the agent is asking, as text — for the pult tooltip, the notification and
+// (later) the Telegram bridge. The whole closing message is usually a report ending
+// with the request, so the useful part starts AT the phrase: «Сейчас от тебя: путь к
+// схеме». Falls back to the tail of the message when no phrase matched, because a
+// waiting agent still has to show something. Collapses blank lines and caps the
+// length — a chip tooltip is not a place for a page of text.
+function askExcerpt(matcher, text, max) {
+  const t = String(text == null ? '' : text).trim();
+  if (!t) return '';
+  const cap = max || 500;
+  const hit = matcher && matcher.mark ? t.match(matcher.mark) : null;
+  const from = hit && hit.index != null ? t.slice(hit.index) : t.slice(-cap * 2);
+  const flat = from.replace(/\s*\n\s*\n\s*/g, ' — ').replace(/\s*\n\s*/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  return flat.length > cap ? flat.slice(0, cap - 1).trimEnd() + '…' : flat;
+}
+
 // The default sources, so the hook's own fallback can be pinned against them.
 const DEFAULT_SOURCES = phraseSources(DEFAULT_ASK_PHRASES);
 
 return {
   DEFAULT_ASK_PHRASES, DEFAULT_SOURCES, MAX_PHRASES, MAX_LEN,
-  normalizePhrases, phraseSources, buildAskMatcher, asksWith,
+  normalizePhrases, phraseSources, buildAskMatcher, asksWith, askExcerpt,
 };
 
 });

@@ -125,7 +125,31 @@ function cwdOf(entries) {
   return null;
 }
 
+// Tabs whose Claude session id we know bind by file name. This is for the others (a
+// resumed tab with hooks off, `claude` typed by hand): pick the file among candidates
+// main already read off disk — `{ file, mtimeMs, cwdInside }`.
+//
+// A candidate must have been written since the tab opened (an older file belongs to a
+// past session) and record the same cwd inside. And if TWO survive that, we bind
+// NOTHING: driving a tab off another agent's transcript is far worse than falling back
+// to the screen scraper. Pure, so that rule is pinned by a test.
+const BIND_MTIME_SLACK_MS = 2000;   // clock/fs jitter around the tab's own start
+
+function pickBinding(cands, opts) {
+  const o = opts || {};
+  const taken = o.taken || new Set();
+  const hits = [];
+  for (const c of Array.isArray(cands) ? cands : []) {
+    if (!c || !c.file || taken.has(c.file)) continue;
+    if (!(c.mtimeMs >= (o.startedAt || 0) - BIND_MTIME_SLACK_MS)) continue;
+    if (c.cwdInside !== o.cwd) continue;
+    hits.push(c.file);
+    if (hits.length > 1) return null;
+  }
+  return hits[0] || null;
+}
+
 module.exports = {
-  READY_DEBOUNCE_MS,
-  projectSlug, parseEntries, blockTypes, entryText, lastMain, classify, cwdOf,
+  READY_DEBOUNCE_MS, BIND_MTIME_SLACK_MS,
+  projectSlug, parseEntries, blockTypes, entryText, lastMain, classify, cwdOf, pickBinding,
 };

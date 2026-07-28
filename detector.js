@@ -89,6 +89,35 @@ function decide(d, now, snap) {
   return { status: 'ready', detail: 'готов' };
 }
 
+// --- transcript: Claude's own message log, the third channel -----------------
+// transcript.js classifies ~/.claude/projects/**.jsonl: an open tool_use means a tool
+// is running, a tool_result means the model is thinking, a quiet assistant message
+// means the turn ended — and the call phrase in that message means it ended with a
+// QUESTION. All of it from structured events, so it doesn't flicker with repaints and
+// doesn't lose the question when it scrolls off the visible rows.
+//
+// What the file CANNOT see is UI state: while a permission dialog waits for your Yes,
+// the last entry is an open tool_use — exactly what a long-running tool looks like.
+// So a hook's `perm`/`ask` and a live prompt box on screen both outrank it.
+function applyTranscript(d, v) {
+  d.trState = v
+    ? { status: v.status, kind: v.kind || null, at: v.at || 0, text: v.text || '' }
+    : null;
+}
+
+function fromTranscript(tr) {
+  const kind = tr.status === 'waiting' ? (tr.kind || 'question') : null;
+  return { status: tr.status, detail: detailFor(tr.status), kind, from: 'transcript' };
+}
+
+// The per-tick read for a session with a bound transcript and no hooks: the file
+// decides, except for the one thing it can't see — a live prompt box. That box is
+// also the only place «разрешение» can come from when hooks are off.
+function decideFromTranscript(tr, snap) {
+  if (hasPromptBox(snap)) return mkWaiting(snap);
+  return fromTranscript(tr);
+}
+
 // A LIVE prompt box on screen (permission / options list). Claude Code erases it the
 // moment you answer, so its presence is current evidence — unlike the prose marker.
 function hasPromptBox(snap) {
@@ -129,12 +158,18 @@ function applyLatch(d, now, snap, raw) {
     // while the spinner was already turning). Evidence: the spinner, or fresh output
     // right after you pressed Enter.
     const release = () => { d.waitLatched = false; d.waitKind = null; d.chromeGoneSince = 0; };
-    if (RE_RUNNING.test(snap) || (answeredRecently(d, now) && raw.status === 'running')) {
+    // The transcript saying «работает» is the strongest release there is: a new
+    // tool_use / tool_result was WRITTEN after the question, so work really resumed.
+    // No debounce needed — this isn't a repaint, it's an event.
+    if (RE_RUNNING.test(snap) || (raw.from === 'transcript' && raw.status === 'running')
+        || (answeredRecently(d, now) && raw.status === 'running')) {
       release();
       return raw;
     }
     // A prose question with no sign of work: nothing has happened yet, keep «ждёт».
-    if (asksForInput(snap)) {
+    // Skipped when a transcript drives this session — the file already told us whether
+    // the turn ended with a question, and a line left on screen is not evidence.
+    if (raw.from !== 'transcript' && asksForInput(snap)) {
       d.chromeGoneSince = 0;
       return { status: 'waiting', detail: 'ждёт ответа', kind: d.waitKind };
     }
@@ -182,21 +217,33 @@ function detailFor(status) {
   return status === 'running' ? 'работает' : status === 'waiting' ? 'ждёт ответа' : 'готов';
 }
 
-// Hooks are authoritative. The screen may ONLY add the one thing hooks can't see:
-// a prose question after the agent ended its turn (Stop → ready, yet «Сейчас от
-// тебя» sits on screen). It never overrides running / ready / permission.
+// Hooks are authoritative about the dialogs only they can see. Between hooks and the
+// transcript the NEWER signal wins — a tool that started after Stop (transcript) or a
+// Stop that came after the last message (hook) — with ties going to the hook, so an
+// open permission can't be cancelled by the tool_use entry of that same moment.
+// The screen may still add the one thing an unbound session can't get anywhere else:
+// a prose question after the turn ended. It never overrides running / ready / perm.
 function arbitrate(d, snap) {
-  const hs = d.hookState || { status: 'ready', kind: null };
-  if (hs.status === 'ready' && asksForInput(snap)) {
+  const hs = d.hookState || { status: 'ready', kind: null, at: 0 };
+  const tr = d.trState;
+  const trNewer = !!tr && tr.at > (hs.at || 0);
+  if (hs.status === 'waiting' && !trNewer) {
+    return { status: 'waiting', detail: 'ждёт ответа', kind: hs.kind || null };
+  }
+  if (trNewer) return fromTranscript(tr);
+  if (!tr && hs.status === 'ready' && asksForInput(snap)) {
     return { status: 'waiting', detail: 'ждёт ответа', kind: 'question' };
   }
   return { status: hs.status, detail: detailFor(hs.status), kind: hs.status === 'waiting' ? hs.kind : null };
 }
 
-// The single entry point main's tick calls. Hooks-authoritative once the session
-// has spoken through them; otherwise the screen-scrape + «ждёт» latch fallback.
+// The single entry point main's tick calls. Three channels, in order of how much they
+// actually know: hooks (see the dialogs), the transcript (sees the events), the screen
+// (sees pixels). The latch stays under the screen — and under the transcript, where it
+// still guards the one screen read that survives: the live prompt box.
 function tickStatus(d, now, snap) {
   if (d.hooksActive) return arbitrate(d, snap);
+  if (d.trState) return applyLatch(d, now, snap, decideFromTranscript(d.trState, snap));
   return applyLatch(d, now, snap, decide(d, now, snap));
 }
 
@@ -204,5 +251,5 @@ module.exports = {
   ACTIVE_MS, LATCH_RELEASE_MS, ANSWER_HINT_MS,
   RE_WAIT, RE_WAIT_NOW, RE_RUNNING,
   decide, hasWaitChrome, hasPromptBox, applyLatch,
-  applyHook, arbitrate, tickStatus,
+  applyHook, applyTranscript, fromTranscript, decideFromTranscript, arbitrate, tickStatus,
 };

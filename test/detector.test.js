@@ -244,6 +244,96 @@ test('tickStatus: without hooks it falls back to the latch', () => {
   assert.strictEqual(d.waitLatched, true);        // and the latch engaged
 });
 
+// --- the transcript channel -------------------------------------------------
+
+const tr = (over) => Object.assign({ status: 'running', kind: null, at: NOW, text: '' }, over);
+
+test('transcript: applyTranscript records the verdict, null clears it', () => {
+  const d = mkD();
+  D.applyTranscript(d, tr({ status: 'ready' }));
+  assert.strictEqual(d.trState.status, 'ready');
+  D.applyTranscript(d, null);
+  assert.strictEqual(d.trState, null);
+});
+
+test('transcript: without hooks the file decides, not the screen', () => {
+  const d = mkD();
+  D.applyTranscript(d, tr({ status: 'running' }));
+  // The screen is quiet and byte-silent — the old scraper would have said «готов».
+  assert.strictEqual(D.tickStatus(d, NOW, QUIET).status, 'running');
+});
+
+test('transcript: a quiet turn that ended with a question → ждёт + question', () => {
+  const d = mkD();
+  D.applyTranscript(d, tr({ status: 'waiting', kind: 'question', text: 'Сейчас от тебя: путь' }));
+  const eff = D.tickStatus(d, NOW, QUIET);          // nothing on screen anymore
+  assert.strictEqual(eff.status, 'waiting');
+  assert.strictEqual(eff.kind, 'question');
+});
+
+test('transcript: a live prompt box still wins — the file cannot see dialogs', () => {
+  const d = mkD();
+  D.applyTranscript(d, tr({ status: 'running' })); // open tool_use == waiting for Yes
+  const eff = D.tickStatus(d, NOW, PERMISSION);
+  assert.strictEqual(eff.status, 'waiting');
+  assert.strictEqual(eff.kind, 'permission');
+});
+
+test('transcript: «работает» releases the latch at once (a stale marker cannot pin it)', () => {
+  const d = mkD();
+  D.applyTranscript(d, tr({ status: 'waiting', kind: 'question' }));
+  assert.strictEqual(D.tickStatus(d, NOW, ASK).status, 'waiting');
+  assert.strictEqual(d.waitLatched, true);
+  // A tool_use was written after the question => work resumed, even though the
+  // «Сейчас от тебя» line is still sitting on screen.
+  D.applyTranscript(d, tr({ status: 'running' }));
+  const eff = D.tickStatus(d, NOW + 300, ASK);
+  assert.strictEqual(eff.status, 'running');
+  assert.strictEqual(d.waitLatched, false);
+});
+
+test('transcript: a stale screen phrase does not hold «ждёт» once the file says ready', () => {
+  const d = mkD();
+  D.applyTranscript(d, tr({ status: 'waiting', kind: 'question' }));
+  D.tickStatus(d, NOW, ASK);                        // latched
+  D.applyTranscript(d, tr({ status: 'ready' }));    // answered, turn ended quietly
+  // The phrase itself no longer votes, so the release debounce starts ticking even
+  // though the line is still on screen — and then we're ready, not «ждёт» forever.
+  assert.strictEqual(D.tickStatus(d, NOW + 300, ASK).status, 'waiting', 'debounce still runs');
+  assert.strictEqual(D.tickStatus(d, NOW + 300 + D.LATCH_RELEASE_MS + 1, ASK).status, 'ready');
+});
+
+test('arbitrate: a hook permission is not cancelled by the transcript of that moment', () => {
+  const d = mkD();
+  D.applyHook(d, 'perm', NOW);
+  D.applyTranscript(d, tr({ status: 'running', at: NOW })); // same instant, open tool_use
+  const eff = D.tickStatus(d, NOW, QUIET);
+  assert.strictEqual(eff.status, 'waiting');
+  assert.strictEqual(eff.kind, 'permission');
+});
+
+test('arbitrate: a newer transcript entry beats an older hook signal', () => {
+  const d = mkD();
+  D.applyHook(d, 'idle', NOW);                              // Stop: turn ended
+  D.applyTranscript(d, tr({ status: 'running', at: NOW + 500 })); // then a tool started
+  assert.strictEqual(D.tickStatus(d, NOW + 600, QUIET).status, 'running');
+});
+
+test('arbitrate: an older transcript entry loses to a newer hook signal', () => {
+  const d = mkD();
+  D.applyTranscript(d, tr({ status: 'running', at: NOW }));
+  D.applyHook(d, 'idle', NOW + 500);                        // Stop came after
+  assert.strictEqual(D.tickStatus(d, NOW + 600, QUIET).status, 'ready');
+});
+
+test('arbitrate: with a transcript bound, the screen phrase no longer upgrades ready', () => {
+  const d = mkD();
+  D.applyHook(d, 'idle', NOW + 500);
+  D.applyTranscript(d, tr({ status: 'ready', at: NOW }));    // the file saw no question
+  // The line on screen is scrollback from an earlier turn; both real channels say ready.
+  assert.strictEqual(D.tickStatus(d, NOW + 600, ASK).status, 'ready');
+});
+
 for (const [name, fn] of tests) {
   try { fn(); passed++; }
   catch (e) { console.error('FAIL: ' + name + '\n  ' + e.message); process.exitCode = 1; }

@@ -22,6 +22,7 @@ const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeImage, shell
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');   // randomUUID for the pinned Claude session id
 
 // Windows taskbar/Start Menu group by AppUserModelID. Must match package.json
 // `appId` (NSIS shortcuts use it); without this the shell often shows a generic
@@ -92,7 +93,7 @@ function defaultWorkdir() {
 // provisioning failed (then we simply skip injection and behave as before).
 let STATUSLINE_SETTINGS = null;
 const { hookSettings } = require('./hook-config');
-const { DEFAULT_ASK_PHRASES, normalizePhrases, phraseSources, buildAskMatcher, asksWith } = require('./ask-phrases');
+const { DEFAULT_ASK_PHRASES, normalizePhrases, phraseSources, buildAskMatcher, asksWith, askExcerpt } = require('./ask-phrases');
 let STATUSLINE_COMMAND = null; // the provisioned statusline launcher command
 let HOOK_COMMAND = null;       // the provisioned hook launcher command
 // Opt-in: precise status via Claude hooks. Off by default; the renderer pushes the
@@ -134,7 +135,7 @@ function writeSwarmSettings() {
 // so it gets the COMPILED matcher through swarm-phrases.json, written next to the
 // hook script in userData. See ask-phrases.js.
 let ASK_PHRASES = DEFAULT_ASK_PHRASES.slice();
-let ASK_MATCHER = buildAskMatcher(ASK_PHRASES);     // for the transcript probe
+let ASK_MATCHER = buildAskMatcher(ASK_PHRASES);     // for the transcript reader
 
 function applyAskPhrases() {
   setAskPhrases(ASK_PHRASES);                       // in-process (screen scraping)
@@ -154,16 +155,34 @@ function provisionStatusline() {
   applyAskPhrases();
 }
 
+// The launcher of a command line — first real token, skipping `VAR=value` prefixes.
+function launcherOf(cmd) {
+  return String(cmd || '').trim().split(/\s+/).find((t) => !/^\w+=/.test(t)) || '';
+}
+
 // Append `--settings <ours>` so a launched Claude prints the context statusline.
 // Only for Claude launchers (never for aider/codex/… which don't take the flag),
 // and never when the command already carries an explicit --settings of its own.
 function injectStatusline(cmd) {
   if (!STATUSLINE_SETTINGS || !cmd) return cmd;
   if (/(^|\s)--settings(\s|=)/.test(cmd)) return cmd;
-  // First real token, skipping any leading `VAR=value` env assignments.
-  const first = cmd.trim().split(/\s+/).find((t) => !/^\w+=/.test(t)) || '';
-  if (!resume.supports(first)) return cmd;
+  if (!resume.supports(launcherOf(cmd))) return cmd;
   return `${cmd} --settings "${STATUSLINE_SETTINGS}"`;
+}
+
+// Pin the session id Claude will use, so we know EXACTLY which transcript file belongs
+// to this tab: ~/.claude/projects/<slug>/<id>.jsonl. Without it the file has to be
+// guessed by folder + mtime, which is a coin flip once two tabs share a folder — and a
+// wrong guess would show one agent's status on another agent's tab.
+//
+// Skipped when the command already carries a session flag (--resume / --continue /
+// --session-id): then the id isn't ours to choose. Those sessions fall back to the
+// hook marker (it reports session_id) or to the folder scan.
+function injectSessionId(cmd) {
+  if (!cmd || !resume.supports(launcherOf(cmd))) return { cmd, sessionId: null };
+  if (/(^|\s)(--session-id|--resume|-r|--continue|-c)(\s|=|$)/.test(cmd)) return { cmd, sessionId: null };
+  const sessionId = crypto.randomUUID();
+  return { cmd: `${cmd} --session-id ${sessionId}`, sessionId };
 }
 
 // Send to the renderer only if the window/frame is still alive. Late pty chunks
@@ -199,7 +218,7 @@ const { Terminal: HeadlessTerminal } = require('@xterm/headless');
 const { extractQuestion, countSubagents, contentEnd, snapshotRows, setAskPhrases } = require('./screen');
 // The status state machine + «ждёт» latch + hook arbitration live in a pure,
 // unit-tested module; osc.js sniffs hook markers out of the raw pty stream.
-const { tickStatus, applyHook } = require('./detector');
+const { tickStatus, applyHook, applyTranscript } = require('./detector');
 const { extractHookSignals } = require('./osc');
 
 const TICK_MS = 300;
@@ -223,9 +242,11 @@ function makeDetector(cols, rows) {
     // Hooks channel: once a marker arrives, hooksActive drives status; oscCarry
     // reassembles a marker split across pty chunks. See osc.js / detector.js.
     hooksActive: false, hookState: null, oscCarry: '',
-    // Transcript probe (read-only, see below): the .jsonl this tab was matched to.
-    cwd: '', startedAt: Date.now(),
-    trFile: null, trMtime: 0, trEntries: null, trStatus: '', trWhy: '', trLogged: '',
+    // Transcript channel (see the reader below): the folder this tab runs in, the
+    // Claude session id we pinned at launch (or learned from a hook marker), the
+    // .jsonl bound to it, and the last verdict read out of it.
+    cwd: '', startedAt: Date.now(), claudeSessionId: null,
+    trFile: null, trMtime: 0, trEntries: null, trState: null, trText: '', trWhy: '', trTryAt: 0,
   };
 }
 
@@ -261,7 +282,13 @@ function feedDetector(id, chunk) {
   // across chunks still assembles). A signal flips this session to hook-driven.
   const { signals, rest } = extractHookSignals(d.oscCarry + chunk);
   d.oscCarry = rest;
-  for (const sig of signals) applyHook(d, sig.token, Date.now());
+  for (const sig of signals) {
+    // The marker carries Claude's own session_id. Routing doesn't need it (each agent
+    // has its own pty), but the transcript reader does: it's the exact file name. This
+    // is how a RESUMED session — where we didn't choose the id — still binds precisely.
+    if (sig.sessionId) d.claudeSessionId = sig.sessionId;
+    applyHook(d, sig.token, Date.now());
+  }
   // A resize makes Claude repaint the whole screen — a burst of output that is
   // NOT real work. Inside the grace window after a resize we keep feeding the
   // emulator (so the screen stays correct) but don't count it as activity, so an
@@ -293,9 +320,11 @@ setInterval(() => {
       // renderer decides whether to keep the tab «работает» while they run and
       // whether to show the agent badge — both are toggles in the tab settings.
       const sub = countSubagents(snap);
-      // Only a waiting agent has a question on screen; anything else would be
-      // scraping streamed prose. null in every other state.
-      const question = next.status === 'waiting' ? extractQuestion(snap) : null;
+      // WHAT the agent is asking. Word-for-word from Claude's own transcript when the
+      // tab is bound to one (d.trText) — that text is whole even after it scrolls out
+      // of the visible rows. The screen scrape stays as the fallback for a permission
+      // box (which lives only on screen) and for unbound tabs.
+      const question = next.status === 'waiting' ? (d.trText || extractQuestion(snap)) : null;
       if (next.status !== d.status || next.detail !== d.detail
           || statusline !== d.statusline || question !== d.question || sub !== d.sub
           || kind !== d.waitingKind) {
@@ -313,21 +342,35 @@ setInterval(() => {
   }
 }, TICK_MS);
 
-// --- transcript probe: READ-ONLY experiment ----------------------------------
-// Claude writes every message to ~/.claude/projects/<slug>/<session>.jsonl as it
-// happens. That file can drive «работает / готов / ждёт-вопрос» with no screen
-// heuristics and no hook process per tool call (see transcript.js). Before betting
-// the UI on it, we run it ALONGSIDE the live detector and log where the two disagree.
-// Nothing here touches d.status — the tab keeps showing what it showed before.
-// Log: <userData>/transcript-probe.log.
+// --- transcript reader: Claude's own message log ------------------------------
+// Claude appends every message to ~/.claude/projects/<slug>/<session>.jsonl as it
+// happens, so the file says what the agent is doing without guessing from pixels:
+// an open tool_use → работает, a tool_result → думает, a quiet assistant message →
+// конец хода (and the call phrase in it → ждёт-вопрос). transcript.js owns the
+// classification; this block owns the file I/O and the tab↔file binding, and hands the
+// verdict to the detector as its third channel (see detector.js applyTranscript).
+//
+// It also gives us the ONE thing the screen can't: the question word for word, whole,
+// even after it scrolls out of the visible rows.
 const transcript = require('./transcript');
-const TR_TICK_MS = 1000;
+const TR_TICK_MS = 500;
 const TR_TAIL_BYTES = 64 * 1024;   // plenty for the last few entries of a big file
+const TR_TEXT_MAX = 500;           // question excerpt sent to the renderer
+const TR_BIND_EVERY_MS = 2000;     // don't rescan a folder on every tick while unbound
+// A bound file this quiet, while the pty is clearly talking, means we're reading a dead
+// session — /clear starts a NEW one. Long enough that a slow tool (which writes nothing
+// until it returns) can't trip it.
+const TR_STALE_MS = 90_000;
+// Diagnostics for the first live runs: SWARM_TRANSCRIPT_LOG=1 npm start writes every
+// binding and every verdict change to <userData>/transcript.log.
+const TR_DEBUG = process.env.SWARM_TRANSCRIPT_LOG === '1';
 
-function trLogPath() { return path.join(app.getPath('userData'), 'transcript-probe.log'); }
 function trLog(line) {
-  try { fs.appendFileSync(trLogPath(), new Date().toISOString().slice(11, 23) + ' ' + line + '\n'); }
-  catch (_) { /* the probe must never break the app */ }
+  if (!TR_DEBUG) return;
+  try {
+    fs.appendFileSync(path.join(app.getPath('userData'), 'transcript.log'),
+      new Date().toISOString().slice(11, 23) + ' ' + line + '\n');
+  } catch (_) { /* diagnostics must never break the app */ }
 }
 
 // Last `bytes` of a file as text, dropping the first (likely partial) line.
@@ -343,12 +386,29 @@ function tailText(file, bytes) {
   } finally { fs.closeSync(fd); }
 }
 
-// Find this tab's transcript: in the project folder for its cwd, the most recently
-// touched .jsonl that (a) was written since the tab opened, (b) isn't already taken
-// by another tab, and (c) records the SAME cwd inside — the folder name is a guess,
-// the recorded cwd is proof. Returns null until claude actually starts writing.
-function claimTranscript(d, taken) {
-  const dir = path.join(os.homedir(), '.claude', 'projects', transcript.projectSlug(d.cwd));
+function projectDir(cwd) {
+  return path.join(os.homedir(), '.claude', 'projects', transcript.projectSlug(cwd));
+}
+
+// Bind this tab to a transcript file. Two ways, and the difference matters:
+//
+//   • by session id — we pinned it with --session-id at launch, or a hook marker told
+//     us. Exact, no guessing.
+//   • by folder scan — fallback for sessions whose id isn't ours (a resumed tab with
+//     hooks off, or `claude` typed by hand). A candidate must have been written since
+//     the tab opened, not be taken by another tab, and record the SAME cwd inside (the
+//     folder name is a guess, the recorded cwd is proof). If TWO files still qualify we
+//     bind NOTHING: showing one agent's status on another agent's tab is far worse than
+//     falling back to the screen scraper.
+//
+// Returns null until claude actually starts writing.
+function bindTranscript(d, taken) {
+  const dir = projectDir(d.cwd);
+  if (d.claudeSessionId) {
+    const file = path.join(dir, d.claudeSessionId + '.jsonl');
+    if (taken.has(file)) return null;
+    return fs.existsSync(file) ? file : null;
+  }
   let names;
   try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')); } catch (_) { return null; }
   const cands = [];
@@ -357,16 +417,28 @@ function claimTranscript(d, taken) {
     if (taken.has(file)) continue;
     let st;
     try { st = fs.statSync(file); } catch (_) { continue; }
-    if (st.mtimeMs < d.startedAt - 2000) continue;   // untouched since this tab opened
-    cands.push({ file, mtime: st.mtimeMs });
+    // Read the tail only for files young enough to be ours — the cwd check costs I/O.
+    if (st.mtimeMs < d.startedAt - transcript.BIND_MTIME_SLACK_MS) continue;
+    let cwdInside = null;
+    try { cwdInside = transcript.cwdOf(transcript.parseEntries(tailText(file, TR_TAIL_BYTES))); } catch (_) {}
+    cands.push({ file, mtimeMs: st.mtimeMs, cwdInside });
   }
-  cands.sort((a, b) => b.mtime - a.mtime);
-  for (const c of cands) {
-    try {
-      if (transcript.cwdOf(transcript.parseEntries(tailText(c.file, TR_TAIL_BYTES))) === d.cwd) return c.file;
-    } catch (_) { /* unreadable → next candidate */ }
+  return transcript.pickBinding(cands, { startedAt: d.startedAt, cwd: d.cwd, taken });
+}
+
+// Is there a transcript in this tab's folder that's newer than the one we're bound to?
+// That's the signature of /clear: Claude started a fresh session (a new id, a new file)
+// and our file will never be written again.
+function newerTranscriptExists(d, taken) {
+  const dir = projectDir(d.cwd);
+  let names;
+  try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')); } catch (_) { return false; }
+  for (const n of names) {
+    const file = path.join(dir, n);
+    if (file === d.trFile || taken.has(file)) continue;
+    try { if (fs.statSync(file).mtimeMs > d.trMtime + 1000) return true; } catch (_) {}
   }
-  return null;
+  return false;
 }
 
 setInterval(() => {
@@ -376,12 +448,25 @@ setInterval(() => {
   for (const [id, d] of det) {
     if (d.dead || !d.cwd) continue;
     try {
+      // Bound to a session that's over? Drop it — including the id we pinned at
+      // launch, which /clear has just made void — and let the scan (or the next hook
+      // marker) find the new file. A frozen status is the worst thing this can do.
+      if (d.trFile && now - d.trMtime > TR_STALE_MS && now - d.lastDataAt < 2000
+          && newerTranscriptExists(d, taken)) {
+        trLog(`tab=${id} стенограмма ${path.basename(d.trFile)} умолкла — перепривязка`);
+        taken.delete(d.trFile);
+        d.trFile = null; d.trMtime = 0; d.trEntries = null; d.trWhy = '';
+        d.claudeSessionId = null;
+        applyTranscript(d, null);
+      }
       if (!d.trFile) {
-        const file = claimTranscript(d, taken);
+        if (now - (d.trTryAt || 0) < TR_BIND_EVERY_MS) continue;
+        d.trTryAt = now;
+        const file = bindTranscript(d, taken);
         if (!file) continue;
         d.trFile = file;
         taken.add(file);
-        trLog(`tab=${id} matched ${path.basename(file)}`);
+        trLog(`tab=${id} → ${path.basename(file)}${d.claudeSessionId ? ' (by session id)' : ' (by folder scan)'}`);
       }
       // Re-read only when the file actually moved, but re-CLASSIFY every tick:
       // «готов» arrives by the ready-debounce expiring, not by a new write.
@@ -389,19 +474,24 @@ setInterval(() => {
       if (st.mtimeMs !== d.trMtime) {
         d.trMtime = st.mtimeMs;
         d.trEntries = transcript.parseEntries(tailText(d.trFile, TR_TAIL_BYTES));
+        // One message can be longer than the tail (a big tool result). Nothing parsed
+        // out of a non-empty file means we cut inside a single line — read wider once.
+        if (!d.trEntries.length && st.size > TR_TAIL_BYTES) {
+          d.trEntries = transcript.parseEntries(tailText(d.trFile, TR_TAIL_BYTES * 8));
+        }
       }
       const v = transcript.classify(d.trEntries || [], now, (t) => asksWith(ASK_MATCHER, t));
-      d.trStatus = v ? v.status + (v.kind ? ':' + v.kind : '') : '?';
-      d.trWhy = v ? v.why : 'no entries';
-      const shown = d.status + (d.waitingKind ? ':' + d.waitingKind : '');
-      const key = shown + ' | ' + d.trStatus;
-      if (key !== d.trLogged) {
-        d.trLogged = key;
-        const mark = shown === d.trStatus ? 'ok  ' : 'DIFF';
-        trLog(`${mark} tab=${id} экран=${shown} стенограмма=${d.trStatus} (${d.trWhy})`);
-      }
-    } catch (e) {
-      d.trFile = null;   // file rotated / deleted → re-claim next tick
+      applyTranscript(d, v);
+      // The question, word for word — only for a turn that ended asking. Anything else
+      // would be quoting streamed prose back at the user.
+      d.trText = v && v.status === 'waiting' ? askExcerpt(ASK_MATCHER, v.text, TR_TEXT_MAX) : '';
+      const why = v ? v.status + (v.kind ? ':' + v.kind : '') + ' (' + v.why + ')' : 'no entries';
+      if (why !== d.trWhy) { d.trWhy = why; trLog(`tab=${id} ${why}`); }
+    } catch (_) {
+      // File rotated, deleted, or unreadable: drop the binding and fall back to the
+      // screen until we can bind again.
+      d.trFile = null; d.trMtime = 0; d.trEntries = null; d.trWhy = '';
+      applyTranscript(d, null);
     }
   }
 }, TR_TICK_MS);
@@ -617,7 +707,7 @@ ipcMain.handle('session:create', (_event, opts = {}) => {
 
   sessions.set(id, child);
   const d0 = makeDetector(opts.cols, opts.rows);
-  d0.cwd = cwd;                       // the transcript probe matches files by cwd
+  d0.cwd = cwd;                       // the transcript lives under a slug of this path
   det.set(id, d0);
 
   child.onData((data) => {
@@ -633,7 +723,9 @@ ipcMain.handle('session:create', (_event, opts = {}) => {
   });
 
   // Give the login shell a moment to finish sourcing the profile, then run claude.
-  const cmd = injectStatusline(opts.command != null ? opts.command : START_COMMAND);
+  const pinned = injectSessionId(injectStatusline(opts.command != null ? opts.command : START_COMMAND));
+  const cmd = pinned.cmd;
+  d0.claudeSessionId = pinned.sessionId;   // known id => exact transcript binding
   if (cmd) {
     setTimeout(() => {
       const p = sessions.get(id);

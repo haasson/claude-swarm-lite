@@ -71,6 +71,35 @@ test('phraseSources are JSON-safe strings the hook can recompile', () => {
   assert.strictEqual(A.asksWith(round, 'Жду ответа: ничего, жди'), false);
 });
 
+// --- askExcerpt: the text of the question, for the tooltip / notification / bridge --
+
+const excerpt = (text, list, max) => A.askExcerpt(A.buildAskMatcher(list), text, max);
+
+test('excerpt starts at the phrase, dropping the report above it', () => {
+  const msg = 'Починил сборку, тесты зелёные.\n\nСейчас от тебя: путь к схеме.';
+  assert.strictEqual(excerpt(msg, []), 'Сейчас от тебя: путь к схеме.');
+});
+
+test('excerpt flattens newlines so a chip tooltip stays one paragraph', () => {
+  const msg = 'Сейчас от тебя:\n- вариант 1\n- вариант 2';
+  assert.strictEqual(excerpt(msg, []), 'Сейчас от тебя: - вариант 1 - вариант 2');
+});
+
+test('excerpt without a phrase falls back to the tail of the message', () => {
+  assert.strictEqual(excerpt('Просто отчёт без фразы.', []), 'Просто отчёт без фразы.');
+});
+
+test('excerpt is capped and ellipsised', () => {
+  const out = excerpt('Сейчас от тебя: ' + 'ы'.repeat(200), [], 40);
+  assert.strictEqual(out.length, 40);
+  assert.ok(out.endsWith('…'), out);
+});
+
+test('excerpt of nothing is an empty string', () => {
+  assert.strictEqual(excerpt('', []), '');
+  assert.strictEqual(excerpt(null, []), '');
+});
+
 for (const [name, fn] of tests) {
   try { fn(); passed++; }
   catch (e) { console.error('FAIL: ' + name + '\n  ' + e.message); process.exitCode = 1; }

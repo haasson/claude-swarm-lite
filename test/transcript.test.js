@@ -104,6 +104,44 @@ test('projectSlug flattens the path the way Claude names its folders', () => {
   assert.strictEqual(T.projectSlug('/Users/e/.config/app'), '-Users-e--config-app');
 });
 
+// --- pickBinding: which file belongs to this tab ------------------------------
+
+const OPEN = 100_000;   // when the tab opened
+const cand = (over) => Object.assign({ file: 'a.jsonl', mtimeMs: OPEN + 500, cwdInside: '/repo' }, over);
+const pick = (cands, over) => T.pickBinding(cands, Object.assign({ startedAt: OPEN, cwd: '/repo' }, over));
+
+test('pickBinding takes the one fresh file recording this cwd', () => {
+  assert.strictEqual(pick([cand({ file: 'mine.jsonl' })]), 'mine.jsonl');
+});
+
+test('pickBinding ignores a file untouched since the tab opened', () => {
+  assert.strictEqual(pick([cand({ mtimeMs: OPEN - 60_000 })]), null);
+});
+
+test('pickBinding tolerates a little clock jitter around the tab start', () => {
+  assert.strictEqual(pick([cand({ mtimeMs: OPEN - 1000 })]), 'a.jsonl');
+});
+
+test('pickBinding ignores a file whose recorded cwd is another folder', () => {
+  assert.strictEqual(pick([cand({ cwdInside: '/other' })]), null);
+  assert.strictEqual(pick([cand({ cwdInside: null })]), null, 'unreadable is not a match');
+});
+
+test('pickBinding skips a file already bound to another tab', () => {
+  assert.strictEqual(pick([cand({ file: 'taken.jsonl' })], { taken: new Set(['taken.jsonl']) }), null);
+});
+
+test('pickBinding binds NOTHING when two files qualify (never guess between tabs)', () => {
+  assert.strictEqual(pick([cand({ file: 'a.jsonl' }), cand({ file: 'b.jsonl' })]), null);
+});
+
+test('pickBinding survives junk input', () => {
+  assert.strictEqual(pick([]), null);
+  assert.strictEqual(pick(null), null);
+  assert.strictEqual(pick([null, cand()]), 'a.jsonl');
+  assert.strictEqual(T.pickBinding([cand()], null), null, 'no cwd to match against');
+});
+
 for (const [name, fn] of tests) {
   try { fn(); passed++; }
   catch (e) { console.error('FAIL: ' + name + '\n  ' + e.message); process.exitCode = 1; }
