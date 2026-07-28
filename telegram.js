@@ -1,0 +1,241 @@
+'use strict';
+// The Telegram side of the bridge: URLs, token shape, update parsing, the long-poll
+// loop. Deliberately knows nothing about Electron, sessions or the detector — main.js
+// wires it to those — so all of it is testable in plain node with a fake fetch.
+//
+// LONG POLLING, not a webhook. The app calls out to api.telegram.org and nothing
+// listens on this machine: no open port, no public URL, no VPS. The flip side is the
+// one real external dependency of the whole feature — if Telegram only works here
+// through a VPN, this does too, and there is no local fallback that changes that.
+//
+// Long polling also means exactly ONE reader per bot token. Two swarms (or a swarm and
+// some other bot code) on the same token fight over getUpdates and Telegram answers 409
+// — surfaced as a plain «этот токен уже читает кто-то другой», not a silent stall.
+
+const API_HOST = 'https://api.telegram.org';
+
+function apiUrl(token, method) {
+  return `${API_HOST}/bot${token}/${method}`;
+}
+
+// --- the token ---------------------------------------------------------------
+// BotFather hands out `<bot id>:<secret>`. Checking the shape before we ever send it
+// means a pasted chunk of BotFather's message, or a copy that lost its tail, fails in
+// the settings box where the user can see it — instead of turning into a 401 later.
+const TOKEN_RE = /^\d{5,}:[A-Za-z0-9_-]{30,}$/;
+
+function looksLikeToken(s) {
+  return TOKEN_RE.test(String(s == null ? '' : s).trim());
+}
+
+// For showing that a token is stored without showing the token. The bot id is public
+// (it's the first half of any bot's username lookup), the secret never appears.
+function maskToken(s) {
+  const t = String(s == null ? '' : s).trim();
+  const i = t.indexOf(':');
+  if (i < 1) return '';
+  return t.slice(0, i) + ':' + '•'.repeat(6) + t.slice(-4);
+}
+
+// --- pairing -----------------------------------------------------------------
+// The app never asks anyone to find their chat id. It shows a one-time code, the user
+// sends it to their bot (by scanning a deep link, or by typing it), and the chat that
+// brought the code is the chat we bind to. Ambient noise — someone else stumbling onto
+// the bot — can't bind, because it doesn't know the code.
+//
+// Unambiguous alphabet: no 0/O/1/I/l, so a code read off a screen can't be mistyped
+// into a different valid code.
+const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+const CODE_LEN = 6;
+
+function pairCode(randomInt) {
+  const rnd = typeof randomInt === 'function'
+    ? randomInt
+    : (n) => Math.floor(Math.random() * n);
+  let out = '';
+  for (let i = 0; i < CODE_LEN; i++) out += CODE_ALPHABET[rnd(CODE_ALPHABET.length) % CODE_ALPHABET.length];
+  return out;
+}
+
+// `t.me/<bot>?start=<code>` opens a private chat with the bot and pre-fills the /start;
+// `?startgroup=` offers to add the bot to a group instead (that's the path to a forum
+// supergroup, where each tab gets its own topic). Both deliver the same code back to us.
+function deepLink(botUsername, code, opts) {
+  const user = String(botUsername || '').replace(/^@/, '');
+  const key = opts && opts.group ? 'startgroup' : 'start';
+  return `https://t.me/${user}?${key}=${encodeURIComponent(code)}`;
+}
+
+// Does this update carry our pairing code? Accepts it from a private chat and from a
+// group alike: `/start CODE`, `/start@mybot CODE`, or the bare code typed by hand.
+function pairingMatch(msg, code) {
+  if (!msg || !code) return false;
+  const want = String(code).trim().toUpperCase();
+  const text = String(msg.text || '').trim().toUpperCase();
+  if (!text) return false;
+  const m = text.match(/^\/START(?:@\S+)?\s*(\S+)?$/);
+  const given = m ? (m[1] || '') : text;
+  return given === want;
+}
+
+// --- updates -----------------------------------------------------------------
+// One shape for the rest of the app, whatever Telegram sent. Everything we route on is
+// here: the chat, the forum topic, who wrote it, the text, and the message it replies
+// to — the reply is the routing key, so it survives into `replyToId`.
+function readUpdate(u) {
+  if (!u || typeof u !== 'object') return null;
+  const msg = u.message || u.edited_message || null;
+  if (!msg) return { updateId: u.update_id, kind: 'other', msg: null };
+  const from = msg.from || {};
+  const chat = msg.chat || {};
+  const text = typeof msg.text === 'string' ? msg.text
+    : typeof msg.caption === 'string' ? msg.caption : '';
+  const cmd = text.match(/^\/([A-Za-z0-9_]+)(?:@\S+)?(?:\s+([\s\S]*))?$/);
+  return {
+    updateId: u.update_id,
+    kind: 'message',
+    messageId: msg.message_id,
+    chatId: chat.id,
+    chatType: chat.type || '',
+    isForum: !!chat.is_forum,
+    // Forum topics: `message_thread_id` is the topic. Telegram also sets it on plain
+    // replies inside a topic, which is exactly what we want — same tab either way.
+    threadId: msg.is_topic_message ? (msg.message_thread_id || null) : null,
+    fromId: from.id,
+    fromName: [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || '',
+    text,
+    command: cmd ? cmd[1].toLowerCase() : null,
+    args: cmd ? String(cmd[2] || '').trim() : '',
+    replyToId: msg.reply_to_message ? msg.reply_to_message.message_id : null,
+    // A voice note / audio: phase two transcribes it. Carried through now so the
+    // bridge can answer «голос пока не умею» instead of silently ignoring it.
+    voice: msg.voice ? { fileId: msg.voice.file_id, seconds: msg.voice.duration || 0 } : null,
+    raw: msg,
+  };
+}
+
+// --- outbound text -----------------------------------------------------------
+// Telegram rejects anything over 4096 chars. Split on paragraph, then line, then hard
+// — a question from an agent is prose, so breaking mid-word is the last resort.
+const MAX_TEXT = 4096;
+
+function chunkText(text, max) {
+  const cap = Math.max(16, max || MAX_TEXT);
+  const src = String(text == null ? '' : text);
+  if (src.length <= cap) return src ? [src] : [];
+  const out = [];
+  let rest = src;
+  while (rest.length > cap) {
+    const window = rest.slice(0, cap);
+    let cut = window.lastIndexOf('\n\n');
+    if (cut < cap * 0.5) cut = window.lastIndexOf('\n');
+    if (cut < cap * 0.5) cut = window.lastIndexOf(' ');
+    if (cut < cap * 0.5) cut = cap;
+    out.push(rest.slice(0, cut).trimEnd());
+    rest = rest.slice(cut).replace(/^\s+/, '');
+  }
+  if (rest) out.push(rest);
+  return out;
+}
+
+// --- retry pacing ------------------------------------------------------------
+// api.telegram.org being unreachable is normal here (a VPN dropped, the laptop woke up
+// in a café). Back off geometrically so a broken connection doesn't hammer the network
+// or the log, and cap it so recovery is never more than a minute away.
+const BACKOFF_BASE_MS = 1000;
+const BACKOFF_MAX_MS = 60_000;
+
+function backoffMs(failures) {
+  const n = Math.max(0, failures | 0);
+  return Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * Math.pow(2, Math.min(n, 6)));
+}
+
+// Telegram's own «slow down» — honour it over our backoff when present.
+function retryAfterMs(body) {
+  const p = body && body.parameters;
+  const s = p && Number(p.retry_after);
+  return Number.isFinite(s) && s > 0 ? Math.min(s * 1000, BACKOFF_MAX_MS) : 0;
+}
+
+// How a failed call should be treated. Wrong token and «someone else is polling» are
+// terminal: retrying can't fix them and the user has to see them.
+function classifyError(status, body) {
+  const code = Number(status) || 0;
+  const desc = (body && body.description) || '';
+  if (code === 401) return { fatal: true, reason: 'unauthorized', message: 'Telegram не принял токен' };
+  if (code === 404 && /not found/i.test(desc)) return { fatal: true, reason: 'unauthorized', message: 'Такого бота нет — проверь токен' };
+  if (code === 409) return { fatal: true, reason: 'conflict', message: 'Этот токен уже читает кто-то другой' };
+  if (code === 403) return { fatal: false, reason: 'forbidden', message: 'Бот не может писать в этот чат' };
+  if (code === 429) return { fatal: false, reason: 'flood', message: 'Telegram просит подождать' };
+  return { fatal: false, reason: 'network', message: desc || 'Telegram недоступен' };
+}
+
+// --- the long-poll loop ------------------------------------------------------
+// `deps.fetchJson(url, body)` → { ok, status, body } and throws only on a transport
+// failure; injected so tests drive the loop with no network. `sleep` is injected for
+// the same reason. Everything the app does with an update happens in `onUpdate`.
+const POLL_TIMEOUT_S = 25;
+
+function createPoller(deps) {
+  const d = deps || {};
+  const fetchJson = d.fetchJson;
+  const sleep = d.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const onUpdate = d.onUpdate || (() => {});
+  const onState = d.onState || (() => {});
+  const token = d.token;
+  const timeoutS = d.timeoutS || POLL_TIMEOUT_S;
+
+  let running = false;
+  let stopped = false;
+  let offset = d.offset || 0;
+  let failures = 0;
+
+  async function once() {
+    const res = await fetchJson(apiUrl(token, 'getUpdates'), {
+      offset, timeout: timeoutS, allowed_updates: ['message'],
+    });
+    if (!res || !res.ok || !res.body || res.body.ok !== true) {
+      const err = classifyError(res && res.status, res && res.body);
+      failures++;
+      onState({ ok: false, error: err });
+      if (err.fatal) { stopped = true; return; }
+      await sleep(retryAfterMs(res && res.body) || backoffMs(failures));
+      return;
+    }
+    if (failures) onState({ ok: true, error: null });   // recovered — say so once
+    failures = 0;
+    for (const u of res.body.result || []) {
+      // Advance the offset BEFORE handling: a handler that throws must not make us
+      // fetch the same update forever (Telegram would replay it on every poll).
+      if (typeof u.update_id === 'number') offset = u.update_id + 1;
+      try { onUpdate(readUpdate(u)); } catch (e) { onState({ ok: true, error: null, handlerError: e }); }
+    }
+  }
+
+  async function run() {
+    running = true;
+    while (!stopped) {
+      try { await once(); } catch (e) {
+        failures++;
+        onState({ ok: false, error: { fatal: false, reason: 'network', message: String((e && e.message) || e) } });
+        await sleep(backoffMs(failures));
+      }
+    }
+    running = false;
+  }
+
+  return {
+    start() { if (!running && !stopped) return run(); return Promise.resolve(); },
+    stop() { stopped = true; },
+    get offset() { return offset; },
+    get alive() { return running && !stopped; },
+  };
+}
+
+module.exports = {
+  API_HOST, MAX_TEXT, POLL_TIMEOUT_S, BACKOFF_MAX_MS, CODE_LEN,
+  apiUrl, looksLikeToken, maskToken,
+  pairCode, deepLink, pairingMatch,
+  readUpdate, chunkText, backoffMs, retryAfterMs, classifyError,
+  createPoller,
+};
