@@ -577,7 +577,19 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   outline: none;
 }
 .set-input:focus { border-color: var(--accent); }
+/* Multi-line variant (the «agent is calling me» phrases): same box, no resize
+   handle dragging the modal layout around. */
+textarea.set-input { resize: vertical; min-height: 62px; line-height: 1.5; }
 .set-hint { display: block; color: var(--muted); font-size: 11px; line-height: 1.5; margin-top: 5px; }
+/* A hint that sits ABOVE its field (the «why» line before the phrase box). */
+.set-hint-top { margin-top: 0; margin-bottom: 7px; }
+/* «Will this phrase call me?» — a sample line plus the verdict, in the status colors
+   the tab itself would take, so the answer reads the same way the dashboard does. */
+.ask-test { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
+.ask-test .set-input { flex: 1; min-width: 0; }
+.ask-verdict { font-size: 11px; white-space: nowrap; color: var(--muted); }
+.ask-verdict.is-call { color: var(--waiting); }
+.ask-verdict.is-none { color: var(--ready); }
 .set-hint code, .set-preview code { background: var(--panel); padding: 1px 5px; border-radius: 4px; font-size: 11px; color: var(--text); }
 .set-preview {
   color: var(--muted);

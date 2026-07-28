@@ -92,6 +92,7 @@ function defaultWorkdir() {
 // provisioning failed (then we simply skip injection and behave as before).
 let STATUSLINE_SETTINGS = null;
 const { hookSettings } = require('./hook-config');
+const { DEFAULT_ASK_PHRASES, normalizePhrases, phraseSources, buildAskMatcher, asksWith } = require('./ask-phrases');
 let STATUSLINE_COMMAND = null; // the provisioned statusline launcher command
 let HOOK_COMMAND = null;       // the provisioned hook launcher command
 // Opt-in: precise status via Claude hooks. Off by default; the renderer pushes the
@@ -128,12 +129,29 @@ function writeSwarmSettings() {
   STATUSLINE_SETTINGS = settingsPath;
 }
 
+// The «agent is calling me» phrases (Settings → Запуск). One list, two readers: the
+// screen detector in this process, and the Stop hook — which is a separate process,
+// so it gets the COMPILED matcher through swarm-phrases.json, written next to the
+// hook script in userData. See ask-phrases.js.
+let ASK_PHRASES = DEFAULT_ASK_PHRASES.slice();
+let ASK_MATCHER = buildAskMatcher(ASK_PHRASES);     // for the transcript probe
+
+function applyAskPhrases() {
+  setAskPhrases(ASK_PHRASES);                       // in-process (screen scraping)
+  ASK_MATCHER = buildAskMatcher(ASK_PHRASES);
+  const phrases = normalizePhrases(ASK_PHRASES);
+  const body = Object.assign({ phrases }, phraseSources(phrases));
+  fs.writeFileSync(path.join(app.getPath('userData'), 'swarm-phrases.json'),
+    JSON.stringify(body, null, 2));                 // for the hook process
+}
+
 function provisionStatusline() {
   const dir = app.getPath('userData');
   // Rewritten every launch so upgrades take.
   STATUSLINE_COMMAND = provisionNodeLauncher(dir, 'swarm-statusline.js', 'swarm-statusline');
   HOOK_COMMAND = provisionNodeLauncher(dir, path.join('hooks', 'swarm-signal.mjs'), 'swarm-signal');
   writeSwarmSettings();
+  applyAskPhrases();
 }
 
 // Append `--settings <ours>` so a launched Claude prints the context statusline.
@@ -178,7 +196,7 @@ process.on('unhandledRejection', (reason) => reportMainError(reason));
 // tell "waiting for a prompt" apart from "idle/done". We deliberately do NOT
 // surface Claude's token counter or activity words — just the four states.
 const { Terminal: HeadlessTerminal } = require('@xterm/headless');
-const { extractQuestion, countSubagents, contentEnd, snapshotRows } = require('./screen');
+const { extractQuestion, countSubagents, contentEnd, snapshotRows, setAskPhrases } = require('./screen');
 // The status state machine + «ждёт» latch + hook arbitration live in a pure,
 // unit-tested module; osc.js sniffs hook markers out of the raw pty stream.
 const { tickStatus, applyHook } = require('./detector');
@@ -622,6 +640,13 @@ ipcMain.handle('update:installer', async (_e, { url, filename }) => {
 ipcMain.on('settings:hooks', (_e, enabled) => {
   HOOKS_ENABLED = !!enabled;
   try { writeSwarmSettings(); } catch (e) { reportMainError(e); }
+});
+// Renderer pushes the «agent is calling me» phrases (on startup and on save). Takes
+// effect immediately for screen scraping; the hook picks the new file up on its next
+// run, so it applies within the current session too.
+ipcMain.on('settings:askPhrases', (_e, list) => {
+  ASK_PHRASES = normalizePhrases(list);
+  try { applyAskPhrases(); } catch (e) { reportMainError(e); }
 });
 
 ipcMain.on('update:relaunch', () => {

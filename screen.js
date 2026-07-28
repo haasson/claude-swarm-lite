@@ -2,6 +2,8 @@
 // Pure screen-scraping helpers for the status detector. Kept out of main.js so
 // they're unit-testable in plain node, like git.js / updater-core.js.
 
+const { DEFAULT_ASK_PHRASES, buildAskMatcher, asksWith } = require('./ask-phrases');
+
 // --- the snapshot window ------------------------------------------------------
 // What the detector actually looks at: the bottom rows of the emulator. The window
 // must be anchored to the last row that HAS content, never to buf.length.
@@ -87,13 +89,20 @@ const OPTIONS_RE = /[❯>→➜▸►▶]\s*\d+\.\s/;
 // actually asks for something. "Сейчас от тебя: ничего, жди результата" is the
 // opposite: the agent says nothing is needed. So the marker alone isn't enough —
 // if the first word after it is a nothing/wait word, it's NOT a request.
-const RE_ASK_MARK = /Сейчас от тебя/i;
-const RE_ASK_NONE = /Сейчас от тебя\s*[:.—-]*\s*(?:ничего|жд[иёе]|ждать|ждите|подожди(?:те)?|дождись|дождитесь|не\s+(?:нужно|требуется|надо))/i;
+// The phrases are the user's own convention (Settings → Запуск), so they're
+// configurable: ask-phrases.js owns the list and compiles the matcher, main pushes
+// the saved one in via setAskPhrases. Until then we run on the defaults.
+let askMatcher = buildAskMatcher(DEFAULT_ASK_PHRASES);
 
-// True only for a REAL «Сейчас от тебя» request (marker present, not a «ничего/жди»).
+// Swap in the user's phrases (called by main on startup and on save).
+function setAskPhrases(list) {
+  askMatcher = buildAskMatcher(list);
+}
+
+// True only for a REAL call-me request (a phrase is present, and it isn't a
+// «Сейчас от тебя: ничего, жди …»).
 function asksForInput(snapshot) {
-  const t = String(snapshot == null ? '' : snapshot);
-  return RE_ASK_MARK.test(t) && !RE_ASK_NONE.test(t);
+  return asksWith(askMatcher, snapshot);
 }
 
 // WHY a waiting agent is calling — for the pult chip, tab sub-label and notify.
@@ -139,6 +148,6 @@ function countSubagents(snapshot) {
 }
 
 module.exports = {
-  extractQuestion, inferWaitingKind, asksForInput, countSubagents,
+  extractQuestion, inferWaitingKind, asksForInput, setAskPhrases, countSubagents,
   contentEnd, snapshotRows,
 };

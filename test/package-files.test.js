@@ -83,6 +83,20 @@ test('every file opened via path.join(__dirname, ...) is listed in build.files',
   );
 });
 
+// index.html pulls its scripts by relative src, and one of them now climbs OUT of
+// renderer/ (../ask-phrases.js, shared with main). Same failure mode as an unpackaged
+// require, but silent: the window opens and one feature is just dead.
+test('every <script src> in index.html resolves and is packaged', () => {
+  const html = fs.readFileSync(path.join(root, 'renderer', 'index.html'), 'utf8');
+  const bad = [];
+  for (const m of html.matchAll(/<script\s+src=["']([^"']+)["']/g)) {
+    const rel = path.relative(root, path.resolve(path.join(root, 'renderer'), m[1]));
+    if (!fs.existsSync(path.join(root, rel))) bad.push(m[1] + ' (missing on disk)');
+    else if (!covered(rel)) bad.push(m[1] + ' (not in build.files)');
+  }
+  assert.deepStrictEqual(bad, [], 'broken script tags: ' + bad.join(', '));
+});
+
 test('all local requires resolve on disk', () => {
   assert.deepStrictEqual(unresolved, [], 'unresolvable requires: ' + unresolved.join(', '));
 });

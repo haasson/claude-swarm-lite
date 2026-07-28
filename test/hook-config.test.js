@@ -13,7 +13,7 @@ const CMD = 'sh "/tmp/launcher.sh"';
 test('registers exactly the events swarm-signal.mjs handles', () => {
   const events = Object.keys(hookSettings(CMD)).sort();
   assert.deepStrictEqual(events,
-    ['Notification', 'PermissionRequest', 'PreToolUse', 'Stop', 'UserPromptSubmit'].sort());
+    ['Notification', 'PermissionRequest', 'PostToolUse', 'PreToolUse', 'Stop', 'UserPromptSubmit'].sort());
 });
 
 test('every event points a command hook at the given launcher', () => {

@@ -539,6 +539,23 @@ let resumeSessions = localStorage.getItem('swarm.resumeSessions') === '1';
 // Opt-in «precise status via Claude hooks» (Settings → Запуск). Off by default;
 // main gets it on startup + on save and (de)activates the hooks in swarm-settings.
 let hooksEnabled = localStorage.getItem('swarm.hooks') === '1';
+// The phrases that mean «the agent is calling me» — the only signal that tells a
+// finished turn («готов») from a turn that ended with a question («ждёт ответа»).
+// It's the user's own CLAUDE.md convention, so it's editable (Settings → Запуск).
+// Kept as a plain list; main normalizes it and feeds both the screen detector and
+// the Stop hook. Empty list = «use the shipped default» (see ask-phrases.js).
+let askPhrases = loadAskPhrases();
+
+function loadAskPhrases() {
+  try {
+    const v = JSON.parse(localStorage.getItem('swarm.askPhrases') || '[]');
+    return Array.isArray(v) ? v.filter((s) => typeof s === 'string' && s.trim()) : [];
+  } catch (_) { return []; }
+}
+function saveAskPhrases() {
+  localStorage.setItem('swarm.askPhrases', JSON.stringify(askPhrases));
+  window.swarm.setAskPhrases(askPhrases);
+}
 
 // Split a "cmd --flags" line into { cmd, flags }: first token = launcher, rest = flags.
 function parseAgentLine(line) {
@@ -1034,6 +1051,25 @@ function showSettingsModal(tab) {
             <span class="set-check-tx">Точный статус через хуки Claude
               <span class="set-check-sub">различает разрешение и вопрос точно, без угадывания по экрану; только Claude Code, применяется к новым вкладкам</span></span>
           </label>
+          <div class="set-field">
+            <span class="set-label">Фразы, которыми агент зовёт вас</span>
+            <span class="set-hint set-hint-top">Клод заканчивает ход одинаково и когда сделал дело, и когда задал
+              вопрос. Отличить их можно только по тому, как агент заканчивает сообщение — поэтому вкладка
+              становится <span class="set-mono">ждёт ответа</span> по фразе. Работает и с хуками, и без.</span>
+            <textarea class="set-input" id="set-ask-phrases" rows="3" spellcheck="false"
+                      autocapitalize="off" autocorrect="off"
+                      placeholder="Сейчас от тебя"></textarea>
+            <span class="set-hint">По одной в строке. Заведите пару: правило в вашем <code>CLAUDE.md</code>
+              («заканчивай сообщение строкой <i>Сейчас от тебя: …</i>») — и та же фраза здесь.
+              Ищем в любом месте сообщения, регистр не важен; «…: ничего, жди» вопросом не считаем.
+              До 12 фраз, до 60 символов каждая. Пусто — вернётся фраза по умолчанию.</span>
+            <div class="ask-test">
+              <input class="set-input" type="text" id="set-ask-test" spellcheck="false"
+                     autocapitalize="off" autocorrect="off"
+                     placeholder="Проверить: вставьте конец сообщения агента" />
+              <span class="ask-verdict" id="set-ask-verdict"></span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1194,6 +1230,27 @@ function showSettingsModal(tab) {
   resumeI.checked = resumeSessions;
   const hooksI = overlay.querySelector('#set-hooks');
   hooksI.checked = hooksEnabled;
+  const askI = overlay.querySelector('#set-ask-phrases');
+  askI.value = askPhrases.join('\n');   // empty box = the default phrase (placeholder)
+  // Live «will this call me?» check. Runs the SAME matcher the detector and the hook
+  // use (window.SWARM_ASK_PHRASES), against the phrases as currently TYPED — so you
+  // can try a phrase before saving. Answers the one question the text can't: «ловится
+  // ли моя фраза вообще».
+  const askTestI = overlay.querySelector('#set-ask-test');
+  const askVerdictEl = overlay.querySelector('#set-ask-verdict');
+  const draftPhrases = () => askI.value.split('\n').map((s) => s.trim()).filter(Boolean);
+  const syncAskVerdict = () => {
+    const sample = askTestI.value.trim();
+    if (!sample) { askVerdictEl.textContent = ''; askVerdictEl.className = 'ask-verdict'; return; }
+    const AP = window.SWARM_ASK_PHRASES;
+    if (!AP) { askVerdictEl.textContent = ''; return; } // script missing: no check, but settings still work
+    const calls = AP.asksWith(AP.buildAskMatcher(draftPhrases()), sample);
+    askVerdictEl.textContent = calls ? 'позовёт → ждёт ответа' : 'не позовёт → готов';
+    askVerdictEl.className = 'ask-verdict ' + (calls ? 'is-call' : 'is-none');
+  };
+  askI.addEventListener('input', syncAskVerdict);
+  askTestI.addEventListener('input', syncAskVerdict);
+  syncAskVerdict();
   const pultI = overlay.querySelector('#set-pult');
   pultI.checked = pultEnabled;
 
@@ -1633,6 +1690,11 @@ function showSettingsModal(tab) {
       hooksEnabled = hooksI.checked;
       localStorage.setItem('swarm.hooks', hooksEnabled ? '1' : '0');
       window.swarm.setHooksEnabled(hooksEnabled); // main rewrites swarm-settings.json
+    }
+    const nextAsk = askI.value.split('\n').map((s) => s.trim()).filter(Boolean);
+    if (nextAsk.join('\n') !== askPhrases.join('\n')) {
+      askPhrases = nextAsk;
+      saveAskPhrases(); // main re-arms the screen detector and rewrites the hook file
     }
     pultEnabled = pultI.checked;
     localStorage.setItem('swarm.pult', pultEnabled ? '1' : '0');
@@ -2962,6 +3024,7 @@ applyNotify(localStorage.getItem('swarm.notify') !== '0'); // master notificatio
 // Tell main the saved hooks pref BEFORE restoring sessions, so swarm-settings.json
 // carries (or omits) the hooks block before the first claude spawn.
 window.swarm.setHooksEnabled(hooksEnabled);
+window.swarm.setAskPhrases(askPhrases); // same reason: the hook file must be current
 try { JSON.parse(localStorage.getItem('swarm.collapsed') || '[]').forEach((c) => collapsedFolders.add(c)); } catch (_) {}
 restoreOrStart();
 

@@ -42,6 +42,10 @@ contextBridge.exposeInMainWorld('swarm', {
   // (scoped to swarm sessions). Takes effect on sessions started after the change.
   setHooksEnabled: (on) => ipcRenderer.send('settings:hooks', on),
 
+  // The phrases that mean «the agent is calling me» (Settings → Запуск). Pushed on
+  // startup and on save; main feeds both the screen detector and the Stop hook.
+  setAskPhrases: (list) => ipcRenderer.send('settings:askPhrases', list),
+
   // Git plumbing for the branch status bar. Each call targets a folder path
   // (the active session's cwd). info → { isRepo, branch, ahead, behind, dirty };
   // branches → string[]; fetch/pull/checkout → { ok, error };

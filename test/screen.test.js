@@ -195,6 +195,20 @@ test('snapshotRows keeps blank rows that sit BETWEEN content', () => {
   assert.strictEqual(S.snapshotRows(fakeBuf(['a', '', 'b', '']), 16), 'a\n\nb');
 });
 
+// Runs LAST: it swaps the module-level matcher, and restores it at the end.
+test('setAskPhrases swaps the marker the scraper looks for', () => {
+  try {
+    S.setAskPhrases(['Жду твоего слова']);
+    assert.strictEqual(S.asksForInput('Жду твоего слова по деплою'), true);
+    assert.strictEqual(S.asksForInput('Сейчас от тебя: путь'), false, 'default is no longer active');
+    assert.strictEqual(S.inferWaitingKind('Жду твоего слова'), 'question');
+    assert.strictEqual(S.asksForInput('Жду твоего слова: ничего, жди'), false);
+  } finally {
+    S.setAskPhrases([]); // back to the shipped default
+  }
+  assert.strictEqual(S.asksForInput('Сейчас от тебя: путь'), true);
+});
+
 for (const [name, fn] of tests) {
   try { fn(); passed++; }
   catch (e) { console.error('FAIL: ' + name + '\n  ' + e.message); process.exitCode = 1; }
