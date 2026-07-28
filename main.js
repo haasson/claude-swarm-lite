@@ -223,6 +223,9 @@ function makeDetector(cols, rows) {
     // Hooks channel: once a marker arrives, hooksActive drives status; oscCarry
     // reassembles a marker split across pty chunks. See osc.js / detector.js.
     hooksActive: false, hookState: null, oscCarry: '',
+    // Transcript probe (read-only, see below): the .jsonl this tab was matched to.
+    cwd: '', startedAt: Date.now(),
+    trFile: null, trMtime: 0, trEntries: null, trStatus: '', trWhy: '', trLogged: '',
   };
 }
 
@@ -309,6 +312,99 @@ setInterval(() => {
     }
   }
 }, TICK_MS);
+
+// --- transcript probe: READ-ONLY experiment ----------------------------------
+// Claude writes every message to ~/.claude/projects/<slug>/<session>.jsonl as it
+// happens. That file can drive «работает / готов / ждёт-вопрос» with no screen
+// heuristics and no hook process per tool call (see transcript.js). Before betting
+// the UI on it, we run it ALONGSIDE the live detector and log where the two disagree.
+// Nothing here touches d.status — the tab keeps showing what it showed before.
+// Log: <userData>/transcript-probe.log.
+const transcript = require('./transcript');
+const TR_TICK_MS = 1000;
+const TR_TAIL_BYTES = 64 * 1024;   // plenty for the last few entries of a big file
+
+function trLogPath() { return path.join(app.getPath('userData'), 'transcript-probe.log'); }
+function trLog(line) {
+  try { fs.appendFileSync(trLogPath(), new Date().toISOString().slice(11, 23) + ' ' + line + '\n'); }
+  catch (_) { /* the probe must never break the app */ }
+}
+
+// Last `bytes` of a file as text, dropping the first (likely partial) line.
+function tailText(file, bytes) {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const size = fs.fstatSync(fd).size;
+    const len = Math.min(size, bytes);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, size - len);
+    const text = buf.toString('utf8');
+    return len < size ? text.slice(text.indexOf('\n') + 1) : text;
+  } finally { fs.closeSync(fd); }
+}
+
+// Find this tab's transcript: in the project folder for its cwd, the most recently
+// touched .jsonl that (a) was written since the tab opened, (b) isn't already taken
+// by another tab, and (c) records the SAME cwd inside — the folder name is a guess,
+// the recorded cwd is proof. Returns null until claude actually starts writing.
+function claimTranscript(d, taken) {
+  const dir = path.join(os.homedir(), '.claude', 'projects', transcript.projectSlug(d.cwd));
+  let names;
+  try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')); } catch (_) { return null; }
+  const cands = [];
+  for (const n of names) {
+    const file = path.join(dir, n);
+    if (taken.has(file)) continue;
+    let st;
+    try { st = fs.statSync(file); } catch (_) { continue; }
+    if (st.mtimeMs < d.startedAt - 2000) continue;   // untouched since this tab opened
+    cands.push({ file, mtime: st.mtimeMs });
+  }
+  cands.sort((a, b) => b.mtime - a.mtime);
+  for (const c of cands) {
+    try {
+      if (transcript.cwdOf(transcript.parseEntries(tailText(c.file, TR_TAIL_BYTES))) === d.cwd) return c.file;
+    } catch (_) { /* unreadable → next candidate */ }
+  }
+  return null;
+}
+
+setInterval(() => {
+  const now = Date.now();
+  const taken = new Set();
+  for (const d of det.values()) if (d.trFile) taken.add(d.trFile);
+  for (const [id, d] of det) {
+    if (d.dead || !d.cwd) continue;
+    try {
+      if (!d.trFile) {
+        const file = claimTranscript(d, taken);
+        if (!file) continue;
+        d.trFile = file;
+        taken.add(file);
+        trLog(`tab=${id} matched ${path.basename(file)}`);
+      }
+      // Re-read only when the file actually moved, but re-CLASSIFY every tick:
+      // «готов» arrives by the ready-debounce expiring, not by a new write.
+      const st = fs.statSync(d.trFile);
+      if (st.mtimeMs !== d.trMtime) {
+        d.trMtime = st.mtimeMs;
+        d.trEntries = transcript.parseEntries(tailText(d.trFile, TR_TAIL_BYTES));
+      }
+      const v = transcript.classify(d.trEntries || [], now, (t) => asksWith(ASK_MATCHER, t));
+      d.trStatus = v ? v.status + (v.kind ? ':' + v.kind : '') : '?';
+      d.trWhy = v ? v.why : 'no entries';
+      const shown = d.status + (d.waitingKind ? ':' + d.waitingKind : '');
+      const key = shown + ' | ' + d.trStatus;
+      if (key !== d.trLogged) {
+        d.trLogged = key;
+        const mark = shown === d.trStatus ? 'ok  ' : 'DIFF';
+        trLog(`${mark} tab=${id} экран=${shown} стенограмма=${d.trStatus} (${d.trWhy})`);
+      }
+    } catch (e) {
+      d.trFile = null;   // file rotated / deleted → re-claim next tick
+    }
+  }
+}, TR_TICK_MS);
 
 // Window/taskbar chrome icon. nativeImage.createFromPath does NOT work for paths
 // inside app.asar — read the bytes and build an image (fs CAN read asar).
@@ -520,7 +616,9 @@ ipcMain.handle('session:create', (_event, opts = {}) => {
   });
 
   sessions.set(id, child);
-  det.set(id, makeDetector(opts.cols, opts.rows));
+  const d0 = makeDetector(opts.cols, opts.rows);
+  d0.cwd = cwd;                       // the transcript probe matches files by cwd
+  det.set(id, d0);
 
   child.onData((data) => {
     feedDetector(id, data);
