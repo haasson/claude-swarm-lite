@@ -1005,6 +1005,22 @@ function tgRenameTopic(id) {
   tgTopicCall('editForumTopic', threadId, { name: d.name.slice(0, 128) }).catch(reportMainError);
 }
 
+// Everything the bridge has to let go of when a tab ends, in one place BECAUSE there are
+// two ways a tab ends: the shell exits on its own (onExit), or you close the tab and we
+// kill it (session:kill). The kill path used to drop the detector immediately, so onExit
+// found nothing to clean up and none of this ran on the ordinary close — the topic stayed
+// open in the group, the tab stayed in «answering from a phone» mode, and a pending notify
+// timer went on to post permission buttons for a tab that no longer exists.
+//
+// Idempotent: whichever path gets here first does the work, the other finds `dead` set.
+function tgOnTabGone(d) {
+  if (!d || d.dead) return;
+  d.dead = true;
+  tgCancelWaiting(d);
+  tgClearMode(d);
+  tgCloseTopic(d);             // the topic list mirrors the open tabs
+}
+
 // The tab is gone: say so in its topic and close it.
 function tgCloseTopic(d) {
   const threadId = tgTopicOf(d);
@@ -1736,13 +1752,7 @@ ipcMain.handle('session:create', (_event, opts = {}) => {
   });
 
   child.onExit(({ exitCode }) => {
-    const d = det.get(id);
-    if (d) {
-      d.dead = true;
-      tgCancelWaiting(d);
-      tgClearMode(d);
-      tgCloseTopic(d);           // the topic list mirrors the open tabs
-    }
+    tgOnTabGone(det.get(id));
     sessions.delete(id);
     safeSend('session:exit', { id, code: exitCode });
   });
@@ -1830,6 +1840,9 @@ ipcMain.on('session:resize', (_event, { id, cols, rows }) => {
 
 // --- IPC: close a tab --------------------------------------------------------
 ipcMain.on('session:kill', (_event, { id }) => {
+  // BEFORE the detector goes away: the Telegram side needs it to know which topic to close
+  // and which timer to cancel. Dropping it first is why closing a tab left its topic open.
+  tgOnTabGone(det.get(id));
   const p = sessions.get(id);
   if (p) {
     try { p.kill(); } catch (_) {}
