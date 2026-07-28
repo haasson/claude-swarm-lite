@@ -240,6 +240,59 @@ const PERM = [
   '  Esc to cancel',
 ].join('\n');
 
+// НАСТОЯЩИЙ экран Claude Code 2.1.220, снятый с живого TUI (pty + xterm), а не придуманный.
+// Фикстура выше (PERM) — в рамке, и ровно поэтому тесты были зелёными, пока бот в бою
+// отвечал «вариантов не разобрал» на КАЖДЫЙ запрос разрешения: настоящий диалог рисуется
+// без вертикальной рамки, только горизонтальными линейками, а парсер требовал рамку.
+const PERM_REAL_EDIT = [
+  '❯ Создай файл zametka.txt со словом привет. Только это, без объяснений.                             ',
+  '',
+  '⏺ Write(zametka.txt)',
+  '',
+  '────────────────────────────────────────────────────────────────────────────────────────────────────',
+  ' Create file',
+  ' zametka.txt',
+  '╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌',
+  '  1 привет',
+  '╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌',
+  ' Do you want to create zametka.txt?',
+  ' ❯ 1. Yes',
+  '   2. Yes, allow all edits during this session (shift+tab)',
+  '   3. No',
+  '',
+  ' Esc to cancel · Tab to amend',
+].join('\n');
+
+// Второй настоящий: «доверяешь ли папке» на первом запуске в новой папке. Тоже без рамки.
+const PERM_REAL_TRUST = [
+  ' Claude Code\'ll be able to read, edit, and execute files here.',
+  '',
+  ' Security guide',
+  '',
+  ' ❯ 1. Yes, I trust this folder',
+  '   2. No, exit',
+  '',
+  ' Enter to confirm · Esc to cancel',
+].join('\n');
+
+test('parsePrompt разбирает НАСТОЯЩИЙ запрос разрешения (без рамки, с линейками)', () => {
+  const p = S.parsePrompt(PERM_REAL_EDIT);
+  assert.ok(p, 'настоящий диалог обязан разбираться — иначе кнопок нет вообще');
+  assert.deepStrictEqual(p.options.map((o) => o.n), [1, 2, 3]);
+  assert.strictEqual(p.options[0].text, 'Yes');
+  assert.strictEqual(p.options[2].text, 'No');
+  // Заголовок — вопрос, а НЕ строки диффа над ним: «1 привет» не должно уехать в кнопку.
+  assert.strictEqual(p.title, 'Do you want to create zametka.txt?');
+  assert.ok(!/привет/.test(p.title), 'содержимое файла не заголовок: ' + p.title);
+  assert.ok(!/Tab to amend/.test(p.title), 'подсказка не заголовок: ' + p.title);
+});
+
+test('parsePrompt разбирает НАСТОЯЩИЙ вопрос про доверие папке', () => {
+  const p = S.parsePrompt(PERM_REAL_TRUST);
+  assert.ok(p, 'диалог доверия тоже отвечается номером');
+  assert.deepStrictEqual(p.options.map((o) => o.text), ['Yes, I trust this folder', 'No, exit']);
+});
+
 test('parsePrompt returns every option Claude offered, numbered', () => {
   const p = S.parsePrompt(PERM);
   assert.deepStrictEqual(p.options.map((o) => o.n), [1, 2, 3]);

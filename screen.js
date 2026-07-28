@@ -43,7 +43,9 @@ function snapshotRows(buf, rows) {
 // A selection row before the answer: "❯ 1. Yes". Claude Code paints ❯, but
 // Cursor / some terminals use an arrow (→ ▸ ▶) or a plain ">".
 const OPTION_RE = /^\s*[❯>→➜▸►▶]?\s*\d+\.\s/;
-const HINT_RE = /Esc to cancel|Enter to confirm/i;
+// Подсказки под диалогом. «Tab to amend» — из живого Claude Code 2.1.220; без неё строка
+// подсказки уезжала в текст кнопки как часть вопроса.
+const HINT_RE = /Esc to cancel|Enter to confirm|Tab to amend/i;
 // Claude Code's own furniture around the input box: the mode line, the shortcut hints,
 // the context meter. It sits BELOW the agent's prose, so a bottom-up scan hits it first
 // and would happily quote «⏵⏵ auto mode on (shift+tab to cycle) · ← for agents» to the
@@ -146,14 +148,36 @@ function fingerprintOf(text) {
 // разборе. Поэтому три требования: рамка, непрерывность, нумерация с 1 без дублей.
 const FRAME_RE = /[│┃╭╰┌└├]/;
 const GAP_MAX = 2;   // внутри бокса между вариантами бывает пустая строка рамки
+// Маркер выбора Ink: он есть в ЛЮБОМ диалоге выбора и не бывает в прозе агента.
+const MARKER_RE = /^[❯>→➜▸►▶]\s*\d+\.\s/;
+// Линейка — граница блока в диалоге без рамки: сплошная сверху, пунктирная вокруг диффа.
+const RULE_RE = /^[\s─━╌╍┄┅┈┉═_-]+$/;
+const ANCHOR_BELOW = 3;   // на сколько строк ниже блока искать «Esc to cancel»
+
+// Строка-подсказка под блоком («Esc to cancel · Tab to amend») — признак, что это диалог, а
+// не нумерованный список в прозе. Ищем чуть ниже последнего варианта: между ними бывает
+// пустая строка.
+function hintBelow(lines, from) {
+  for (let i = from + 1; i <= from + ANCHOR_BELOW && i < lines.length; i++) {
+    if (HINT_RE.test(clean(lines[i]))) return true;
+  }
+  return false;
+}
 
 function parsePrompt(snapshot) {
   const lines = String(snapshot == null ? '' : snapshot).split('\n');
   // 1. Все кандидаты вместе с сырой строкой: рамку проверяем по ней, до clean().
   const hits = [];
   for (let i = 0; i < lines.length; i++) {
-    const m = clean(lines[i]).match(OPTION_LINE_RE);
-    if (m) hits.push({ i, n: Number(m[1]), text: m[2], framed: FRAME_RE.test(lines[i]) });
+    const t = clean(lines[i]);
+    const m = t.match(OPTION_LINE_RE);
+    if (m) {
+      hits.push({
+        i, n: Number(m[1]), text: m[2],
+        framed: FRAME_RE.test(lines[i]),
+        marked: MARKER_RE.test(t),
+      });
+    }
   }
   // 2. Разбиваем на непрерывные блоки.
   const blocks = [];
@@ -162,12 +186,20 @@ function parsePrompt(snapshot) {
     if (last && h.i - last[last.length - 1].i <= GAP_MAX) last.push(h);
     else blocks.push([h]);
   }
-  // 3. Годный блок: в рамке, минимум два варианта, номера идут 1..N без повторов. Живой
-  //    запрос всегда снизу, поэтому берём последний годный.
+  // 3. Годный блок: минимум два варианта, номера 1..N без повторов и ПРИВЯЗКА к диалогу.
+  //    Живой запрос всегда снизу, поэтому берём последний годный.
+  //
+  //    Привязка — три признака, любой достаточен. Рамки одной мало: Claude Code (2.1.220)
+  //    рисует запросы БЕЗ вертикальной рамки, только горизонтальными линейками, и
+  //    требование рамки отбраковывало все настоящие диалоги — бот отвечал «вариантов не
+  //    разобрал» на каждый запрос разрешения. Проверено на снятых с живого TUI экранах
+  //    (см. фикстуры PERM_REAL_* в тестах).
   let block = null;
   for (const b of blocks) {
-    if (b.length < 2 || !b.some((h) => h.framed)) continue;
+    if (b.length < 2) continue;
     if (b.some((h, k) => h.n !== k + 1)) continue;
+    const anchored = b.some((h) => h.framed || h.marked) || hintBelow(lines, b[b.length - 1].i);
+    if (!anchored) continue;
     block = b;
   }
   if (!block) return null;
@@ -176,13 +208,16 @@ function parsePrompt(snapshot) {
     text: h.text.length > OPT_TEXT_MAX ? h.text.slice(0, OPT_TEXT_MAX - 1).trimEnd() + '…' : h.text,
   }));
   // 4. Заголовок — над БЛОКОМ (там «Bash command», сама команда, «Do you want to proceed?»),
-  //    а не над первой цифрой на экране.
+  //    а не над первой цифрой на экране. Идём ВВЕРХ и останавливаемся на линейке: в диалоге
+  //    правки над вопросом стоит пунктир, а выше него — сам дифф, и без остановки в текст
+  //    кнопки уезжали строки файла («1 привет») вместо вопроса.
   const head = [];
-  for (let i = Math.max(0, block[0].i - TITLE_LINES); i < block[0].i; i++) {
+  for (let i = block[0].i - 1; i >= 0 && block[0].i - i <= TITLE_LINES; i--) {
     const t = clean(lines[i]);
+    if (RULE_RE.test(lines[i]) && !HAS_TEXT_RE.test(t)) break;
     if (!t || !HAS_TEXT_RE.test(t)) continue;
     if (STATUSLINE_RE.test(t) || CHROME_RE.test(t) || HINT_RE.test(t)) continue;
-    head.push(t);
+    head.unshift(t);
   }
   let title = head.join(' · ');
   if (title.length > TITLE_MAX) title = title.slice(0, TITLE_MAX - 1).trimEnd() + '…';
