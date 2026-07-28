@@ -765,6 +765,9 @@ async function tgConnect() {
   tgPoller.start();
   tgApplyKeepAwake();
   tgPush();
+  // Restored tabs after a relaunch: reopen/create their topics without waiting for one to
+  // speak. Delayed a little so the renderer has finished restoring and naming them.
+  setTimeout(() => tgEnsureTopics().catch(reportMainError), 4000);
 }
 
 // --- routing ------------------------------------------------------------------
@@ -830,6 +833,11 @@ async function tgTopicFor(id) {
   tgTopicSession.set(threadId, id);
   d.tgTopicLive = true;
   d.tgTopicName = tgTabName(id);
+  // Say what this topic is for, and leave a message worth replying to. An empty topic
+  // gives you nothing to aim at; this line is the anchor for «пиши сюда».
+  const where = d.cwd ? '\n' + d.cwd : '';
+  tgRemember(await tgSend({ threadId, text: `Вкладка «${tgTabName(id)}».${where}\n\nПиши сюда — попадёт в этого агента.`, silent: true }), id);
+  tgLog(`  создана тема ${threadId} для вкладки ${id}`);
   return threadId;
 }
 
@@ -874,6 +882,25 @@ function tgCloseTopic(d) {
   tgSend({ threadId, text: '⚪ вкладка закрыта', silent: true })
     .then(() => tgTopicCall('closeForumTopic', threadId))
     .catch(reportMainError);
+}
+
+// Every live tab gets its topic NOW, not when it happens to speak. A topic is the only
+// address a phone has: without one you can't start a task from the group at all, and the
+// group's topic list is supposed to BE the tab list — including the quiet tabs.
+// Sequential on purpose: a burst of createForumTopic on a dozen tabs is exactly what
+// Telegram's rate limiter is for.
+let tgEnsuring = false;
+
+async function tgEnsureTopics() {
+  if (tgEnsuring || TG.chatId == null || !TG.isForum) return;
+  tgEnsuring = true;
+  try {
+    for (const [id, d] of [...det]) {
+      if (d.dead || !d.tabKey || !sessions.has(id)) continue;
+      if (TG.topics[d.tabKey]) { tgTopicSession.set(TG.topics[d.tabKey], id); continue; }
+      await tgTopicFor(id);
+    }
+  } catch (e) { reportMainError(e); } finally { tgEnsuring = false; }
 }
 
 // The decision itself is in telegram.js (and unit-tested there); main only supplies the
@@ -1044,6 +1071,7 @@ async function tgBindChat(chatId, threadId) {
   });
   tgApplyKeepAwake();
   tgPush();
+  tgEnsureTopics().catch(reportMainError);   // темы для уже открытых вкладок
   return true;
 }
 
@@ -1589,7 +1617,11 @@ ipcMain.on('tabs:name', (_e, { id, name } = {}) => {
   const d = det.get(String(id));
   if (!d) return;
   d.name = String(name || '');
-  tgRenameTopic(String(id));     // the group's topic follows the tab's name
+  // No topic yet (a new tab, or one restored after a relaunch) → make it now, so you can
+  // write to this tab from the phone before it ever speaks. Already has one → a rename,
+  // so move the topic's title along with it.
+  if (!tgTopicOf(d)) tgEnsureTopics().catch(reportMainError);
+  else tgRenameTopic(String(id));
 });
 
 ipcMain.on('settings:askPhrases', (_e, list) => {
