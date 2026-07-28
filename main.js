@@ -354,10 +354,19 @@ setInterval(() => {
         if (next.status === 'waiting') tgOnWaiting(id);
         else tgCancelWaiting(d);
         // Turn finished on a task that came from the phone → report back there.
-        if (next.status === 'ready' && prev === 'running' && TG.chatId != null
-            && (d.tgMode || TG.mirrorAll || tgAway())) {
-          tgNotifyDone(id, d).catch(reportMainError);
+        const relay = next.status === 'ready' && prev === 'running' && TG.chatId != null
+          && (d.tgMode || TG.mirrorAll || tgAway());
+        // В журнал — КАЖДАЯ смена статуса вкладки, за которой следит телеграм, и решение
+        // про итог. Без этого «в телегу ничего не пришло» неотличимо от «ход не считался
+        // законченным»: журнал показывал входящее сообщение и обрывался, а дальше начинались
+        // догадки. Пишем и причину отказа, а не только факт.
+        if (TG.chatId != null && (d.tgMode || TG.mirrorAll)) {
+          tgLog(`  вкладка ${id}: ${prev} → ${next.status}${kind ? ':' + kind : ''}`
+            + ` · итог ${relay ? 'отправляю' : 'нет'}`
+            + (relay ? '' : ` (нужен переход работает→готов; режим тлг=${d.tgMode ? 'да' : 'нет'}`
+              + `, зеркало=${TG.mirrorAll ? 'да' : 'нет'}, отошёл=${tgAway() ? 'да' : 'нет'})`));
         }
+        if (relay) tgNotifyDone(id, d).catch(reportMainError);
       }
     } catch (_) {
       // A detector hiccup must never crash the app or freeze the UI.
@@ -692,10 +701,16 @@ async function tgSend(opts) {
     }
     if (!res.ok || !res.body || res.body.ok !== true) {
       tgError = telegram.classifyError(res.status, res.body).message;
+      // Отказ Telegram — самая важная строка в журнале: без неё «в чат ничего не пришло»
+      // выглядит как «приложение не пыталось», хотя оно пыталось и получило отлуп.
+      tgLog(`  ✗ не отправлено (тема ${body.message_thread_id == null ? 'общая' : body.message_thread_id}):`
+        + ` HTTP ${res.status} ${(res.body && res.body.description) || ''}`);
       tgPush();
       return last;
     }
     last = res.body.result && res.body.result.message_id;
+    tgLog(`  → отправлено ${last} в тему ${body.message_thread_id == null ? 'общую' : body.message_thread_id}`
+      + `: ${JSON.stringify(part.slice(0, 50))}`);
   }
   return last;
 }
@@ -1369,6 +1384,7 @@ function tgCancelWaiting(d) {
 // in the chat and the bridge would become a log nobody reads.
 async function tgNotifyDone(id, d) {
   const text = String(d.trReply || '').trim();
+  tgLog(`  → итог вкладки ${id}: ${text ? text.length + ' симв.' : 'текста нет (стенограмма не привязана)'}`);
   const msgId = await tgSend({
     threadId: await tgTopicFor(id),
     text: `✅ ${tgTabName(id)}${text ? '\n\n' + text : ' — готов.'}`,
@@ -1380,6 +1396,7 @@ async function tgNotifyDone(id, d) {
 async function tgNotifyWaiting(id, d) {
   const permission = d.waitingKind === 'permission';
   const threadId = await tgTopicFor(id);
+  tgLog(`  → ${permission ? 'запрос разрешения' : 'вопрос'} вкладки ${id} в тему ${threadId == null ? 'общую' : threadId}`);
   // A permission is answered with BUTTONS carrying Claude's own options — never with free
   // text. You approve what you see: the request (with the command in it) is in the message,
   // and nothing that wasn't on Claude's list can be chosen. Typing «да» here still gets
