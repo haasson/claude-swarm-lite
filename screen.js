@@ -116,6 +116,59 @@ function asksForInput(snapshot) {
   return asksWith(askMatcher, snapshot);
 }
 
+// --- the prompt box as data ---------------------------------------------------
+// A permission / choice prompt, parsed into something answerable from a phone: WHAT is
+// being asked (including the command, when Claude shows one) and the options it offered.
+//
+// The whole point is that you approve what you SEE: the buttons carry Claude's own
+// options, so nothing can be approved that wasn't on the list. The fingerprint is the
+// safety catch — the prompt on screen may have changed between us sending the message
+// and you tapping a button, and printing «2» into whatever replaced it would be the
+// worst thing this bridge could do.
+const OPTION_LINE_RE = /^\s*[❯>→➜▸►▶]?\s*(\d+)\.\s+(.*\S)/;
+const OPT_TEXT_MAX = 58;   // a Telegram inline button label, not a paragraph
+const TITLE_MAX = 300;
+const TITLE_LINES = 5;     // how far above the first option we look for the question
+
+// Deterministic, dependency-free hash (djb2) — this only has to detect CHANGE, so a
+// short base36 digest is plenty and keeps this module pure.
+function fingerprintOf(text) {
+  let h = 5381;
+  const t = String(text == null ? '' : text).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+  for (let i = 0; i < t.length; i++) h = ((h * 33) ^ t.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+function parsePrompt(snapshot) {
+  const lines = String(snapshot == null ? '' : snapshot).split('\n');
+  const options = [];
+  let firstAt = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const m = clean(lines[i]).match(OPTION_LINE_RE);
+    if (!m) continue;
+    if (firstAt === -1) firstAt = i;
+    const text = m[2].length > OPT_TEXT_MAX ? m[2].slice(0, OPT_TEXT_MAX - 1).trimEnd() + '…' : m[2];
+    options.push({ n: Number(m[1]), text });
+  }
+  if (options.length < 2) return null;   // one option is not a choice; likely a false hit
+  // Everything above the first option that still looks like prose: «Bash command»,
+  // the command itself, «Do you want to proceed?». That's what you're approving.
+  const head = [];
+  for (let i = Math.max(0, firstAt - TITLE_LINES); i < firstAt; i++) {
+    const t = clean(lines[i]);
+    if (!t || !HAS_TEXT_RE.test(t)) continue;
+    if (STATUSLINE_RE.test(t) || CHROME_RE.test(t) || HINT_RE.test(t)) continue;
+    head.push(t);
+  }
+  let title = head.join(' · ');
+  if (title.length > TITLE_MAX) title = title.slice(0, TITLE_MAX - 1).trimEnd() + '…';
+  return {
+    title,
+    options,
+    fingerprint: fingerprintOf(title + '|' + options.map((o) => o.n + o.text).join('|')),
+  };
+}
+
 // WHY a waiting agent is calling — for the pult chip, tab sub-label and notify.
 // Only sensible once status is already «waiting». Returns:
 //   'permission' — a tool/edit approval prompt (act fast: yes/no)
@@ -160,5 +213,6 @@ function countSubagents(snapshot) {
 
 module.exports = {
   extractQuestion, inferWaitingKind, asksForInput, setAskPhrases, countSubagents,
+  parsePrompt, fingerprintOf,
   contentEnd, snapshotRows,
 };

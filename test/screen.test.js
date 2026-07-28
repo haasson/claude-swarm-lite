@@ -226,6 +226,56 @@ test('extractQuestion returns null rather than chrome when there is no prose', (
   assert.strictEqual(S.extractQuestion('> \n  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents'), null);
 });
 
+// --- parsePrompt: the prompt box as something answerable from a phone ---------
+
+const PERM = [
+  '╭──────────────────────────────────────────╮',
+  '│ Bash command                             │',
+  '│ rm -rf build                             │',
+  '│ Do you want to proceed?                  │',
+  '│ ❯ 1. Yes                                 │',
+  '│   2. Yes, and don\'t ask again            │',
+  '│   3. No, and tell Claude what to do      │',
+  '╰──────────────────────────────────────────╯',
+  '  Esc to cancel',
+].join('\n');
+
+test('parsePrompt returns every option Claude offered, numbered', () => {
+  const p = S.parsePrompt(PERM);
+  assert.deepStrictEqual(p.options.map((o) => o.n), [1, 2, 3]);
+  assert.strictEqual(p.options[0].text, 'Yes');
+  assert.strictEqual(p.options[2].text, 'No, and tell Claude what to do');
+});
+
+test('parsePrompt keeps the command being approved in the title', () => {
+  const p = S.parsePrompt(PERM);
+  assert.ok(p.title.includes('rm -rf build'), p.title);
+  assert.ok(p.title.includes('Do you want to proceed?'), p.title);
+  assert.ok(!/Esc to cancel/.test(p.title), 'chrome must not leak into the title');
+});
+
+test('parsePrompt says null when there is no choice on screen', () => {
+  assert.strictEqual(S.parsePrompt('Просто текст\n> '), null);
+  assert.strictEqual(S.parsePrompt('❯ 1. Yes'), null, 'a single option is not a choice');
+  assert.strictEqual(S.parsePrompt(''), null);
+});
+
+test('parsePrompt fingerprint changes with the prompt, not with its repaint', () => {
+  const a = S.parsePrompt(PERM).fingerprint;
+  // Same prompt, redrawn with the cursor on another option and different padding.
+  const redrawn = PERM.replace('❯ 1. Yes', '  1. Yes').replace('  2. Yes', '❯ 2. Yes');
+  assert.strictEqual(S.parsePrompt(redrawn).fingerprint, a, 'a repaint is not a new request');
+  const other = PERM.replace('rm -rf build', 'rm -rf /');
+  assert.notStrictEqual(S.parsePrompt(other).fingerprint, a, 'another command IS a new request');
+});
+
+test('parsePrompt caps a long option label so it fits a button', () => {
+  const long = PERM.replace('2. Yes, and don\'t ask again', '2. ' + 'да '.repeat(60));
+  const opt = S.parsePrompt(long).options.find((o) => o.n === 2);
+  assert.ok(opt.text.length <= 58, opt.text.length);
+  assert.ok(opt.text.endsWith('…'));
+});
+
 // Runs LAST: it swaps the module-level matcher, and restores it at the end.
 test('setAskPhrases swaps the marker the scraper looks for', () => {
   try {
