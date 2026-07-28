@@ -34,6 +34,10 @@
   <main id="stage">
     <div id="pult-strip"></div>
     <div id="pult-empty">Никто не ждёт ответа</div>
+    <!-- Shown for ~1.2s when the pult hands the terminal to the NEXT agent on
+         its own. Filled by flashHandoff(); pointer-none so you can start typing
+         the answer straight through it. -->
+    <div id="pult-flash"></div>
   </main>
 
   <!-- Bottom status bar: git branch of the ACTIVE session's folder (VS Code

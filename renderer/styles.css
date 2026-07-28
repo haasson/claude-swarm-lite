@@ -1078,6 +1078,81 @@ body.pult-on.pult-empty #pult-empty { display: flex; }
 .pult-chip.kind-permission .pult-kind { background: var(--permission); }
 .pult-chip.kind-permission .dot { background: var(--permission); }
 
+/* --- pult: auto-handoff cue ------------------------------------------------
+   Only when the queue advances BY ITSELF (you answered, the next agent took the
+   terminal). Manual picks — a chip, the Пульт tab, ⌘0, ⌘1–9 — stay instant and
+   silent: you already know where you're going. One colour drives all three
+   pieces (plaque, ring, chip pulse); amber for a permission prompt. */
+body.pult-handoff { --handoff-c: var(--waiting); }
+body.pult-handoff.handoff-permission { --handoff-c: var(--permission); }
+
+#pult-flash {
+  position: absolute;
+  top: 48px;                 /* clears the 34px strip + the holder's 6px inset */
+  left: 50%;
+  z-index: 4;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 10px 18px;
+  border: 1px solid var(--handoff-c);
+  border-radius: 10px;
+  /* Opaque: it lands on top of live terminal text, and a see-through plaque
+     turns both into noise. */
+  background: var(--panel);
+  box-shadow: 0 10px 30px -8px #000;
+  text-align: center;
+  /* Answer the new agent straight away — the plaque must not eat that click or
+     keystroke while it fades. */
+  pointer-events: none;
+}
+body.pult-handoff #pult-flash {
+  display: flex;
+  animation: pult-flash 1200ms ease-out forwards;
+}
+.pf-head { display: flex; align-items: baseline; gap: 8px; }
+.pf-arrow { color: var(--handoff-c); font-size: 15px; }
+.pf-name { font-size: 17px; font-weight: 700; color: var(--text); }
+.pf-sub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.pf-kind {
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  color: #101418;
+  background: var(--handoff-c);
+}
+@keyframes pult-flash {
+  0%   { opacity: 0; transform: translate(-50%, -10px); }
+  10%  { opacity: 1; transform: translate(-50%, 0); }
+  70%  { opacity: 1; transform: translate(-50%, 0); }
+  100% { opacity: 0; transform: translate(-50%, -6px); }
+}
+
+/* Ring around the terminal that just took over. Sits in the 6px stage gutter,
+   so it costs the grid nothing — no refit. */
+body.pult-handoff .term-holder.active { animation: pult-handoff-ring 1200ms ease-out forwards; }
+@keyframes pult-handoff-ring {
+  0%   { box-shadow: 0 0 0 2px var(--handoff-c), 0 0 24px -4px var(--handoff-c); }
+  70%  { box-shadow: 0 0 0 2px var(--handoff-c), 0 0 24px -4px var(--handoff-c); }
+  100% { box-shadow: 0 0 0 2px transparent, 0 0 24px -4px transparent; }
+}
+
+/* Ties the plaque back to its place in the queue. */
+.pult-chip.handoff { --handoff-c: var(--waiting); animation: pult-chip-pulse 1200ms ease-out forwards; }
+.pult-chip.handoff.kind-permission { --handoff-c: var(--permission); }
+@keyframes pult-chip-pulse {
+  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--handoff-c) 60%, transparent); }
+  100% { box-shadow: 0 0 0 6px transparent; }
+}
+
 /* Pinned first in #tabs, above every folder group. Not a .tab — that class is a
    grid with dot/label/ctx/sub slots this doesn't have. */
 .pult-tab {
@@ -1117,7 +1192,8 @@ body.pult-on.pult-empty #pult-empty { display: flex; }
   justify-content: center;
   gap: 3px;
 }
-.layout-top .pult-tab .pult-count { margin-left: 0; }
+/* Под словом каунтер выравнивается по центру вкладки, а не по её левому краю. */
+.layout-top .pult-tab .pult-count { margin-left: 0; align-self: center; }
 .layout-top .pult-tab .pult-count[hidden] { display: block; visibility: hidden; }
 .upd-status { margin-top: 8px; }
 

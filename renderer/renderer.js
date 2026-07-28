@@ -279,6 +279,13 @@ let pultEnabled = localStorage.getItem('swarm.pult') !== '0'; // Settings → В
 let pultOn = false;      // pult mode active right now
 let pultPick = null;     // id of the agent whose terminal the pult shows
 let pultTimer = null;    // 1s tick, only while pultOn — chips show a live timer
+// The pult can change pultPick two ways: because YOU picked a chip / opened it,
+// or because the queue advanced on its own after you answered someone. Only the
+// second one is a surprise, so only it gets the handoff cue below.
+let pultPickManual = false; // set right before renderPult() by a user gesture
+let pultFlashAt = 0;        // Date.now() of the running handoff cue (0 = none)
+let pultFlashTimer = null;
+const PULT_FLASH_MS = 1200; // keep in sync with the CSS animations
 let renaming = false;       // true while a card title is being edited (don't steal focus)
 let notifyEnabled = true;   // master switch: system notifications for background agents
 // Finer notification prefs (all default on), editable in Settings → Уведомления.
@@ -1762,6 +1769,9 @@ function activate(id, opts) {
   // keyboard tab-switch with the mouse still over a link never fires the addon's
   // `leave` — drop any stale tip so it doesn't float over the new terminal.
   hideLinkTip();
+  // A switch you asked for (tab click, ⌘1–9) needs no announcement, and kills a
+  // handoff cue that may still be fading from the pult.
+  if (!(opts && opts.pult)) clearHandoff();
   if (!(opts && opts.pult) && pultOn) setPult(false);
   // The diff overlay is a snapshot of the PREVIOUS active folder. Switching to a
   // different session — a tab click, ⌘1–⌘9, or the pult auto-advancing its queue
@@ -1895,8 +1905,16 @@ function renderPult() {
   document.body.classList.toggle('pult-empty', q.length === 0);
   // Hold the current pick while it's still waiting; otherwise take the head.
   // This is what makes the queue advance on its own once you've answered.
+  const prevPick = pultPick;
   if (!q.some((s) => s.id === pultPick)) pultPick = q.length ? q[0].id : null;
-  if (pultPick && pultPick !== activeId) activate(pultPick, { pult: true });
+  if (pultPick && pultPick !== activeId) {
+    // Landing on a DIFFERENT agent without asking for it: the terminal under
+    // your eyes is about to become someone else's. Announce who.
+    const auto = !pultPickManual && pultPick !== prevPick;
+    activate(pultPick, { pult: true });
+    if (auto) flashHandoff(sessions.get(pultPick));
+  }
+  pultPickManual = false;
 
   const strip = document.getElementById('pult-strip');
   strip.innerHTML = '';
@@ -1928,9 +1946,74 @@ function renderPult() {
     // The parsed question still makes a useful tooltip, but we don't print it on
     // the chip — the chip is just name + timer.
     if (s.question) chip.title = s.question;
-    chip.addEventListener('click', () => { pultPick = s.id; renderPult(); });
+    // The strip is rebuilt every second, so a chip mid-pulse is a NEW element:
+    // resume its animation where the old one left off instead of restarting it.
+    if (s.id === pultPick && pultFlashAt && now - pultFlashAt < PULT_FLASH_MS) {
+      chip.classList.add('handoff');
+      chip.style.animationDelay = -(now - pultFlashAt) + 'ms';
+    }
+    chip.addEventListener('click', () => {
+      clearHandoff();
+      pultPick = s.id;
+      pultPickManual = true;
+      renderPult();
+    });
     strip.appendChild(chip);
   }
+}
+
+// The pult moved the terminal to another agent by itself. Say who, loudly enough
+// to catch the eye but without stealing a beat: the terminal has already
+// switched underneath. The plaque sits at the TOP of the stage so it never
+// covers the prompt you're about to answer, and it's pointer-none — you can
+// start typing into the new terminal while it's still fading.
+function flashHandoff(s) {
+  const el = document.getElementById('pult-flash');
+  if (!el || !s) return;
+
+  const head = document.createElement('div');
+  head.className = 'pf-head';
+  const arrow = document.createElement('span');
+  arrow.className = 'pf-arrow';
+  arrow.textContent = '→';
+  const nm = document.createElement('span');
+  nm.className = 'pf-name';
+  nm.textContent = s.tab.querySelector('.label').textContent;
+  head.append(arrow, nm);
+
+  const sub = document.createElement('div');
+  sub.className = 'pf-sub';
+  if (s.waitKind) {
+    const kd = document.createElement('span');
+    kd.className = 'pf-kind';
+    kd.textContent = KIND_LABEL[s.waitKind];
+    sub.append(kd);
+  }
+  const tm = document.createElement('span');
+  tm.textContent = 'ждёт ' + fmtWait(Date.now() - (s.waitingSince || Date.now()));
+  sub.append(tm);
+
+  el.className = s.waitKind ? 'kind-' + s.waitKind : '';
+  el.replaceChildren(head, sub);
+
+  // Clearing the queue fast means two handoffs inside PULT_FLASH_MS, and
+  // re-adding a class in the same frame does NOT restart a CSS animation —
+  // the offsetWidth read forces the reflow that does.
+  document.body.classList.remove('pult-handoff', 'handoff-permission');
+  void el.offsetWidth;
+  document.body.classList.add('pult-handoff');
+  if (s.waitKind === 'permission') document.body.classList.add('handoff-permission');
+
+  pultFlashAt = Date.now();
+  if (pultFlashTimer) clearTimeout(pultFlashTimer);
+  pultFlashTimer = setTimeout(clearHandoff, PULT_FLASH_MS);
+}
+
+// Drop the cue early: any manual switch means you already know where you are.
+function clearHandoff() {
+  if (pultFlashTimer) { clearTimeout(pultFlashTimer); pultFlashTimer = null; }
+  pultFlashAt = 0;
+  document.body.classList.remove('pult-handoff', 'handoff-permission');
 }
 
 function refitActive() {
@@ -1945,8 +2028,12 @@ function setPult(on) {
   if (pultTimer) { clearInterval(pultTimer); pultTimer = null; }
   if (next) {
     pultTimer = setInterval(renderPult, 1000); // chips tick; only while open
+    // Opening the pult is itself a gesture — the first agent it lands on is not
+    // a handoff you need to be told about.
+    pultPickManual = true;
     renderPult();
   } else {
+    clearHandoff();
     document.body.classList.remove('pult-empty');
   }
   const t = tabsEl.querySelector('.pult-tab');
