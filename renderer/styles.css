@@ -387,6 +387,19 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   cursor: grab;
 }
 .grip svg { width: 12px; height: 12px; }
+/* На карточке ручка вне потока — как крестик: лежит поверх левого паддинга
+   вплотную к краю и не резервирует колонку (9px + gap раньше съедали место у
+   имени). Ширина = паддинг карточки, поэтому вся левая кромка — зона захвата;
+   сами точки иконки узкие (ink ~4px по центру 12px бокса), так что за границы
+   паддинга они не выходят даже в компактной плотности. */
+.tab > .grip {
+  position: absolute;
+  left: 0;
+  top: 1px;
+  bottom: 1px;
+  width: var(--tab-pad-x);
+  z-index: 2;
+}
 .tab:hover .grip, .group-head:hover .grip { opacity: 1; }
 .grip:hover { color: var(--text); }
 .grip:active { cursor: grabbing; }
