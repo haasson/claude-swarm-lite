@@ -570,7 +570,7 @@ async function tgFetchJson(url, body) {
 
 // Send text to the bound chat (or to `chatId` during pairing, before one is bound).
 // Splits at Telegram's 4096-char limit and returns the LAST message id — that id is what
-// an answer replies to, so it's the routing key the next commit hangs the tabs on.
+// an answer replies to, so it's the routing key tgRemember/tgRoute hang the tabs on.
 async function tgSend(opts) {
   const o = opts || {};
   const chatId = o.chatId != null ? o.chatId : TG.chatId;
@@ -780,7 +780,7 @@ function tgOnUpdate(u) {
       chatId: u.chatId,
       threadId: u.threadId,
       text: 'Сворм на связи. Отсюда будут приходить вопросы агентов; отвечать — реплаем на сообщение.',
-    });
+    }).catch(reportMainError);
     tgPush();
     return;
   }
