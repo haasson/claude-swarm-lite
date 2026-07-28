@@ -75,7 +75,6 @@ contextBridge.exposeInMainWorld('swarm', {
     forget:    ()      => ipcRenderer.invoke('telegram:forget'),
     unpair:    ()      => ipcRenderer.invoke('telegram:unpair'),
     pair:      ()      => ipcRenderer.invoke('telegram:pair'),
-    setChat:   (id)    => ipcRenderer.invoke('telegram:setChat', id),
     check:     ()      => ipcRenderer.invoke('telegram:check'),
     setPrompt: (text)  => ipcRenderer.invoke('telegram:setPrompt', text),
     keepAwake: (on)    => ipcRenderer.invoke('telegram:setKeepAwake', on),

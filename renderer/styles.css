@@ -541,7 +541,9 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
    a scrollable body; the tab bar + Save/Cancel stay pinned while a tall panel
    (many launch commands, the keys list) scrolls inside .set-body. */
 .modal.settings {
-  width: min(460px, 92vw);
+  /* 620: семь вкладок настроек влезают в один ряд, а QR с подписями рядом не жмётся.
+     460 хватало до появления «Телеграм» — тогда ряд поехал во второй. */
+  width: min(620px, 94vw);
   display: flex;
   flex-direction: column;
   max-height: min(88vh, 720px);

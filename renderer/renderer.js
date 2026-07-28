@@ -1270,11 +1270,9 @@ function showSettingsModal(tab) {
           зашифрованным на этом компьютере и наружу не уходит.</div>
         <div class="set-field">
           <span class="set-label">Шаг 1. Токен бота</span>
-          <span class="set-hint set-hint-top">Бот — это аккаунт в Телеграме, а не программа на
-            сервере: размещать и оплачивать нечего. Напишите <a class="tg-link" id="set-tg-bf"
-            href="#">@BotFather</a> → <code>/newbot</code> → скопируйте строку вида
-            <span class="set-mono">1234567890:AA…</span> Работает всё на этом компьютере: приложение
-            само стучится в Telegram, наружу не открывается ни порт, ни адрес.</span>
+          <span class="set-hint set-hint-top"><a class="tg-link" id="set-tg-bf" href="#">@BotFather</a>
+            → <code>/newbot</code> → скопируйте строку вида <span class="set-mono">1234567890:AA…</span>
+            Бот — аккаунт в Телеграме, а не программа на сервере: размещать и платить нечего.</span>
           <div class="tg-row">
             <input class="set-input" type="password" id="set-tg-token" spellcheck="false"
                    autocapitalize="off" autocorrect="off" placeholder="1234567890:AA…" />
@@ -1283,49 +1281,43 @@ function showSettingsModal(tab) {
           <div class="tg-state" id="set-tg-state"></div>
         </div>
         <div class="set-field" id="set-tg-chat-field" hidden>
-          <span class="set-label">Шаг 2. Куда писать</span>
-          <span class="set-hint set-hint-top">Нужна <b>группа с темами</b>: у сворма много вкладок,
-            и различать их на телефоне можно только темами — каждая вкладка получит свою.
-            Создайте группу, включите в её настройках «Темы», добавьте туда бота
-            <b>администратором с правом «Управление темами»</b>. Дальше отсканируйте код (или
-            нажмите ссылку, если Телеграм на этом маке) и отправьте его в группу — код
-            одноразовый и действует 15 минут. Личный чат с ботом не подойдёт: приложение
-            откажется привязываться и скажет, чего не хватает.</span>
+          <span class="set-label">Шаг 2. Группа с темами</span>
+          <span class="set-hint set-hint-top">Каждая вкладка получает свою тему — иначе на
+            телефоне их не различить. Создайте группу, включите «Темы», добавьте бота
+            <b>администратором с правом «Управление темами»</b>. Затем отсканируйте код и
+            отправьте его в эту группу.</span>
           <div class="tg-pair" id="set-tg-pair" hidden>
-            <img class="tg-qr" id="set-tg-qr" alt="QR для привязки чата" />
+            <img class="tg-qr" id="set-tg-qr" alt="QR для привязки группы" />
             <div class="tg-pair-side">
               <div class="tg-code" id="set-tg-code"></div>
               <a class="tg-link" id="set-tg-link" href="#" target="_blank" rel="noreferrer">добавить бота в группу</a>
-              <a class="tg-link" id="set-tg-glink" href="#" target="_blank" rel="noreferrer">открыть чат с ботом</a>
               <div class="set-hint" id="set-tg-ttl"></div>
             </div>
           </div>
           <div class="tg-row">
-            <button type="button" class="set-check-btn" id="set-tg-pair-btn">Привязать чат</button>
+            <button type="button" class="set-check-btn" id="set-tg-pair-btn">Привязать группу</button>
             <button type="button" class="set-check-btn" id="set-tg-check" hidden>Проверить права</button>
-            <button type="button" class="set-check-btn" id="set-tg-unpair" hidden>Отвязать чат</button>
+            <button type="button" class="set-check-btn" id="set-tg-unpair" hidden>Отвязать</button>
             <button type="button" class="set-check-btn danger" id="set-tg-forget">Удалить токен</button>
           </div>
           <div class="tg-state" id="set-tg-check-note"></div>
-          <span class="set-hint set-hint-top">Знаете id группы — можно без кода (проверки те же):</span>
-          <div class="tg-row">
-            <input class="set-input" type="text" id="set-tg-chatid" spellcheck="false"
-                   placeholder="-1001234567890" />
-            <button type="button" class="set-check-btn" id="set-tg-chatid-save">Привязать по id</button>
-          </div>
         </div>
         <div class="set-field" id="set-tg-extra" hidden>
+          <span class="set-label">В группе</span>
+          <span class="set-hint set-hint-top">Пишете в тему — попадаете в её агента; вопросы и
+            итоги приходят туда же. В общей теме: <span class="set-mono">/tabs</span> — кто чем
+            занят, <span class="set-mono">/sync</span> — подтянуть темы под вкладки,
+            <span class="set-mono">/help</span> — напоминалка. Запрос разрешения приходит
+            уведомлением, но подтвердить его можно только здесь, за компьютером.</span>
           <span class="set-label">Как агент отвечает в телегу</span>
-          <span class="set-hint set-hint-top">Эта строка подставляется к первому сообщению из
-            телеги, чтобы агент понимал: он отвечает на телефон. Дальше к каждому сообщению
-            добавляется короткая метка <span class="set-mono">[тлг]</span>. Пусто — вернётся
-            формулировка по умолчанию.</span>
+          <span class="set-hint set-hint-top">Подставляется к первому сообщению из телеги, дальше
+            идёт короткая метка <span class="set-mono">[тлг]</span>. Пусто — вернётся формулировка
+            по умолчанию.</span>
           <textarea class="set-input" id="set-tg-prompt" rows="2" spellcheck="false"></textarea>
           <label class="set-check">
             <input type="checkbox" id="set-tg-awake" />
-            <span class="set-check-tx">Не давать маку засыпать, пока чат привязан
-              <span class="set-check-sub">со спящим маком отвечать некому: агенты живут здесь. Ответы из
-                телеги Телеграм придержит и отдаст, когда мак проснётся</span></span>
+            <span class="set-check-tx">Не давать маку засыпать, пока группа привязана
+              <span class="set-check-sub">со спящим маком отвечать некому: агенты живут здесь</span></span>
           </label>
         </div>
       </div>
@@ -1387,15 +1379,14 @@ function showSettingsModal(tab) {
   const tgQrI = overlay.querySelector('#set-tg-qr');
   const tgCodeEl = overlay.querySelector('#set-tg-code');
   const tgLinkA = overlay.querySelector('#set-tg-link');
-  const tgGLinkA = overlay.querySelector('#set-tg-glink');
   const tgTtlEl = overlay.querySelector('#set-tg-ttl');
   const tgUnpairB = overlay.querySelector('#set-tg-unpair');
+  const tgPairBtn = overlay.querySelector('#set-tg-pair-btn');
   const tgCheckB = overlay.querySelector('#set-tg-check');
   const tgCheckNote = overlay.querySelector('#set-tg-check-note');
   const tgExtra = overlay.querySelector('#set-tg-extra');
   const tgPromptI = overlay.querySelector('#set-tg-prompt');
   const tgAwakeI = overlay.querySelector('#set-tg-awake');
-  const tgChatIdI = overlay.querySelector('#set-tg-chatid');
   let tgTtlTimer = null;
 
   function tgStatusText(st) {
@@ -1418,6 +1409,9 @@ function showSettingsModal(tab) {
     tgUnpairB.hidden = st.chatId == null;
     tgCheckB.hidden = st.chatId == null;
     tgExtra.hidden = st.chatId == null;
+    // Привязались — код мёртв, и висящий QR только вводит в заблуждение («битый»).
+    if (st.chatId != null) { stopTgTtl(); tgPairBox.hidden = true; }
+    tgPairBtn.textContent = st.chatId == null ? 'Привязать группу' : 'Привязать другую';
     // The rights check: the one place where «бот молчит в топике» gets a name.
     tgCheckNote.textContent = st.check ? st.check.note : '';
     tgCheckNote.className = 'tg-state' + (st.check ? (st.check.ok ? ' is-good' : ' is-bad') : '');
@@ -1444,13 +1438,12 @@ function showSettingsModal(tab) {
     renderTg(st);
   });
 
-  overlay.querySelector('#set-tg-pair-btn').addEventListener('click', async () => {
+  tgPairBtn.addEventListener('click', async () => {
     const r = await window.swarm.telegram.pair();
     if (!r || r.error) { tgStateEl.textContent = '⚠ ' + ((r && r.error) || 'не получилось'); return; }
     tgQrI.src = r.qr;
     tgCodeEl.textContent = r.code;
     tgLinkA.href = r.link;
-    tgGLinkA.href = r.botLink;
     tgPairBox.hidden = false;
     const until = Date.now() + r.ttlMs;
     stopTgTtl();
@@ -1472,15 +1465,6 @@ function showSettingsModal(tab) {
   tgCheckB.addEventListener('click', async () => {
     tgCheckNote.textContent = 'Проверяю…';
     renderTg(await window.swarm.telegram.check());
-  });
-
-  overlay.querySelector('#set-tg-chatid-save').addEventListener('click', async () => {
-    const id = tgChatIdI.value.trim();
-    if (!id) return;
-    tgCheckNote.textContent = 'Проверяю чат…';
-    const st = await window.swarm.telegram.setChat(id);
-    tgChatIdI.value = '';
-    renderTg(st);
   });
 
   overlay.querySelector('#set-tg-bf').addEventListener('click', (e) => {

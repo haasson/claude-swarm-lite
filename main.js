@@ -1240,21 +1240,6 @@ ipcMain.handle('telegram:forget', async () => {
   return tgState();
 });
 
-// Bind a chat by id, for people who already know it (a group id looks like
-// -1001234567890). Same result as pairing; the check right after tells them whether the
-// bot can actually work there.
-ipcMain.handle('telegram:setChat', async (_e, raw) => {
-  const id = Number(String(raw == null ? '' : raw).trim());
-  if (!Number.isFinite(id) || id === 0) {
-    tgError = 'id чата — это число, обычно с минусом: -1001234567890';
-    return tgState();
-  }
-  if (!TG.token) { tgError = 'Сначала подключи бота'; return tgState(); }
-  tgError = null;
-  await tgBindChat(id, null);      // same gate as the code path: forum + admin, or nothing
-  return tgState();
-});
-
 // Re-run the rights check on demand: the usual fix is «сделать бота админом», and the
 // user needs a way to confirm it took without restarting anything.
 ipcMain.handle('telegram:check', async () => {
@@ -1302,7 +1287,6 @@ ipcMain.handle('telegram:pair', () => {
   return {
     code: tgPair.code,
     link: groupLink,
-    botLink: telegram.deepLink(tgBot, tgPair.code),
     qr: tgQr(groupLink),
     ttlMs: TG_PAIR_TTL_MS,
     state,
