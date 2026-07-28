@@ -258,6 +258,8 @@ const ICONS = {
   chevron: SVG('<path d="m6 9 6 6 6-6"/>'),
   branch: SVG('<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>'),
   gear: SVG('<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>'),
+  // Lucide "grip-vertical" — the drag handle on a card / folder header.
+  grip: SVG('<circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/>'),
   // Lucide "bot" — the sub-agent badge.
   agents: SVG('<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>'),
 };
@@ -840,6 +842,7 @@ async function createSession(opts = {}) {
   const tab = document.createElement('div');
   tab.className = 'tab';
   tab.innerHTML = `
+    <span class="grip" title="Перетащить">${ICONS.grip}</span>
     <span class="dot"></span>
     <span class="body">
       <span class="label"></span>
@@ -862,13 +865,13 @@ async function createSession(opts = {}) {
     activate(id);
   });
   tab.dataset.sid = id;
-  tab.draggable = true;
-  tab.addEventListener('dragstart', (e) => {
+  attachDragHandle(tab, tab.querySelector('.grip'), () => {
     const cwd = sessions.get(id)?.cwd || '';
     // A card in a multi-tab group reorders within the folder; a loner is itself a
     // top-level unit (reorders among folders/loners, never into a folder).
     const inGroup = (withinOrder.get(cwd) || []).length > 1;
-    startDrag(e, inGroup ? { kind: 'card', id, cwd } : { kind: 'unit', cwd });
+
+    return inGroup ? { kind: 'card', id, cwd } : { kind: 'unit', cwd };
   });
   attachRename(tab.querySelector('.label'));
 
@@ -1463,6 +1466,7 @@ function showSettingsModal(tab) {
        <span class="pult-count">2</span>
      </div>
      <div class="tab active status-running">
+       <span class="grip">${ICONS.grip}</span>
        <span class="dot"></span>
        <span class="body">
          <span class="label">api</span>
@@ -1475,6 +1479,7 @@ function showSettingsModal(tab) {
        <span class="close" title="Close">×</span>
      </div>
      <div class="tab status-ready">
+       <span class="grip">${ICONS.grip}</span>
        <span class="dot"></span>
        <span class="body">
          <span class="label">web</span>
@@ -2069,8 +2074,11 @@ function relayoutTabs() {
     head.className = 'group-head';
     head.title = collapsed ? 'Развернуть' : 'Свернуть';
     head.dataset.cwd = cwd;
-    head.draggable = true;
-    head.addEventListener('dragstart', (e) => startDrag(e, { kind: 'unit', cwd }));
+    const grip = document.createElement('span');
+    grip.className = 'grip';
+    grip.title = 'Перетащить папку';
+    grip.innerHTML = ICONS.grip;
+    attachDragHandle(head, grip, () => ({ kind: 'unit', cwd }));
     const chev = document.createElement('span');
     chev.className = 'group-chev';
     chev.innerHTML = ICONS.chevron;
@@ -2096,7 +2104,7 @@ function relayoutTabs() {
     add.title = 'Новая сессия в этой папке';
     add.innerHTML = ICONS.plus;
     add.addEventListener('click', (e) => { e.stopPropagation(); createSession({ cwd: cwd || undefined }); });
-    head.append(chev, nameEl, count, dots, add);
+    head.append(grip, chev, nameEl, count, dots, add);
     head.addEventListener('click', () => toggleFolder(cwd));
 
     const inner = document.createElement('div');
@@ -2133,6 +2141,26 @@ function dropBefore(els, x, y) {
   return null;
 }
 
+// Cards and folder headers are dragged by their left grip only — dragging the
+// whole card fought the click-to-activate and the double-click rename. HTML5 DnD
+// can't tell us where the drag began, so the element is made draggable on
+// mousedown over the grip and locked again as soon as the button is up.
+function attachDragHandle(el, grip, payloadFor) {
+  el.draggable = false;
+  grip.addEventListener('mousedown', () => { el.draggable = true; });
+  grip.addEventListener('click', (e) => e.stopPropagation()); // not an activate/collapse click
+  el.addEventListener('dragstart', (e) => startDrag(e, payloadFor()));
+}
+
+// A plain click on the grip, or the end of a drag, re-locks whatever we unlocked.
+// (During a real drag the browser eats mouseup, so this runs on `dragend` too.)
+function lockDragHandles() {
+  for (const el of document.querySelectorAll('.tab[draggable="true"], .group-head[draggable="true"]')) {
+    el.draggable = false;
+  }
+}
+document.addEventListener('mouseup', lockDragHandles);
+
 function startDrag(e, payload) {
   drag = payload;
   dropped = false;
@@ -2147,6 +2175,7 @@ function startDrag(e, payload) {
 }
 
 function endDrag() {
+  lockDragHandles();
   document.querySelectorAll('.dragging').forEach((el) => el.classList.remove('dragging'));
   if (!dropped) relayoutTabs(); // drop didn't land — restore original order
   dropped = false;
@@ -2193,8 +2222,6 @@ function attachRename(labelEl) {
   labelEl.addEventListener('dblclick', (e) => {
     e.stopPropagation();
     renaming = true;
-    const t = labelEl.closest('.tab');
-    if (t) t.draggable = false; // don't drag while editing the title
     labelEl.contentEditable = 'plaintext-only';
     labelEl.spellcheck = false;
     labelEl.focus();
@@ -2211,8 +2238,6 @@ function attachRename(labelEl) {
   labelEl.addEventListener('blur', () => {
     renaming = false;
     labelEl.contentEditable = 'false';
-    const t = labelEl.closest('.tab');
-    if (t) t.draggable = true;
     const text = labelEl.textContent.replace(/\s+/g, ' ').trim();
     labelEl.textContent = text || 'claude';
     persistTabs();

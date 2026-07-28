@@ -373,8 +373,23 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 }
 .tab.dragging * { visibility: hidden; }
 .tab-group.dragging { opacity: 0.5; }
-.tab[draggable="true"] { cursor: grab; }
-.group-head[draggable="true"]:active, .tab[draggable="true"]:active { cursor: grabbing; }
+/* Перетаскивать можно только за ручку слева. Она проявляется на ховере строки,
+   но место под неё занято всегда — иначе карточка дёргалась бы под курсором. */
+.grip {
+  flex: none;
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 9px;
+  color: var(--muted);
+  opacity: 0;
+  cursor: grab;
+}
+.grip svg { width: 12px; height: 12px; }
+.tab:hover .grip, .group-head:hover .grip { opacity: 1; }
+.grip:hover { color: var(--text); }
+.grip:active { cursor: grabbing; }
 
 /* --- controls ------------------------------------------------------------- */
 /* "+ new session" — the one primary action, kept right under the session list
