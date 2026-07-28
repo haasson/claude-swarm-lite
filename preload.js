@@ -46,6 +46,18 @@ contextBridge.exposeInMainWorld('swarm', {
   // startup and on save; main feeds both the screen detector and the Stop hook.
   setAskPhrases: (list) => ipcRenderer.send('settings:askPhrases', list),
 
+  // Telegram bridge (Settings → Телеграм). The token itself only ever travels ONE way:
+  // into main, which stores it encrypted. Everything coming back is masked state —
+  // `state` never carries the token, so the renderer can't leak what it doesn't have.
+  telegram: {
+    state:    ()      => ipcRenderer.invoke('telegram:state'),
+    setToken: (token) => ipcRenderer.invoke('telegram:setToken', token),
+    forget:   ()      => ipcRenderer.invoke('telegram:forget'),
+    unpair:   ()      => ipcRenderer.invoke('telegram:unpair'),
+    pair:     ()      => ipcRenderer.invoke('telegram:pair'),
+    onState:  (cb)    => ipcRenderer.on('telegram:state', (_e, s) => cb(s)),
+  },
+
   // Git plumbing for the branch status bar. Each call targets a folder path
   // (the active session's cwd). info → { isRepo, branch, ahead, behind, dirty };
   // branches → string[]; fetch/pull/checkout → { ok, error };

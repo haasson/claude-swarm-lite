@@ -18,7 +18,7 @@
 //   just type `claude` into it. Bonus: auth "just works" because it's the same
 //   environment you log in from.
 
-const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeImage, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeImage, shell, safeStorage } = require('electron');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
@@ -496,6 +496,222 @@ setInterval(() => {
   }
 }, TR_TICK_MS);
 
+// --- Telegram bridge: token, pairing, the poll loop ---------------------------
+// The bot belongs to the USER: they paste a token from their own BotFather bot, so every
+// install talks to its own bot and nothing goes through anyone else's server.
+//
+// The token is a secret, so it does NOT live in the renderer's localStorage next to the
+// theme and the layout. main owns it, encrypted with the OS keychain (safeStorage), in a
+// file only this account can read. The UI gets back a MASKED form and never the token
+// itself — so it can't leak through a log, a devtools session or a settings export.
+//
+// telegram.js holds everything protocol-shaped (and is unit-tested); this block is the
+// part that has to touch Electron, the disk and the sessions.
+const telegram = require('./telegram');
+const qrcode = require('qrcode-generator');   // one file, no deps: the pairing QR
+
+const TG_PAIR_TTL_MS = 120_000;   // a pairing code is good for two minutes
+
+let TG = { token: '', chatId: null, isForum: false, topics: {} };
+let tgPoller = null;
+let tgBot = '';        // bot username from getMe — shown in settings, used in the link
+let tgPair = null;     // { code, at } while a pairing window is open
+let tgError = null;    // last error, verbatim for the settings panel
+
+function tgPath() { return path.join(app.getPath('userData'), 'telegram.dat'); }
+
+function tgBlank() { return { token: '', chatId: null, isForum: false, topics: {} }; }
+
+// Anything unreadable — no keychain access, a file copied from another machine, a
+// half-written save — means «not configured». Never a crash on launch.
+function tgLoad() {
+  try {
+    const d = JSON.parse(safeStorage.decryptString(fs.readFileSync(tgPath())));
+    TG = {
+      token: String(d.token || ''),
+      chatId: Number.isFinite(d.chatId) ? d.chatId : null,
+      isForum: !!d.isForum,
+      topics: (d.topics && typeof d.topics === 'object') ? d.topics : {},
+    };
+  } catch (_) { TG = tgBlank(); }
+}
+
+function tgSave() {
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('Система не даёт безопасно сохранить токен (нет доступа к keychain)');
+  }
+  fs.writeFileSync(tgPath(), safeStorage.encryptString(JSON.stringify(TG)), { mode: 0o600 });
+}
+
+// One call to Telegram. getUpdates holds the request open for ~25 s, so the abort timer
+// must be longer than that — but finite, or a half-dead connection hangs the loop.
+async function tgFetchJson(url, body) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), (telegram.POLL_TIMEOUT_S + 15) * 1000);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body || {}),
+      signal: ctl.signal,
+    });
+    let parsed = null;
+    try { parsed = await res.json(); } catch (_) { /* non-JSON error page */ }
+    return { ok: res.ok, status: res.status, body: parsed };
+  } finally { clearTimeout(timer); }
+}
+
+// Send text to the bound chat (or to `chatId` during pairing, before one is bound).
+// Splits at Telegram's 4096-char limit and returns the LAST message id — that id is what
+// an answer replies to, so it's the routing key the next commit hangs the tabs on.
+async function tgSend(opts) {
+  const o = opts || {};
+  const chatId = o.chatId != null ? o.chatId : TG.chatId;
+  if (!TG.token || chatId == null) return null;
+  let last = null;
+  for (const part of telegram.chunkText(o.text, telegram.MAX_TEXT)) {
+    const body = { chat_id: chatId, text: part, disable_notification: !!o.silent };
+    if (o.threadId) body.message_thread_id = o.threadId;
+    if (o.replyTo) body.reply_to_message_id = o.replyTo;
+    const res = await tgFetchJson(telegram.apiUrl(TG.token, 'sendMessage'), body);
+    if (!res.ok || !res.body || res.body.ok !== true) {
+      tgError = telegram.classifyError(res.status, res.body).message;
+      tgPush();
+      return last;
+    }
+    last = res.body.result && res.body.result.message_id;
+  }
+  return last;
+}
+
+function tgQr(text) {
+  const qr = qrcode(0, 'M');
+  qr.addData(String(text));
+  qr.make();
+  return qr.createDataURL(6, 8);   // a GIF data URL: no canvas, no renderer work
+}
+
+function tgState() {
+  return {
+    available: safeStorage.isEncryptionAvailable(),
+    configured: !!TG.token,
+    masked: telegram.maskToken(TG.token),
+    bot: tgBot,
+    chatId: TG.chatId,
+    isForum: TG.isForum,
+    live: !!(tgPoller && tgPoller.alive),
+    error: tgError,
+    pairing: tgPair ? { code: tgPair.code, until: tgPair.at + TG_PAIR_TTL_MS } : null,
+  };
+}
+
+function tgPush() { safeSend('telegram:state', tgState()); }
+
+function tgStop() {
+  if (tgPoller) { tgPoller.stop(); tgPoller = null; }
+}
+
+// Check the token with getMe, then start polling. getMe first so a wrong token says so
+// immediately in the settings panel instead of failing inside the loop.
+async function tgConnect() {
+  tgStop();
+  tgError = null;
+  if (!TG.token) { tgBot = ''; tgPush(); return; }
+  let me;
+  try { me = await tgFetchJson(telegram.apiUrl(TG.token, 'getMe'), {}); }
+  catch (e) { tgError = 'Не дозвонились до Telegram: ' + ((e && e.message) || e); tgPush(); return; }
+  if (!me.ok || !me.body || me.body.ok !== true) {
+    tgError = telegram.classifyError(me.status, me.body).message;
+    tgPush();
+    return;
+  }
+  tgBot = (me.body.result && me.body.result.username) || '';
+  tgPoller = telegram.createPoller({
+    token: TG.token,
+    fetchJson: tgFetchJson,
+    onUpdate: tgOnUpdate,
+    onState: (s) => {
+      tgError = s && s.ok ? null : ((s && s.error && s.error.message) || null);
+      if (s && s.error && s.error.fatal) tgStop();
+      tgPush();
+    },
+  });
+  tgPoller.start();
+  tgPush();
+}
+
+function tgOnUpdate(u) {
+  if (!u || u.kind !== 'message') return;
+  // Pairing wins over everything: the chat that brings the code becomes THE chat. Until
+  // then nothing is bound, so no message can be mistaken for an answer to an agent.
+  if (tgPair && Date.now() - tgPair.at < TG_PAIR_TTL_MS && telegram.pairingMatch(u, tgPair.code)) {
+    TG.chatId = u.chatId;
+    TG.isForum = u.isForum;
+    TG.topics = {};
+    tgPair = null;
+    try { tgSave(); } catch (e) { reportMainError(e); }
+    tgSend({
+      chatId: u.chatId,
+      threadId: u.threadId,
+      text: 'Сворм на связи. Отсюда будут приходить вопросы агентов; отвечать — реплаем на сообщение.',
+    });
+    tgPush();
+    return;
+  }
+  // Anything from another chat is not ours to listen to — a stranger who found the bot
+  // gets silence, not a prompt injected into somebody's session.
+  if (TG.chatId == null || u.chatId !== TG.chatId) return;
+  // Routing answers back into a session lands in the next step.
+}
+
+// --- IPC: the settings panel ---------------------------------------------------
+ipcMain.handle('telegram:state', () => tgState());
+
+ipcMain.handle('telegram:setToken', async (_e, raw) => {
+  const token = String(raw == null ? '' : raw).trim();
+  if (!telegram.looksLikeToken(token)) {
+    tgError = 'Это не похоже на токен: нужен вид 1234567890:AA… из BotFather';
+    return tgState();
+  }
+  TG = Object.assign(tgBlank(), { token });   // a new token means a new bot: unbind
+  try { tgSave(); } catch (e) { tgError = String(e.message || e); return tgState(); }
+  await tgConnect();
+  return tgState();
+});
+
+ipcMain.handle('telegram:forget', async () => {
+  tgStop();
+  TG = tgBlank();
+  tgBot = ''; tgPair = null; tgError = null;
+  try { fs.unlinkSync(tgPath()); } catch (_) { /* already gone */ }
+  return tgState();
+});
+
+ipcMain.handle('telegram:unpair', async () => {
+  TG.chatId = null; TG.isForum = false; TG.topics = {};
+  try { tgSave(); } catch (e) { reportMainError(e); }
+  return tgState();
+});
+
+// Open a pairing window and hand back the code, the deep links and a QR of the private
+// one. crypto.randomInt, not Math.random: this code is the only thing standing between
+// a stranger who found the bot and a chat bound to your machine.
+ipcMain.handle('telegram:pair', () => {
+  if (!TG.token || !tgBot) return { error: 'Сначала подключи бота' };
+  tgPair = { code: telegram.pairCode((n) => crypto.randomInt(n)), at: Date.now() };
+  const link = telegram.deepLink(tgBot, tgPair.code);
+  const state = tgState();
+  tgPush();
+  return {
+    code: tgPair.code,
+    link,
+    groupLink: telegram.deepLink(tgBot, tgPair.code, { group: true }),
+    qr: tgQr(link),
+    ttlMs: TG_PAIR_TTL_MS,
+    state,
+  };
+});
+
 // Window/taskbar chrome icon. nativeImage.createFromPath does NOT work for paths
 // inside app.asar — read the bytes and build an image (fs CAN read asar).
 function loadWindowIcon() {
@@ -905,6 +1121,9 @@ app.whenReady().then(() => {
   // If it relocates, it exits — don't open a window in that case.
   if (updater.maybeRelocate()) return;
   try { provisionStatusline(); } catch (e) { reportMainError(e); } // bar is best-effort
+  // Telegram: pick up a saved token and start polling. Best-effort like the statusline —
+  // no bot, or no network, must never hold up the window.
+  try { tgLoad(); tgConnect().catch(reportMainError); } catch (e) { reportMainError(e); }
   buildMenu();
   createWindow();
 });

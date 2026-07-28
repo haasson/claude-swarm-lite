@@ -1027,6 +1027,7 @@ function showSettingsModal(tab) {
         <button class="set-tab" data-tab="appearance">Вид</button>
         <button class="set-tab" data-tab="tabs">Вкладки</button>
         <button class="set-tab" data-tab="keys">Клавиши</button>
+        <button class="set-tab" data-tab="telegram">Телеграм</button>
         <button class="set-tab" data-tab="updates">Обновления</button>
       </div>
 
@@ -1231,6 +1232,43 @@ function showSettingsModal(tab) {
         <span class="set-hint">Стрелки перемещают, Backspace/Delete удаляют в выбранной единице (слово или до края строки).</span>
       </div>
 
+      <div class="set-panel" data-panel="telegram">
+        <div class="modal-msg">Свой бот, чтобы отвечать агентам с телефона. Токен хранится
+          зашифрованным на этом компьютере и наружу не уходит.</div>
+        <div class="set-field">
+          <span class="set-label">Токен бота</span>
+          <span class="set-hint set-hint-top">В Телеграме напишите <code>@BotFather</code> →
+            <code>/newbot</code> → скопируйте строку вида <span class="set-mono">1234567890:AA…</span>
+            Бот ваш, сервер ничей: приложение само стучится в Telegram, наружу ничего не открывается.</span>
+          <div class="tg-row">
+            <input class="set-input" type="password" id="set-tg-token" spellcheck="false"
+                   autocapitalize="off" autocorrect="off" placeholder="1234567890:AA…" />
+            <button type="button" class="set-check-btn" id="set-tg-save">Подключить</button>
+          </div>
+          <div class="tg-state" id="set-tg-state"></div>
+        </div>
+        <div class="set-field" id="set-tg-chat-field" hidden>
+          <span class="set-label">Куда писать</span>
+          <span class="set-hint set-hint-top">Отсканируйте код телефоном — откроется чат с ботом,
+            нажмёте «Начать», и сворм запомнит именно этот чат. Ссылку можно и просто нажать,
+            если Телеграм стоит на этом маке. Код одноразовый и живёт две минуты.</span>
+          <div class="tg-pair" id="set-tg-pair" hidden>
+            <img class="tg-qr" id="set-tg-qr" alt="QR для привязки чата" />
+            <div class="tg-pair-side">
+              <div class="tg-code" id="set-tg-code"></div>
+              <a class="tg-link" id="set-tg-link" href="#" target="_blank" rel="noreferrer">открыть чат с ботом</a>
+              <a class="tg-link" id="set-tg-glink" href="#" target="_blank" rel="noreferrer">добавить в группу</a>
+              <div class="set-hint" id="set-tg-ttl"></div>
+            </div>
+          </div>
+          <div class="tg-row">
+            <button type="button" class="set-check-btn" id="set-tg-pair-btn">Привязать чат</button>
+            <button type="button" class="set-check-btn" id="set-tg-unpair" hidden>Отвязать чат</button>
+            <button type="button" class="set-check-btn danger" id="set-tg-forget">Удалить токен</button>
+          </div>
+        </div>
+      </div>
+
       <div class="set-panel" data-panel="updates">
         <div class="modal-msg">Версия: <b class="upd-cur">…</b> · in-place ok ✓</div>
         <button class="set-check-btn upd-check">Проверить обновления</button>
@@ -1275,6 +1313,91 @@ function showSettingsModal(tab) {
   askI.addEventListener('input', syncAskVerdict);
   askTestI.addEventListener('input', syncAskVerdict);
   syncAskVerdict();
+
+  // --- Telegram panel -------------------------------------------------------
+  // Everything here applies IMMEDIATELY (like the updates panel), not on «Сохранить»:
+  // connecting a bot and binding a chat are actions, not preferences. The token field is
+  // write-only — after it's stored we clear the box and show a mask, because the renderer
+  // is never given the token back.
+  const tgTokenI = overlay.querySelector('#set-tg-token');
+  const tgStateEl = overlay.querySelector('#set-tg-state');
+  const tgChatField = overlay.querySelector('#set-tg-chat-field');
+  const tgPairBox = overlay.querySelector('#set-tg-pair');
+  const tgQrI = overlay.querySelector('#set-tg-qr');
+  const tgCodeEl = overlay.querySelector('#set-tg-code');
+  const tgLinkA = overlay.querySelector('#set-tg-link');
+  const tgGLinkA = overlay.querySelector('#set-tg-glink');
+  const tgTtlEl = overlay.querySelector('#set-tg-ttl');
+  const tgUnpairB = overlay.querySelector('#set-tg-unpair');
+  let tgTtlTimer = null;
+
+  function tgStatusText(st) {
+    if (!st.available) return '⚠ Система не даёт безопасно хранить токен — мост недоступен';
+    if (!st.configured) return 'Бот не подключён';
+    if (st.error) return '⚠ ' + st.error;
+    if (!st.live) return 'Подключаюсь…';
+    const who = st.bot ? '@' + st.bot : 'бот';
+    if (st.chatId == null) return `${who} на связи. Чат не привязан — нажмите «Привязать чат».`;
+    return `${who} на связи, чат привязан${st.isForum ? ' (форум — вкладки станут топиками)' : ''}.`;
+  }
+
+  function renderTg(st) {
+    if (!st) return;
+    tgStateEl.textContent = tgStatusText(st);
+    tgStateEl.className = 'tg-state' + (st.error || !st.available ? ' is-bad'
+      : st.configured && st.live ? ' is-good' : '');
+    tgTokenI.placeholder = st.configured ? st.masked : '1234567890:AA…';
+    tgChatField.hidden = !st.configured;
+    tgUnpairB.hidden = st.chatId == null;
+  }
+
+  function stopTgTtl() {
+    if (tgTtlTimer) { clearInterval(tgTtlTimer); tgTtlTimer = null; }
+  }
+
+  window.swarm.telegram.state().then(renderTg);
+  // Main pushes state on its own too (the poller losing the network, a chat pairing
+  // itself from the phone) — the panel must not need a reopen to notice.
+  window.swarm.telegram.onState((st) => { if (document.body.contains(overlay)) renderTg(st); });
+
+  overlay.querySelector('#set-tg-save').addEventListener('click', async () => {
+    const token = tgTokenI.value.trim();
+    if (!token) return;
+    tgStateEl.textContent = 'Проверяю токен…';
+    const st = await window.swarm.telegram.setToken(token);
+    tgTokenI.value = '';            // the secret does not linger in the DOM
+    renderTg(st);
+  });
+
+  overlay.querySelector('#set-tg-pair-btn').addEventListener('click', async () => {
+    const r = await window.swarm.telegram.pair();
+    if (!r || r.error) { tgStateEl.textContent = '⚠ ' + ((r && r.error) || 'не получилось'); return; }
+    tgQrI.src = r.qr;
+    tgCodeEl.textContent = r.code;
+    tgLinkA.href = r.link;
+    tgGLinkA.href = r.groupLink;
+    tgPairBox.hidden = false;
+    const until = Date.now() + r.ttlMs;
+    stopTgTtl();
+    const tick = () => {
+      const left = Math.max(0, Math.round((until - Date.now()) / 1000));
+      tgTtlEl.textContent = left ? `код живёт ещё ${left} с` : 'код истёк — нажмите «Привязать чат» снова';
+      if (!left) { stopTgTtl(); tgPairBox.hidden = true; }
+    };
+    tick();
+    tgTtlTimer = setInterval(tick, 1000);
+  });
+
+  tgUnpairB.addEventListener('click', async () => {
+    renderTg(await window.swarm.telegram.unpair());
+  });
+
+  overlay.querySelector('#set-tg-forget').addEventListener('click', async () => {
+    stopTgTtl();
+    tgPairBox.hidden = true;
+    tgTokenI.value = '';
+    renderTg(await window.swarm.telegram.forget());
+  });
   const pultI = overlay.querySelector('#set-pult');
   pultI.checked = pultEnabled;
 
@@ -1693,10 +1816,11 @@ function showSettingsModal(tab) {
     if (name === 'launch') { const f = agentListEl.querySelector('.agent-cmd'); if (f) { f.focus(); f.select(); } }
   };
   tabs.forEach((t) => t.addEventListener('click', () => showTab(t.dataset.tab)));
-  showTab(['notify', 'appearance', 'tabs', 'keys', 'updates'].includes(tab) ? tab : 'launch');
+  showTab(['notify', 'appearance', 'tabs', 'keys', 'telegram', 'updates'].includes(tab) ? tab : 'launch');
 
   const close = () => {
     stopKbCapture();
+    stopTgTtl();          // the pairing countdown must not outlive the panel
     document.removeEventListener('keydown', onKey, true);
     overlay.remove();
   };

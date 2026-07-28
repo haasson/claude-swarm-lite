@@ -1037,7 +1037,30 @@ body.pult-on #git-msg { display: none; }
   border-radius: 6px; padding: 7px 12px; font-size: 12px;
 }
 .set-check-btn:hover { border-color: var(--accent); color: var(--accent); }
+.set-check-btn.danger:hover { border-color: var(--danger); color: var(--danger); }
 .upd-go-btn { margin-top: 10px; border-color: var(--accent); color: var(--accent); }
+
+/* --- Телеграм: токен, привязка чата --------------------------------------- */
+.tg-row { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
+.tg-row .set-input { flex: 1; min-width: 0; }
+.tg-row .set-check-btn { flex: none; }
+.tg-state { margin-top: 7px; font-size: 11px; color: var(--muted); }
+.tg-state.is-good { color: var(--ready); }
+.tg-state.is-bad  { color: var(--danger); }
+/* QR + подписи рядом: код читается глазом, ссылка — клик с этого же мака. */
+.tg-pair { display: flex; align-items: center; gap: 14px; margin-top: 10px; }
+.tg-qr {
+  flex: none; width: 148px; height: 148px; border-radius: 6px;
+  background: #fff; padding: 6px;      /* сканеру нужен светлый фон и поля */
+  image-rendering: pixelated;          /* GIF из main — не мылить при масштабе */
+}
+.tg-pair-side { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.tg-code {
+  font-family: var(--mono); font-size: 20px; letter-spacing: 2px; color: var(--text);
+  user-select: all;                    /* один клик — и код выделен целиком */
+}
+.tg-link { font-size: 12px; color: var(--accent); text-decoration: none; }
+.tg-link:hover { text-decoration: underline; }
 
 /* Visible break in the "Вид" panel: its intro promises terminal styling, but the
    pult toggle is about window structure. */

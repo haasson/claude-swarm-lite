@@ -72,7 +72,8 @@
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/headless": "^5.5.0",
-    "@xterm/xterm": "^5.5.0"
+    "@xterm/xterm": "^5.5.0",
+    "qrcode-generator": "^2.0.4"
   },
   "devDependencies": {
     "electron": "29.4.6",
