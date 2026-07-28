@@ -142,6 +142,33 @@ test('pickBinding survives junk input', () => {
   assert.strictEqual(T.pickBinding([cand()], null), null, 'no cwd to match against');
 });
 
+// --- pickByScreen: telling two tabs in one folder apart -----------------------
+
+const sc = (over) => Object.assign({ file: 'a.jsonl', text: '' }, over);
+const LONG = 'Починил сборку, тесты зелёные, дифф оставил незакоммиченным для ревью';
+
+test('pickByScreen finds the transcript whose last message is on this screen', () => {
+  const cands = [sc({ file: 'mine.jsonl', text: LONG }), sc({ file: 'other.jsonl', text: 'Совсем другой текст про совсем другую задачу целиком' })];
+  // The terminal wraps the same sentence differently — the match must survive that.
+  const snap = 'Починил сборку, тесты зелёные, дифф оставил\nнезакоммиченным для ревью\n> ';
+  assert.strictEqual(T.pickByScreen(cands, snap), 'mine.jsonl');
+});
+
+test('pickByScreen refuses when two candidates match', () => {
+  const cands = [sc({ file: 'a.jsonl', text: LONG }), sc({ file: 'b.jsonl', text: LONG })];
+  assert.strictEqual(T.pickByScreen(cands, LONG), null);
+});
+
+test('pickByScreen refuses when nothing matches, or there is too little to go on', () => {
+  assert.strictEqual(T.pickByScreen([sc({ text: LONG })], 'пустой экран > '), null);
+  assert.strictEqual(T.pickByScreen([sc({ text: 'коротко' })], LONG), null, 'short text proves nothing');
+  assert.strictEqual(T.pickByScreen([], LONG), null);
+});
+
+test('screenKey ignores whitespace, case and punctuation', () => {
+  assert.strictEqual(T.screenKey('Готово!  Тесты — зелёные.'), T.screenKey('готово тесты\nзелёные'));
+});
+
 for (const [name, fn] of tests) {
   try { fn(); passed++; }
   catch (e) { console.error('FAIL: ' + name + '\n  ' + e.message); process.exitCode = 1; }

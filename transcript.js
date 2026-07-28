@@ -149,7 +149,42 @@ function pickBinding(cands, opts) {
   return hits[0] || null;
 }
 
+// Several transcripts in one folder is the NORMAL case — that's what a swarm looks like:
+// three tabs open on the same repo. Refusing to bind any of them (see pickBinding) leaves
+// those tabs on screen-scraping, which is exactly the quality we're trying to leave behind.
+//
+// So break the tie by content: whatever the agent last said is BOTH in its transcript and
+// on its own screen. Compare with all whitespace and punctuation stripped, because the
+// terminal wraps lines wherever it likes and the same sentence is shaped differently in
+// the two places. Only a UNIQUE match counts — a tie here still means «don't bind».
+//
+// 40 letters is the floor for a comparison to mean anything. Higher (60 was the first
+// guess) and an ordinary one-line answer — «Починил сборку, тесты зелёные…» — falls under
+// the bar and the tab stays unbound for no good reason; two DIFFERENT conversations
+// agreeing on 40 letters running is not a thing, and if they literally do, the
+// two-matches guard below refuses anyway.
+const SCREEN_KEY_LEN = 40;
+
+function screenKey(text) {
+  return String(text == null ? '' : text).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function pickByScreen(cands, snapshot) {
+  const hay = screenKey(snapshot);
+  if (hay.length < SCREEN_KEY_LEN) return null;      // too little on screen to be sure
+  let hit = null;
+  for (const c of Array.isArray(cands) ? cands : []) {
+    if (!c || !c.file) continue;
+    const key = screenKey(c.text);
+    if (key.length < SCREEN_KEY_LEN) continue;       // and too little in the transcript
+    if (!hay.includes(key.slice(-SCREEN_KEY_LEN))) continue;
+    if (hit) return null;                            // two transcripts match: no guessing
+    hit = c.file;
+  }
+  return hit;
+}
+
 module.exports = {
-  READY_DEBOUNCE_MS, BIND_MTIME_SLACK_MS,
+  READY_DEBOUNCE_MS, BIND_MTIME_SLACK_MS, SCREEN_KEY_LEN, screenKey, pickByScreen,
   projectSlug, parseEntries, blockTypes, entryText, lastMain, classify, cwdOf, pickBinding,
 };

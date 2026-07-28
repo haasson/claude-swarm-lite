@@ -443,10 +443,24 @@ function bindTranscript(d, taken) {
     // Read the tail only for files young enough to be ours — the cwd check costs I/O.
     if (st.mtimeMs < d.startedAt - transcript.BIND_MTIME_SLACK_MS) continue;
     let cwdInside = null;
-    try { cwdInside = transcript.cwdOf(transcript.parseEntries(tailText(file, TR_TAIL_BYTES))); } catch (_) {}
-    cands.push({ file, mtimeMs: st.mtimeMs, cwdInside });
+    let text = '';
+    try {
+      const entries = transcript.parseEntries(tailText(file, TR_TAIL_BYTES));
+      cwdInside = transcript.cwdOf(entries);
+      // Kept for the tie-break below: what the agent last SAID is also on its own screen.
+      text = transcript.entryText(transcript.lastMain(entries) || {});
+    } catch (_) {}
+    cands.push({ file, mtimeMs: st.mtimeMs, cwdInside, text });
   }
-  return transcript.pickBinding(cands, { startedAt: d.startedAt, cwd: d.cwd, taken });
+  const one = transcript.pickBinding(cands, { startedAt: d.startedAt, cwd: d.cwd, taken });
+  if (one) return one;
+  // Ambiguous by folder — the normal case with several tabs on one repo. Match what's on
+  // THIS tab's screen against each candidate's last message.
+  const same = cands.filter((c) => c.cwdInside === d.cwd && !taken.has(c.file));
+  if (same.length < 2) return null;
+  const byScreen = transcript.pickByScreen(same, snapshot(d));
+  if (byScreen) trLog(`tab=${d.name || '?'} разведены по экрану → ${path.basename(byScreen)}`);
+  return byScreen;
 }
 
 // Is there a transcript in this tab's folder that's newer than the one we're bound to?
@@ -489,7 +503,7 @@ setInterval(() => {
         if (!file) continue;
         d.trFile = file;
         taken.add(file);
-        trLog(`tab=${id} → ${path.basename(file)}${d.claudeSessionId ? ' (by session id)' : ' (by folder scan)'}`);
+        trLog(`tab=${id} → ${path.basename(file)}${d.claudeSessionId ? ' (по session id)' : ' (сканом папки)'}`);
         // Bound without knowing the id (hooks off, `claude` typed by hand, a tab restored
         // by its old swarm-* name): the FILE NAME is that id. Hand it to the renderer so
         // the tab is saved with an exact handle and the next restore stops relying on a
