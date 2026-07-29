@@ -2510,6 +2510,37 @@ ipcMain.handle('session:canResume', (_e, cwd, sessionId) => {
   return false;
 });
 
+// Тот же вопрос, но про имя swarm-*, которым мы помечаем вкладку через `-n`. Нужен для
+// вкладок, сохранённых до того, как приложение стало запоминать id разговора: у них есть
+// только имя. Клод пишет его в первую строку стенограммы как customTitle, поэтому проверка
+// такая же честная, как по id, — а без проверки `--resume swarm-…` на несуществующем имени
+// упирал вкладку в «сессия с таким номером не найдена», откуда не выйти ни Enter, ни Esc.
+ipcMain.handle('session:canResumeName', (_e, cwd, name) => {
+  const want = String(name || '').trim();
+  if (!/^swarm-[0-9a-z]{4,16}$/i.test(want)) return false;
+  const dirs = [];
+  try { if (cwd) dirs.push(projectDir(cwd)); } catch (_) {}
+  try {
+    const root = path.join(os.homedir(), '.claude', 'projects');
+    for (const d of fs.readdirSync(root)) dirs.push(path.join(root, d));
+  } catch (_) {}
+  for (const dir of dirs) {
+    let names;
+    try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')); } catch (_) { continue; }
+    for (const n of names) {
+      // Имя лежит в первой записи файла, поэтому читаем только её начало.
+      try {
+        const fd = fs.openSync(path.join(dir, n), 'r');
+        const buf = Buffer.alloc(4096);
+        const read = fs.readSync(fd, buf, 0, 4096, 0);
+        fs.closeSync(fd);
+        if (buf.slice(0, read).toString('utf8').includes(`"customTitle":"${want}"`)) return true;
+      } catch (_) { /* файл исчез или не читается — не наш случай */ }
+    }
+  }
+  return false;
+});
+
 // --- IPC: keystrokes from the xterm in the renderer --------------------------
 ipcMain.on('session:input', (_event, { id, data }) => {
   const p = sessions.get(id);

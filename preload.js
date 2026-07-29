@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld('swarm', {
   // Is that conversation still on disk? Checked before restoring a tab with --resume,
   // so a deleted dialogue starts fresh instead of dropping into Claude's picker.
   canResumeSession: (cwd, sessionId) => ipcRenderer.invoke('session:canResume', cwd, sessionId),
+  // То же про имя swarm-* (вкладки, сохранённые до того, как мы стали помнить id разговора).
+  canResumeName: (cwd, name) => ipcRenderer.invoke('session:canResumeName', cwd, name),
 
   // A tab's Claude conversation changed (/clear, `claude` typed by hand, /resume in the
   // terminal). cb({ id, claudeSessionId }). Returns an unsubscribe fn.

@@ -803,7 +803,18 @@ async function createSession(opts = {}) {
     const ok = await window.swarm.canResumeSession(cwd || '', opts.claudeSessionId);
     if (ok) resumeId = opts.claudeSessionId;
   }
-  const doResume = !!(opts.resume && claudeCmd && (resumeId || sessionKey));
+  // Возобновляем ТОЛЬКО по проверенной зацепке. Раньше здесь стояло `resumeId || sessionKey`,
+  // и имя вкладки годилось само по себе — а оно есть всегда, даже у вкладки, открытой минуту
+  // назад и не сказавшей Клоду ни слова. Такая вкладка после перезапуска уходила в
+  // `--resume swarm-…` на несуществующем разговоре и упиралась в «сессия с таким номером не
+  // найдена», откуда не выйти ни Enter, ни Esc. Имя тоже проверяется — Клод пишет его в
+  // стенограмму, — так что вкладки, сохранённые до появления id, по-прежнему возвращаются.
+  let resumeName = null;
+  if (opts.resume && claudeCmd && !resumeId && sessionKey && opts.sessionKey) {
+    const ok = await window.swarm.canResumeName(cwd || '', sessionKey);
+    if (ok) resumeName = sessionKey;
+  }
+  const doResume = !!(opts.resume && claudeCmd && (resumeId || resumeName));
   // Blank tab → empty command (never fall back to the default agent).
   const command = blank
     ? ''
