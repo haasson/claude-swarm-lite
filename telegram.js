@@ -110,6 +110,7 @@ function readUpdate(u) {
   if (!msg) return { updateId: u.update_id, kind: 'other', msg: null };
   const from = msg.from || {};
   const chat = msg.chat || {};
+  const service = readService(msg);
   const text = typeof msg.text === 'string' ? msg.text
     : typeof msg.caption === 'string' ? msg.caption : '';
   const cmd = text.match(/^\/([A-Za-z0-9_]+)(?:@\S+)?(?:\s+([\s\S]*))?$/);
@@ -122,7 +123,10 @@ function readUpdate(u) {
     isForum: !!chat.is_forum,
     // Forum topics: `message_thread_id` is the topic. Telegram also sets it on plain
     // replies inside a topic, which is exactly what we want — same tab either way.
-    threadId: msg.is_topic_message ? (msg.message_thread_id || null) : null,
+    // У служебных записей форума (тему переименовали, закрыли) is_topic_message не всегда
+    // выставлен, а тема у них есть всегда — иначе событие некуда отнести.
+    threadId: (msg.is_topic_message || service) ? (msg.message_thread_id || null) : null,
+    service,
     fromId: from.id,
     fromName: [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || '',
     text,
@@ -134,6 +138,32 @@ function readUpdate(u) {
     voice: msg.voice ? { fileId: msg.voice.file_id, seconds: msg.voice.duration || 0 } : null,
     raw: msg,
   };
+}
+
+// --- служебные записи форума ---------------------------------------------------
+// Тему переименовали или закрыли ПАЛЬЦАМИ в телеге — Telegram сообщает об этом обычным
+// message-обновлением: текста нет, вместо него поле forum_topic_*. Другого способа узнать
+// об этом у бота нет (методов «прочитать список тем» в Bot API не существует), поэтому без
+// разбора этих записей синхронизация возможна только в одну сторону — из сворма в телегу.
+// Именно так и было: вкладку переименовали на маке — тема поехала следом, а обратно нет.
+//
+// forum_topic_edited приходит и на НАШ собственный editForumTopic — то есть эхо. Отличать
+// его от чужого переименования должен вызывающий (сравнением с текущим именем вкладки):
+// здесь мы только честно говорим, что случилось.
+function readService(msg) {
+  if (!msg || typeof msg !== 'object') return null;
+  if (msg.forum_topic_created) {
+    return { kind: 'topic-created', name: String(msg.forum_topic_created.name || '') };
+  }
+  if (msg.forum_topic_edited) {
+    // Сменили одну иконку — имени в записи нет вовсе, и переносить нечего. Пустая строка
+    // именем не считается: вкладка без имени — это вкладка, которую не позвать.
+    const name = msg.forum_topic_edited.name;
+    return { kind: 'topic-edited', name: typeof name === 'string' && name.trim() ? name.trim() : null };
+  }
+  if (msg.forum_topic_closed) return { kind: 'topic-closed' };
+  if (msg.forum_topic_reopened) return { kind: 'topic-reopened' };
+  return null;
 }
 
 // Кто написал или нажал — для журнала моста. Имя читается человеком, id различает: в группе
@@ -200,6 +230,28 @@ function routeMessage(u, ctx) {
 // context, and the tag re-anchors it. It also makes provenance visible — sitting at the
 // Mac you can see in the scrollback which instructions arrived from the phone.
 const TG_TAG = 'тлг';
+
+// --- сколько подробностей присылать -------------------------------------------
+// «Кратко или полностью» — это НЕ обрезка нашего сообщения постфактум, а инструкция
+// самому агенту: краткость в телеге всегда делалась этой строкой, и она же остаётся
+// местом, где ей управляют. Обрезать готовый ответ было бы хуже — человек видел бы
+// оборванную мысль вместо мысли, изложенной коротко.
+//
+// short — то, с чем мост жил с самого начала (и остаётся по умолчанию).
+// full  — для тех, кто читает с телефона всерьёз: те же запреты на интерактивный выбор
+//         (в чате его нечем нажать), но без требования ужимать содержание.
+const PROMPTS = {
+  short: 'из Telegram — отвечай коротко, текстом на телефон: без длинных'
+    + ' блоков кода и путей к файлам, без вариантов с выбором клавиатурой, вопросы задавай прозой',
+  full: 'из Telegram — отвечай полно, как за компьютером, но текстом на телефон:'
+    + ' без вариантов с выбором клавиатурой, вопросы задавай прозой',
+};
+
+const DETAILS = ['short', 'full'];
+
+function detailPrompt(detail) {
+  return PROMPTS[detail] || PROMPTS.short;
+}
 
 function tagInput(opts) {
   const o = opts || {};
@@ -293,7 +345,16 @@ const QA_ACTIONS = {
   auto: '⚡ авто — сам решает',
   manual: '🔒 спрашивать разрешение',
   new: '➕ ещё агент здесь',
+  // Две последние — только для сообщения «тему закрыли, а вкладка жива» (см. main.js).
+  // В шапку темы они не попадают: там свой список, HEADER_ACTIONS.
+  reopen: '↩️ вернуть тему',
+  kill: '✖️ закрыть вкладку',
 };
+
+// Кнопки под шапкой темы. Отдельный список, а не «все действия»: закрытие вкладки —
+// необратимо (агент завершается вместе с ходом), и такой кнопке нечего делать в панели,
+// которая висит в теме всегда и по которой промахиваются пальцем.
+const HEADER_ACTIONS = ['status', 'edits', 'auto', 'manual', 'new'];
 
 function actionData(tab, action) {
   if (!QA_ACTIONS[action]) return null;
@@ -310,7 +371,7 @@ function parseAction(raw) {
 
 // Клавиатура быстрых действий для темы вкладки. Две в ряд: на телефоне подписи длинные.
 function actionKeyboard(tab, actions) {
-  const list = (Array.isArray(actions) ? actions : Object.keys(QA_ACTIONS))
+  const list = (Array.isArray(actions) ? actions : HEADER_ACTIONS)
     .filter((a) => QA_ACTIONS[a]);
   const rows = [];
   let row = [];
@@ -494,10 +555,11 @@ function createPoller(deps) {
 
 module.exports = {
   API_HOST, MAX_TEXT, POLL_TIMEOUT_S, BACKOFF_MAX_MS, CODE_LEN, TG_TAG, tagInput,
+  PROMPTS, DETAILS, detailPrompt,
   apiUrl, looksLikeToken, maskToken,
   pairCode, deepLink, pairingMatch,
-  readUpdate, senderLabel, routeMessage, chunkText, inlineKeyboard, callbackData, parseCallbackData, callbackTab, CB_MAX, backoffMs, retryAfterMs, classifyError,
+  readUpdate, readService, senderLabel, routeMessage, chunkText, inlineKeyboard, callbackData, parseCallbackData, callbackTab, CB_MAX, backoffMs, retryAfterMs, classifyError,
   inputWrites, PASTE_ON, PASTE_OFF, ENTER, BACK_TAB, routeFailure,
-  COMMANDS, QA_ACTIONS, actionData, parseAction, actionKeyboard,
+  COMMANDS, QA_ACTIONS, HEADER_ACTIONS, actionData, parseAction, actionKeyboard,
   createPoller,
 };

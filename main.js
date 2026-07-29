@@ -540,7 +540,14 @@ const transcript = require('./transcript');
 const TR_TICK_MS = 500;
 const TR_TAIL_BYTES = 64 * 1024;   // plenty for the last few entries of a big file
 const TR_TEXT_MAX = 500;           // question excerpt sent to the renderer
-const TR_REPLY_MAX = 3000;         // finished-turn report relayed to Telegram
+// Сколько текста хода вообще имеет смысл хранить для пересылки в телегу. Зависит от
+// настройки подробности: в режиме «кратко» агент и сам отвечает коротко, а в режиме
+// «полностью» обрезка на трёх тысячах символов означала бы оборванный на полуслове ответ —
+// то есть настройку, которая обещает полноту и молча её не даёт. Длинное сообщение
+// Telegram всё равно примет частями (telegram.chunkText).
+const TR_REPLY_SHORT = 3000;
+const TR_REPLY_FULL = 12_000;
+function trReplyMax() { return TG && TG.detail === 'full' ? TR_REPLY_FULL : TR_REPLY_SHORT; }
 const TR_BIND_EVERY_MS = 2000;     // don't rescan a folder on every tick while unbound
 // A bound file this quiet, while the pty is clearly talking, means we're reading a dead
 // session — /clear starts a NEW one. Long enough that a slow tool (which writes nothing
@@ -800,14 +807,14 @@ setInterval(() => {
       // А это — ВЕСЬ финальный текст хода, для телеги. d.trText намеренно обрезан от
       // фразы-триггера («Сейчас от тебя: …») и годится только в подпись на плашке вкладки:
       // в чат так уезжал огрызок, хотя всё полезное агент сказал ДО этой фразы.
-      if (v) d.trFinal = String(v.text || '').trim().slice(0, TR_REPLY_MAX);
+      if (v) d.trFinal = String(v.text || '').trim().slice(0, trReplyMax());
       // The finished turn's closing message — what the Telegram bridge sends back as
       // «вот что получилось». Kept whole-ish: it's a report, not a chip label.
       // Вместе с ним — ВРЕМЯ той записи, из которой он взят. Только по нему видно, этого хода
       // текст или прошлого: статус «готов» приходит от хука на секунду раньше, чем classify
       // отпустит свой отстой и обновит текст (см. tgOnDone).
       if (v && v.status === 'ready') {
-        d.trReply = String(v.text || '').trim().slice(0, TR_REPLY_MAX);
+        d.trReply = String(v.text || '').trim().slice(0, trReplyMax());
         d.trReplyAt = v.at || now;
       }
       const why = v ? v.status + (v.kind ? ':' + v.kind : '') + ' (' + v.why + ')' : 'no entries';
@@ -879,12 +886,18 @@ function tgLog(line) {
   } catch (_) { /* diagnostics must never break the bridge */ }
 }
 
-// What we tell an agent when its input arrives from a phone. Editable in the Telegram
-// panel — «покороче» is a matter of taste — and kept on one line, because it's injected
-// as one line of terminal input.
-const TG_PROMPT_DEFAULT = 'из Telegram — отвечай коротко, текстом на телефон: без длинных'
-  + ' блоков кода и путей к файлам, без вариантов с выбором клавиатурой, вопросы задавай прозой';
-let TG_PROMPT = TG_PROMPT_DEFAULT;
+// What we tell an agent when its input arrives from a phone. Two ready-made wordings
+// («кратко» / «полностью», telegram.PROMPTS) plus a free-text override in the panel;
+// kept on one line, because it's injected as one line of terminal input.
+//
+// Именно ЭТА строка и есть настройка «кратко или полностью»: краткость в телеге всегда
+// делалась просьбой к агенту, а не обрезкой готового ответа.
+let TG_PROMPT = telegram.PROMPTS.short;
+
+function tgPromptDefault() { return telegram.detailPrompt(TG.detail); }
+
+// Своя формулировка перебивает пресет: человек, написавший её руками, знает, чего хочет.
+function tgApplyPrompt() { TG_PROMPT = TG.prompt || tgPromptDefault(); }
 
 let TG = { token: '', chatId: null, isForum: false, topics: {} };
 let tgPoller = null;
@@ -894,7 +907,7 @@ let tgError = null;    // last error, verbatim for the settings panel
 
 function tgPath() { return path.join(app.getPath('userData'), 'telegram.dat'); }
 
-function tgBlank() { return { token: '', chatId: null, isForum: false, topics: {}, prompt: '', keepAwake: true, mirrorAll: false, whisperBin: '', whisperModel: '' }; }
+function tgBlank() { return { token: '', chatId: null, isForum: false, topics: {}, prompt: '', detail: 'short', keepAwake: true, mirrorAll: false, whisperBin: '', whisperModel: '' }; }
 
 // The last result of tgCheckChat(), so the settings panel can show «бот администратор,
 // темы доступны» without re-asking Telegram on every render.
@@ -923,7 +936,7 @@ function tgEncAvailable() {
 // half-written save — means «not configured». Never a crash on launch.
 function tgLoad() {
   // Нет файла — нечего расшифровывать: молча остаёмся ненастроенными, связка не трогается.
-  if (!fs.existsSync(tgPath())) { TG = tgBlank(); TG_PROMPT = TG_PROMPT_DEFAULT; return; }
+  if (!fs.existsSync(tgPath())) { TG = tgBlank(); tgApplyPrompt(); return; }
   try {
     const d = JSON.parse(safeStorage.decryptString(fs.readFileSync(tgPath())));
     TG = {
@@ -932,13 +945,15 @@ function tgLoad() {
       isForum: !!d.isForum,
       topics: (d.topics && typeof d.topics === 'object') ? d.topics : {},
       prompt: String(d.prompt || ''),
+      // Файл прошлой версии подробности не знает — и это ровно то, чем мост жил до сих пор.
+      detail: telegram.DETAILS.includes(d.detail) ? d.detail : 'short',
       keepAwake: d.keepAwake !== false,
       mirrorAll: !!d.mirrorAll,
       whisperBin: String(d.whisperBin || ''),
       whisperModel: String(d.whisperModel || ''),
     };
   } catch (_) { TG = tgBlank(); }
-  TG_PROMPT = TG.prompt || TG_PROMPT_DEFAULT;
+  tgApplyPrompt();
 }
 
 function tgSave() {
@@ -1323,49 +1338,76 @@ function tgQr(text) {
 // instead of hoping: a non-admin bot can't create topics, and — the nasty one — Telegram's
 // privacy mode means a non-admin bot in a group never even receives plain messages, only
 // replies to its own. «Бот молчит» is not a diagnosis a user should have to reach alone.
+// Результат — СПИСОК пунктов, а не одна фраза. Раньше проверка возвращала первую же
+// найденную беду («в группе не включены темы»), и что там с правами бота, человек узнавал
+// только починив темы и нажав «проверить» снова: настройка вслепую, шаг за шагом. Мастер в
+// настройках показывает все пункты разом, поэтому здесь собирается всё, что удалось узнать.
+//
+// ok у пункта троичный: true — сделано, false — не сделано, null — проверить не удалось
+// (предыдущий пункт не пройден, дальше спрашивать бесполезно). Врать галочкой там, где мы
+// не знаем, нельзя: человек пойдёт чинить не то.
+// soft — пункт, без которого мост всё-таки работает: он не отменяет привязку, но и молчать
+// о нём нельзя, иначе «почему закрытые темы копятся» станет загадкой.
+function tgChk(id, label, ok, hint, soft) { return { id, label, ok, hint: hint || '', soft: !!soft }; }
+
+// Одна фраза для тех мест, где список не нарисовать: отказ при привязке уходит В ЧАТ, и там
+// нужно ровно одно предложение — что чинить прямо сейчас.
+function tgCheckNote(checks, title) {
+  const bad = checks.find((c) => c.ok === false && !c.soft);
+  if (bad) return bad.hint;
+  const soft = checks.find((c) => c.ok === false && c.hint);
+  return `«${title}»: бот администратор, темы доступны.` + (soft ? ' ' + soft.hint : '');
+}
+
 async function tgCheckChat(chatId) {
   const target = chatId != null ? chatId : TG.chatId;
   if (!TG.token || target == null) return null;
   const chat = await tgFetchJson(telegram.apiUrl(TG.token, 'getChat'), { chat_id: target });
   if (!chat.ok || !chat.body || chat.body.ok !== true) {
-    return { ok: false, note: telegram.classifyError(chat.status, chat.body).message };
+    const why = telegram.classifyError(chat.status, chat.body).message;
+    return { ok: false, title: '', isForum: false, note: why,
+      checks: [tgChk('group', 'Группа доступна боту', false, why)] };
   }
   const info = chat.body.result || {};
   const title = info.title || info.username || 'чат';
   const isForum = !!info.is_forum;
-  if (info.type === 'private') {
-    return { ok: false, title, isForum: false, note: 'Личный чат не подойдёт: вкладок много, и'
-      + ' различать их нужно темами. Создай группу, включи в ней «Темы», добавь туда бота'
-      + ' администратором — и привяжи её.' };
-  }
-  if (info.type !== 'supergroup' || !isForum) {
-    return { ok: false, title, isForum, note: `В «${title}» не включены темы. Настройки группы →`
-      + ' «Темы» → включить. Обычная группа без тем не подойдёт: каждая вкладка живёт в своей теме.' };
-  }
-  const me = await tgFetchJson(telegram.apiUrl(TG.token, 'getChatMember'),
-    { chat_id: target, user_id: Number(String(TG.token).split(':')[0]) });
-  const member = (me.ok && me.body && me.body.ok === true && me.body.result) || null;
+  const isGroup = info.type === 'group' || info.type === 'supergroup';
+  const checks = [tgChk('group', 'Это группа, а не личный чат', isGroup,
+    isGroup ? '' : 'Личный чат не подойдёт: вкладок много, и различать их нужно темами.'
+      + ' Создай группу, включи в ней «Темы», добавь туда бота администратором — и привяжи её.')];
+  checks.push(tgChk('topics', 'В группе включены темы', isGroup ? isForum : null,
+    !isGroup || isForum ? '' : `В «${title}» не включены темы. Настройки группы → «Темы» →`
+      + ' включить. Обычная группа без тем не подойдёт: каждая вкладка живёт в своей теме.'));
+
+  const me = isGroup && isForum
+    ? await tgFetchJson(telegram.apiUrl(TG.token, 'getChatMember'),
+      { chat_id: target, user_id: Number(String(TG.token).split(':')[0]) })
+    : null;
+  const member = (me && me.ok && me.body && me.body.ok === true && me.body.result) || null;
   const status = member ? member.status : '';
-  if (!member || status === 'left' || status === 'kicked') {
-    return { ok: false, title, isForum, note: `Бота нет в «${title}» — добавь его в группу.` };
-  }
-  const admin = status === 'administrator' || status === 'creator';
-  if (!admin) {
-    return { ok: false, title, isForum, note: `В «${title}» бот не администратор. Без этого Телеграм`
-      + ' не покажет ему обычные сообщения в темах (режим приватности) и не даст создавать темы.' };
-  }
-  if (member.can_manage_topics === false) {
-    return { ok: false, title, isForum, note: `В «${title}» у бота нет права «Управление темами» —`
-      + ' вкладки не получат своих тем. Включи это право в его админ-настройках.' };
-  }
+  const inChat = member ? !(status === 'left' || status === 'kicked') : null;
+  checks.push(tgChk('member', 'Бот добавлен в группу', me ? !!inChat : null,
+    !me || inChat ? '' : `Бота нет в «${title}» — добавь его в группу.`));
+
+  const admin = inChat ? (status === 'administrator' || status === 'creator') : (inChat === null ? null : false);
+  checks.push(tgChk('admin', 'Бот — администратор', admin,
+    admin !== false ? '' : `В «${title}» бот не администратор. Без этого Телеграм не покажет ему`
+      + ' обычные сообщения в темах (режим приватности) и не даст создавать темы.'));
+
+  const manage = admin ? member.can_manage_topics !== false : (admin === null ? null : false);
+  checks.push(tgChk('manage', 'Право «Управление темами»', manage,
+    manage !== false ? '' : `В «${title}» у бота нет права «Управление темами» — вкладки не`
+      + ' получат своих тем. Включи это право в его админ-настройках.'));
+
   // Право на удаление — не гейт: без него мост работает, просто закрытые вкладки оставляют
-  // за собой тему с замочком. Поэтому не отказ, а предупреждение в той же строке.
-  if (member.can_delete_messages === false) {
-    return { ok: true, title, isForum: true, note: `«${title}»: бот администратор, темы доступны.`
-      + ' Добавь ему право «Удаление сообщений» — иначе темы закрытых вкладок останутся в'
-      + ' списке с замочком вместо того, чтобы исчезать.' };
-  }
-  return { ok: true, title, isForum: true, note: `«${title}»: бот администратор, темы доступны.` };
+  // за собой тему с замочком.
+  const del = admin ? member.can_delete_messages !== false : (admin === null ? null : false);
+  checks.push(tgChk('delete', 'Право «Удаление сообщений»', del,
+    del !== false ? '' : 'Добавь боту право «Удаление сообщений» — иначе темы закрытых вкладок'
+      + ' останутся в списке с замочком вместо того, чтобы исчезать.', true));
+
+  const ok = !!(isGroup && isForum && inChat && admin && manage);
+  return { ok, title, isForum, checks, note: tgCheckNote(checks, title) };
 }
 
 function tgState() {
@@ -1381,8 +1423,10 @@ function tgState() {
     isForum: TG.isForum,
     live: !!(tgPoller && tgPoller.alive),
     error: tgError,
-    prompt: TG_PROMPT,
-    promptDefault: TG_PROMPT_DEFAULT,
+    prompt: TG.prompt || '',
+    // Что подставится, если своя формулировка пуста, — оно же и подсказка в поле.
+    promptDefault: tgPromptDefault(),
+    detail: TG.detail || 'short',
     keepAwake: !!TG.keepAwake,
     mirrorAll: !!TG.mirrorAll,
     whisperBin: TG.whisperBin,
@@ -1632,6 +1676,49 @@ async function tgDeleteTopic(threadId) {
   await tgTopicCall('closeForumTopic', threadId);
 }
 
+// --- синк в обратную сторону: телега → сворм -----------------------------------
+// Имя вкладки живёт в двух местах сразу — в списке вкладок на маке и в названии темы, — но
+// ехало до сих пор только в одну сторону. А с телефона переименовать тему это ЕДИНСТВЕННЫЙ
+// способ навести порядок в группе, и человек, сделавший это в дороге, получал расхождение:
+// в телеге «оплата», на маке всё ещё «claude 3», и /tabs называл вкладку старым именем.
+//
+// Петли здесь нет: наше собственное editForumTopic возвращается тем же событием, но к этому
+// моменту имя вкладки уже такое же, и мы ничего не делаем.
+async function tgOnService(u) {
+  const kind = u.service.kind;
+  const id = tgRoute(u);
+  const d = id == null ? null : det.get(id);
+  if (kind === 'topic-edited') {
+    const name = u.service.name;
+    if (!d || !name || name === d.name) return;
+    tgLog(`  тему ${u.threadId} переименовали в «${name}» — переношу на вкладку ${id}`);
+    d.name = name;
+    d.tgTopicName = name;          // в телеге это имя уже стоит, ехать обратно нечему
+    safeSend('app:renameTab', { id, name });
+    return;
+  }
+  if (kind === 'topic-closed') {
+    // Тему закрыли руками, а вкладка на маке жива — может быть, прямо сейчас работает.
+    // Молча завершить агента по жесту в чате нельзя: вместе с ним пропадёт незаконченный
+    // ход. Молча оставить как есть — тоже плохо: писать в закрытую тему человек больше не
+    // может, и мост для этой вкладки выглядит сломанным. Поэтому спрашиваем, двумя кнопками.
+    //
+    // Наш собственный откат (не удалось снести тему — закрываем её, см. tgDeleteTopic)
+    // приходит сюда же, но там вкладки уже нет, и вопрос не задаётся.
+    if (!d || d.dead) return;
+    tgLog(`  тему ${u.threadId} закрыли руками — спрашиваю, что делать со вкладкой ${id}`);
+    tgRemember(await tgSend({
+      threadId: u.threadId,
+      text: `Тема закрыта, а вкладка «${tgTabName(id)}» на маке ещё работает.`
+        + '\n\n↩️ вернуть тему — открою её обратно, и продолжим здесь.'
+        + '\n✖️ закрыть вкладку — агент завершится, тема исчезнет из группы.',
+      replyMarkup: telegram.actionKeyboard(String(id), ['reopen', 'kill']),
+    }), id);
+    return;
+  }
+  if (kind === 'topic-reopened' && d) tgLog(`  тему ${u.threadId} открыли обратно`);
+}
+
 // Every live tab gets its topic NOW, not when it happens to speak. A topic is the only
 // address a phone has: without one you can't start a task from the group at all, and the
 // group's topic list is supposed to BE the tab list — including the quiet tabs.
@@ -1645,7 +1732,14 @@ async function tgEnsureTopics() {
   try {
     for (const [id, d] of [...det]) {
       if (d.dead || !d.tabKey || !sessions.has(id)) continue;
-      if (TG.topics[d.tabKey]) { tgTopicSession.set(TG.topics[d.tabKey], id); continue; }
+      if (TG.topics[d.tabKey]) {
+        tgTopicSession.set(TG.topics[d.tabKey], id);
+        // Заодно подтягиваем название темы под имя вкладки: /sync — это «пусть в группе будет
+        // то же, что на машине», и разъехавшиеся имена сюда тоже входят. Вкладки, чьё имя и
+        // так совпадает, ничего не стоят — tgRenameTopic на них молчит.
+        tgRenameTopic(id);
+        continue;
+      }
       await tgTopicFor(id);
     }
   } catch (e) { reportMainError(e); } finally { tgEnsuring = false; }
@@ -2007,6 +2101,19 @@ async function tgOnAction(qa, u, ack, routed) {
     await ack('Открываю ещё одного агента в этой папке.');
     return;
   }
+  // Ответы на «тему закрыли, а вкладка жива» (см. tgOnService). Вкладку закрывает рендерер —
+  // тем же путём, что и крестик на самой вкладке, — а тема исчезнет следом, как при любом
+  // закрытии.
+  if (qa.action === 'reopen') {
+    await tgTopicCall('reopenForumTopic', tgTopicOf(d));
+    await ack('Тема снова открыта — пиши сюда.');
+    return;
+  }
+  if (qa.action === 'kill') {
+    safeSend('app:closeTab', { id: tab });
+    await ack(`Закрываю «${name}».`);
+    return;
+  }
   // Режимы: то же, что /mode, но одним касанием. Ответ во всплывашке говорит, чем это
   // кончилось — включая цену «правки без спроса», чтобы нажатие не выглядело безобидным.
   const want = qa.action === 'auto' ? 'auto' : qa.action === 'edits' ? 'accept-edits' : 'manual';
@@ -2089,10 +2196,10 @@ async function tgOnCallback(u) {
 // Why a pairing attempt didn't take. Told to the chat that tried, because the person
 // holding the phone is the only one who can act on it.
 function tgPairHint() {
-  if (!tgPair) return 'Окно привязки закрыто. Открой «Настройки → Телеграм» → «Привязать чат»'
+  if (!tgPair) return 'Окно привязки закрыто. Открой «Настройки → Телеграм» → «Привязать группу»'
     + ' и пришли новый код.';
   const left = TG_PAIR_TTL_MS - (Date.now() - tgPair.at);
-  if (left <= 0) return 'Код истёк. Нажми «Привязать чат» ещё раз и пришли новый —'
+  if (left <= 0) return 'Код истёк. Нажми «Привязать группу» ещё раз и пришли новый —'
     + ' он живёт 15 минут.';
   return `Этот код не подходит. Пришли тот, что показан в настройках (действует ещё`
     + ` ${Math.ceil(left / 60000)} мин).`;
@@ -2178,6 +2285,11 @@ function tgOnUpdate(u) {
   // Anything from another chat is not ours to listen to — a stranger who found the bot
   // gets silence, not a prompt injected into somebody's session.
   if (u.chatId !== TG.chatId) { tgLog('  чужой чат — игнорирую'); return; }
+
+  // Тему тронули пальцами в самой телеге — переименовали или закрыли. Текста в таком
+  // обновлении нет вовсе, поэтому разбирается оно ДО проверки «сообщение пустое», иначе
+  // событие тихо выпадало бы в ту же дыру, из-за которой синк работал в одну сторону.
+  if (u.service) { tgOnService(u).catch(reportMainError); return; }
 
   if (u.command === 'tabs') { tgSendTabs(u.threadId).catch(reportMainError); return; }
   if (u.command === 'usage') { tgUsage(u).catch(reportMainError); return; }
@@ -2491,7 +2603,18 @@ ipcMain.handle('telegram:reconnect', async () => {
 ipcMain.handle('telegram:setPrompt', (_e, raw) => {
   const text = String(raw == null ? '' : raw).replace(/\s+/g, ' ').trim().slice(0, 400);
   TG.prompt = text;
-  TG_PROMPT = text || TG_PROMPT_DEFAULT;
+  tgApplyPrompt();
+  try { tgSave(); } catch (e) { reportMainError(e); }
+  return tgState();
+});
+
+// «Кратко или полностью» — какими просить агента отвечать в телегу. Своя формулировка,
+// если она есть, продолжает перебивать пресет: переключатель меняет то, что подставляется
+// вместо неё, а не отменяет её.
+ipcMain.handle('telegram:setDetail', (_e, raw) => {
+  const detail = telegram.DETAILS.includes(raw) ? raw : 'short';
+  TG.detail = detail;
+  tgApplyPrompt();
   try { tgSave(); } catch (e) { reportMainError(e); }
   return tgState();
 });

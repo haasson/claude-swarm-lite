@@ -104,6 +104,22 @@ contextBridge.exposeInMainWorld('swarm', {
     return () => ipcRenderer.removeListener('app:createTab', handler);
   },
 
+  // Тему переименовали в телеге — имя едет на вкладку. Вкладки живут в рендерере, поэтому
+  // main может только попросить; обратно в телегу это уже не поедет (там имя и так новое).
+  onRenameTab: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('app:renameTab', handler);
+    return () => ipcRenderer.removeListener('app:renameTab', handler);
+  },
+
+  // Закрыть вкладку по кнопке из телеги. Тем же путём, что и крестик на вкладке, — иначе
+  // остались бы xterm и DOM закрытой сессии.
+  onCloseTab: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('app:closeTab', handler);
+    return () => ipcRenderer.removeListener('app:closeTab', handler);
+  },
+
   // Telegram bridge (Settings → Телеграм). The token itself only ever travels ONE way:
   // into main, which stores it encrypted. Everything coming back is masked state —
   // `state` never carries the token, so the renderer can't leak what it doesn't have.
@@ -118,6 +134,8 @@ contextBridge.exposeInMainWorld('swarm', {
     // раньше из этого состояния выходили только перезапуском приложения.
     reconnect: ()      => ipcRenderer.invoke('telegram:reconnect'),
     setPrompt: (text)  => ipcRenderer.invoke('telegram:setPrompt', text),
+    // «Кратко или полностью» — какими просить агента отвечать в телегу.
+    setDetail: (d)     => ipcRenderer.invoke('telegram:setDetail', d),
     keepAwake: (on)    => ipcRenderer.invoke('telegram:setKeepAwake', on),
     mirrorAll: (on)    => ipcRenderer.invoke('telegram:setMirrorAll', on),
     setWhisper: (bin, model) => ipcRenderer.invoke('telegram:setWhisper', { bin, model }),

@@ -1308,58 +1308,105 @@ function showSettingsModal(tab) {
       <div class="set-panel" data-panel="telegram">
         <div class="modal-msg">Свой бот, чтобы отвечать агентам с телефона. Токен хранится
           зашифрованным на этом компьютере и наружу не уходит.</div>
-        <div class="set-field">
-          <span class="set-label">Шаг 1. Токен бота</span>
-          <span class="set-hint set-hint-top"><a class="tg-link" id="set-tg-bf" href="#">@BotFather</a>
-            → <code>/newbot</code> → скопируйте строку вида <span class="set-mono">1234567890:AA…</span>
-            Бот — аккаунт в Телеграме, а не программа на сервере: размещать и платить нечего.</span>
-          <div class="tg-row">
-            <input class="set-input" type="password" id="set-tg-token" spellcheck="false"
-                   autocapitalize="off" autocorrect="off" placeholder="1234567890:AA…" />
-            <button type="button" class="set-check-btn" id="set-tg-save">Подключить</button>
+
+        <div class="tg-step">
+          <div class="tg-step-head">
+            <span class="tg-step-n">1</span>
+            <span class="tg-step-name">Заводим бота</span>
+            <span class="tg-step-mark" id="set-tg-mark1"></span>
           </div>
-          <div class="tg-state" id="set-tg-state"></div>
+          <div class="tg-step-body">
+            <span class="set-hint set-hint-top">Откройте <a class="tg-link" id="set-tg-bf" href="#">@BotFather</a>,
+              отправьте ему <span class="set-mono">/newbot</span> и придумайте имя. В ответ он
+              пришлёт строку вида <span class="set-mono">1234567890:AA…</span> — вставьте её сюда.
+              Бот — это аккаунт в Телеграме, а не программа на сервере: размещать и платить нечего.</span>
+            <div class="tg-row">
+              <input class="set-input" type="password" id="set-tg-token" spellcheck="false"
+                     autocapitalize="off" autocorrect="off" placeholder="1234567890:AA…" />
+              <button type="button" class="set-check-btn" id="set-tg-save">Подключить</button>
+            </div>
+            <div class="tg-state" id="set-tg-state"></div>
+          </div>
         </div>
-        <div class="set-field" id="set-tg-chat-field" hidden>
-          <span class="set-label">Шаг 2. Группа с темами</span>
-          <span class="set-hint set-hint-top" id="set-tg-step2-why">Каждая вкладка получает свою
-            тему — иначе на телефоне их не различить. Создайте группу, включите в её настройках
-            «Темы», добавьте туда бота <b>администратором</b> с правами «Управление темами» и
-            «Удаление сообщений». Затем нажмите «Привязать группу» и отправьте код в эту группу.</span>
-          <div class="tg-pair" id="set-tg-pair" hidden>
-            <img class="tg-qr" id="set-tg-qr" alt="QR: добавить бота в группу" hidden />
-            <div class="tg-pair-side">
-              <div class="tg-code" id="set-tg-code"></div>
-              <a class="tg-link" id="set-tg-link" href="#" target="_blank" rel="noreferrer">добавить бота в группу</a>
-              <div class="set-hint" id="set-tg-ttl"></div>
+
+        <div class="tg-step" id="set-tg-chat-field" hidden>
+          <div class="tg-step-head">
+            <span class="tg-step-n">2</span>
+            <span class="tg-step-name">Привязываем группу</span>
+            <span class="tg-step-mark" id="set-tg-mark2"></span>
+          </div>
+          <div class="tg-step-body">
+            <span class="set-hint set-hint-top" id="set-tg-step2-why">В Телеграме: создайте группу
+              (можно одному), зайдите в её настройки и включите <b>«Темы»</b>. Каждая вкладка
+              получит там свою тему — иначе на телефоне агентов не различить.
+              <br>Потом нажмите «Привязать группу»: появится QR и код. QR добавляет бота в
+              выбранную группу, а код нужно отправить в неё сообщением — по нему приложение и
+              поймёт, какая группа ваша. Осталось сделать бота <b>администратором</b> группы.</span>
+            <div class="tg-pair" id="set-tg-pair" hidden>
+              <img class="tg-qr" id="set-tg-qr" alt="QR: добавить бота в группу" hidden />
+              <div class="tg-pair-side">
+                <div class="tg-code" id="set-tg-code"></div>
+                <a class="tg-link" id="set-tg-link" href="#" target="_blank" rel="noreferrer">добавить бота в группу</a>
+                <div class="set-hint" id="set-tg-ttl"></div>
+              </div>
+            </div>
+            <ul class="tg-checks" id="set-tg-checks" hidden></ul>
+            <div class="tg-state" id="set-tg-check-note"></div>
+            <div class="tg-row tg-row-wrap">
+              <button type="button" class="set-check-btn" id="set-tg-pair-btn">Привязать группу</button>
+              <button type="button" class="set-check-btn" id="set-tg-check" hidden>Проверить ещё раз</button>
             </div>
           </div>
-          <div class="tg-row tg-row-wrap">
-            <button type="button" class="set-check-btn" id="set-tg-pair-btn">Привязать группу</button>
-            <button type="button" class="set-check-btn" id="set-tg-reconnect" hidden>Подключить заново</button>
-            <button type="button" class="set-check-btn" id="set-tg-check" hidden>Проверить права</button>
-            <button type="button" class="set-check-btn" id="set-tg-unpair" hidden>Отвязать</button>
-            <button type="button" class="set-check-btn danger" id="set-tg-forget">Удалить токен</button>
-          </div>
-          <div class="tg-state" id="set-tg-check-note"></div>
         </div>
+
+        <div class="tg-step" id="set-tg-step3" hidden>
+          <div class="tg-step-head">
+            <span class="tg-step-n">3</span>
+            <span class="tg-step-name">Мост в эфире</span>
+            <span class="tg-step-mark" id="set-tg-mark3"></span>
+          </div>
+          <div class="tg-step-body">
+            <div class="tg-state" id="set-tg-live"></div>
+            <div class="tg-row tg-row-wrap">
+              <button type="button" class="set-check-btn" id="set-tg-reconnect" hidden>Подключить заново</button>
+            </div>
+            <span class="set-hint set-hint-top">Пишете в тему — попадаете в её агента; его вопросы и
+              итоги приходят туда же. Закрыли вкладку — её тема исчезает из группы, и наоборот:
+              переименовали тему в телеге — вкладка переименуется на компьютере.
+              <br>Запрос разрешения приходит <b>кнопками с вариантами самого Клода</b>: нажали —
+              приложение напечатало этот номер. Словами разрешение не даётся, одобрить можно
+              только то, что видно на кнопке.
+              <br>Команды: <span class="set-mono">/tabs</span> — кто чем занят,
+              <span class="set-mono">/new</span> — ещё один агент в папке этой темы,
+              <span class="set-mono">/mode edits</span> — разрешить агенту правки без спроса,
+              <span class="set-mono">/sync</span> — привести темы в соответствие с вкладками,
+              <span class="set-mono">/help</span> — напоминалка.</span>
+          </div>
+        </div>
+
         <div class="set-field" id="set-tg-extra" hidden>
-          <span class="set-label">Как этим пользоваться</span>
-          <span class="set-hint set-hint-top">Пишете в тему — попадаете в её агента; его вопросы и
-            итоги приходят туда же. Закрыли вкладку — её тема исчезает из группы.
-            <br>Запрос разрешения приходит <b>кнопками с вариантами самого Клода</b>: нажали —
-            приложение напечатало этот номер. Словами разрешение не даётся, одобрить можно
-            только то, что видно на кнопке.
-            <br>Команды: <span class="set-mono">/tabs</span> — кто чем занят,
-            <span class="set-mono">/new</span> — ещё один агент в папке этой темы,
-            <span class="set-mono">/mode edits</span> — разрешить агенту правки без спроса,
-            <span class="set-mono">/sync</span> — привести темы в соответствие с вкладками,
-            <span class="set-mono">/help</span> — напоминалка.</span>
-          <span class="set-label set-label-gap">Как агент отвечает в телегу</span>
-          <span class="set-hint set-hint-top">Подставляется к первому сообщению из телеги, дальше
-            идёт короткая метка <span class="set-mono">[тлг]</span>. Пусто — вернётся формулировка
-            по умолчанию.</span>
-          <textarea class="set-input set-prose" id="set-tg-prompt" rows="2" spellcheck="false"></textarea>
+          <span class="set-label">Насколько подробно отвечать в телегу</span>
+          <span class="set-hint set-hint-top">Это просьба агенту, а не обрезка его ответа: мост
+            подставляет её к первому сообщению из телеги, дальше идёт короткая метка
+            <span class="set-mono">[тлг]</span>.</span>
+          <label class="set-radio">
+            <input type="radio" name="tg-detail" id="set-tg-detail-short" />
+            <span class="set-check-tx">Кратко
+              <span class="set-check-sub">по-телефонному: без длинных блоков кода и путей, суть в паре фраз</span></span>
+          </label>
+          <label class="set-radio">
+            <input type="radio" name="tg-detail" id="set-tg-detail-full" />
+            <span class="set-check-tx">Полностью
+              <span class="set-check-sub">как за компьютером; длинный ответ придёт несколькими сообщениями</span></span>
+          </label>
+          <div class="tg-row tg-row-wrap">
+            <button type="button" class="set-check-btn" id="set-tg-prompt-toggle">Своя формулировка</button>
+          </div>
+          <div id="set-tg-prompt-box" hidden>
+            <span class="set-hint set-hint-top">Заменяет обе заготовки. Пусто — вернётся та, что
+              выбрана выше.</span>
+            <textarea class="set-input set-prose" id="set-tg-prompt" rows="2" spellcheck="false"></textarea>
+          </div>
 
           <span class="set-label set-label-gap">Голосовые сообщения</span>
           <span class="set-hint set-hint-top">Можно надиктовать задачу голосом. Распознаётся
@@ -1403,11 +1450,18 @@ function showSettingsModal(tab) {
               <span class="set-check-sub">со спящей машиной отвечать некому: агенты живут здесь, а не на сервере</span></span>
           </label>
 
-          <span class="set-label set-label-gap">Если что-то не так</span>
+        </div>
+
+        <div class="set-field" id="set-tg-trouble" hidden>
+          <span class="set-label">Если что-то не так</span>
           <span class="set-hint set-hint-top">Мост пишет журнал: кто что прислал, куда ушло и
-            почему. Пригодится, чтобы разобраться или отправить разработчику.</span>
+            почему. Пригодится, чтобы разобраться или отправить разработчику.
+            <br>«Отвязать группу» оставляет бота подключённым — можно привязать другую.
+            «Удалить токен» стирает бота с этого компьютера целиком.</span>
           <div class="tg-row tg-row-wrap">
             <button type="button" class="set-check-btn" id="set-tg-log">Показать журнал моста</button>
+            <button type="button" class="set-check-btn" id="set-tg-unpair" hidden>Отвязать группу</button>
+            <button type="button" class="set-check-btn danger" id="set-tg-forget">Удалить токен</button>
           </div>
         </div>
       </div>
@@ -1519,7 +1573,18 @@ function showSettingsModal(tab) {
   const tgReconnectB = overlay.querySelector('#set-tg-reconnect');
   const tgCheckB = overlay.querySelector('#set-tg-check');
   const tgCheckNote = overlay.querySelector('#set-tg-check-note');
+  const tgChecksEl = overlay.querySelector('#set-tg-checks');
+  const tgStep3 = overlay.querySelector('#set-tg-step3');
+  const tgLiveEl = overlay.querySelector('#set-tg-live');
+  const tgMark1 = overlay.querySelector('#set-tg-mark1');
+  const tgMark2 = overlay.querySelector('#set-tg-mark2');
+  const tgMark3 = overlay.querySelector('#set-tg-mark3');
+  const tgTrouble = overlay.querySelector('#set-tg-trouble');
   const tgExtra = overlay.querySelector('#set-tg-extra');
+  const tgDetailShort = overlay.querySelector('#set-tg-detail-short');
+  const tgDetailFull = overlay.querySelector('#set-tg-detail-full');
+  const tgPromptToggle = overlay.querySelector('#set-tg-prompt-toggle');
+  const tgPromptBox = overlay.querySelector('#set-tg-prompt-box');
   const tgPromptI = overlay.querySelector('#set-tg-prompt');
   const tgAwakeI = overlay.querySelector('#set-tg-awake');
   const tgMirrorI = overlay.querySelector('#set-tg-mirror');
@@ -1598,32 +1663,78 @@ function showSettingsModal(tab) {
     vManualB.textContent = vManualBox.hidden ? 'Указать пути вручную' : 'Скрыть пути';
   });
 
-  function tgStatusText(st) {
+  // Состояние шага одним знаком. Троичное, как и сами проверки: «не знаю» — это не «плохо»,
+  // и рисовать крестик там, где мы просто ещё не спрашивали, значит посылать чинить не то.
+  function tgMark(el, ok) {
+    el.textContent = ok === true ? '✓' : ok === false ? '✗' : '';
+    el.className = 'tg-step-mark' + (ok === true ? ' is-good' : ok === false ? ' is-bad' : '');
+  }
+
+  // Живой список проверок группы: видно всё сразу — что уже сделано, что осталось. Раньше
+  // здесь была одна фраза про первую же беду, и настройка шла вслепую, по одной проблеме за
+  // нажатие «проверить».
+  function renderChecks(check) {
+    const list = (check && check.checks) || [];
+    tgChecksEl.hidden = !list.length;
+    tgChecksEl.innerHTML = '';
+    for (const c of list) {
+      const li = document.createElement('li');
+      li.className = 'tg-check' + (c.ok === true ? ' is-good' : c.ok === false ? (c.soft ? ' is-warn' : ' is-bad') : '');
+      const mark = document.createElement('span');
+      mark.className = 'tg-check-mark';
+      mark.textContent = c.ok === true ? '✓' : c.ok === false ? (c.soft ? '!' : '✗') : '·';
+      const tx = document.createElement('span');
+      tx.textContent = c.label;
+      li.append(mark, tx);
+      tgChecksEl.appendChild(li);
+    }
+  }
+
+  function tgTokenText(st) {
     if (!st.available) return '⚠ Система не даёт безопасно хранить токен — мост недоступен';
     if (!st.configured) return 'Бот не подключён';
     if (st.error) return '⚠ ' + st.error;
-    if (!st.live) return 'Подключаюсь…';
-    const who = st.bot ? '@' + st.bot : 'бот';
-    if (st.chatId == null) return `${who} на связи. Группа не привязана — нажмите «Привязать группу».`;
+    return st.bot ? `Бот @${st.bot} подключён` : 'Токен принят';
+  }
+
+  function tgLiveText(st) {
+    if (st.error) return '⚠ ' + st.error;
+    if (!st.live) return 'Опрос не идёт — нажмите «Подключить заново».';
     // Название группы, если оно известно: «привязана» без имени не даёт убедиться, что это
     // та самая группа, особенно когда их несколько.
     const where = st.check && st.check.title ? ` «${st.check.title}»` : '';
-    return `${who} на связи, группа${where} привязана: вкладки получают свои темы.`;
+    return `Мост работает: группа${where} на связи, вкладки получают свои темы.`;
   }
 
   function renderTg(st) {
     if (!st) return;
-    tgStateEl.textContent = tgStatusText(st);
+    const bound = st.chatId != null;
+    const groupOk = bound && !!(st.check ? st.check.ok : true);
+    tgStateEl.textContent = tgTokenText(st);
     tgStateEl.className = 'tg-state' + (st.error || !st.available ? ' is-bad'
-      : st.configured && st.live ? ' is-good' : '');
+      : st.configured ? ' is-good' : '');
+    tgMark(tgMark1, !st.available ? false : st.configured ? (st.error ? false : true) : null);
+    tgMark(tgMark2, !bound ? null : st.check ? (st.check.ok ? true : false) : true);
+    tgMark(tgMark3, !bound ? null : st.live && !st.error ? true : false);
     tgTokenI.placeholder = st.configured ? st.masked : '1234567890:AA…';
     tgChatField.hidden = !st.configured;
-    tgUnpairB.hidden = st.chatId == null;
+    // Третий шаг — про то, что мост уже живёт; до привязки группы показывать нечего.
+    tgStep3.hidden = !bound;
+    tgLiveEl.textContent = bound ? tgLiveText(st) : '';
+    tgLiveEl.className = 'tg-state' + (!bound ? '' : st.live && !st.error ? ' is-good' : ' is-bad');
+    tgTrouble.hidden = !st.configured;
+    tgUnpairB.hidden = !bound;
     // Опрос лежит, хотя бот подключён: единственный выход из фатальной ошибки (не тот токен,
     // «токен уже читает кто-то другой») раньше был перезапуск приложения.
     tgReconnectB.hidden = !st.configured || !!st.live;
-    tgCheckB.hidden = st.chatId == null;
-    tgExtra.hidden = st.chatId == null;
+    tgCheckB.hidden = !bound;
+    renderChecks(bound ? st.check : null);
+    // Настройки моста — только когда мосту есть куда писать. До этого они обещают
+    // управление тем, чего ещё нет.
+    tgExtra.hidden = !groupOk;
+    const detail = st.detail === 'full' ? 'full' : 'short';
+    tgDetailShort.checked = detail === 'short';
+    tgDetailFull.checked = detail === 'full';
     // Привязались — код мёртв, и висящий QR только вводит в заблуждение («битый»).
     if (st.chatId != null) {
       stopTgTtl();
@@ -1637,11 +1748,16 @@ function showSettingsModal(tab) {
     // отвлекает — вместо него видно, что именно привязано.
     tgStep2Why.hidden = st.chatId != null;
     tgPairBtn.textContent = st.chatId == null ? 'Привязать группу' : 'Привязать другую';
-    // The rights check: the one place where «бот молчит в топике» gets a name.
-    tgCheckNote.textContent = st.check ? st.check.note : '';
-    tgCheckNote.className = 'tg-state' + (st.check ? (st.check.ok ? ' is-good' : ' is-bad') : '');
+    // Подсказка «что чинить» — только когда чинить есть что: рядом со списком галочек фраза
+    // «бот администратор, темы доступны» повторяет его же и превращается в шум.
+    const needsWork = !!(st.check && (st.check.checks || []).some((c) => c.ok === false));
+    tgCheckNote.textContent = needsWork ? st.check.note : '';
+    tgCheckNote.className = 'tg-state' + (needsWork && !st.check.ok ? ' is-bad' : '');
     if (document.activeElement !== tgPromptI) tgPromptI.value = st.prompt || '';
     tgPromptI.placeholder = st.promptDefault || '';
+    // Своя формулировка есть — показываем поле сразу, иначе человек не поймёт, почему
+    // переключатель «кратко/полностью» ни на что не влияет.
+    if (st.prompt && tgPromptBox.hidden) togglePromptBox(true);
     tgAwakeI.checked = !!st.keepAwake;
     tgMirrorI.checked = !!st.mirrorAll;
     if (document.activeElement !== tgWBinI) tgWBinI.value = st.whisperBin || '';
@@ -1657,7 +1773,25 @@ function showSettingsModal(tab) {
     if (tgTtlTimer) { clearInterval(tgTtlTimer); tgTtlTimer = null; }
   }
 
-  window.swarm.telegram.state().then(renderTg);
+  // Своя формулировка — путь для тех, кому мало двух заготовок, поэтому она свёрнута:
+  // на виду остаётся выбор из двух понятных вариантов, а не пустое поле для сочинения.
+  function togglePromptBox(open) {
+    tgPromptBox.hidden = !open;
+    tgPromptToggle.textContent = open ? 'Скрыть свою формулировку' : 'Своя формулировка';
+  }
+  tgPromptToggle.addEventListener('click', () => togglePromptBox(tgPromptBox.hidden));
+
+  const setDetail = async (d) => { renderTg(await window.swarm.telegram.setDetail(d)); };
+  tgDetailShort.addEventListener('change', () => { if (tgDetailShort.checked) setDetail('short'); });
+  tgDetailFull.addEventListener('change', () => { if (tgDetailFull.checked) setDetail('full'); });
+
+  window.swarm.telegram.state().then(async (st) => {
+    renderTg(st);
+    // Права в группе могли поменяться, пока приложение не смотрело (бота разжаловали,
+    // добавили право). Перепроверяем сами, один раз за запуск: мастер обещает показывать
+    // положение дел, а не то, что было верно на прошлой привязке.
+    if (st && st.chatId != null && !st.check) renderTg(await window.swarm.telegram.check());
+  });
   // Main pushes state on its own too (the poller losing the network, a chat pairing
   // itself from the phone) — the panel must not need a reopen to notice.
   window.swarm.telegram.onState((st) => { if (document.body.contains(overlay)) renderTg(st); });
@@ -1686,7 +1820,7 @@ function showSettingsModal(tab) {
       const left = Math.max(0, Math.round((until - Date.now()) / 1000));
       tgTtlEl.textContent = left
         ? `код действует ещё ${left > 90 ? Math.ceil(left / 60) + ' мин' : left + ' с'}`
-        : 'код истёк — нажмите «Привязать чат» снова';
+        : 'код истёк — нажмите «Привязать группу» снова';
       if (!left) { stopTgTtl(); tgPairBox.hidden = true; }
     };
     tick();
@@ -1699,6 +1833,7 @@ function showSettingsModal(tab) {
 
   tgCheckB.addEventListener('click', async () => {
     tgCheckNote.textContent = 'Проверяю…';
+    tgCheckNote.className = 'tg-state';
     renderTg(await window.swarm.telegram.check());
   });
 
@@ -3663,6 +3798,20 @@ window.swarm.onDecodeAudio(async ({ reqId, bytes }) => {
 
 // /new из телеги: main знает папку, но вкладку умеет делать только рендерер.
 window.swarm.onCreateTab(({ cwd }) => createSession({ cwd }));
+
+// Тему переименовали в телеге — переносим имя на вкладку. Обратно в телегу оно не поедет:
+// main сравнивает имя с названием темы и на совпадении молчит, так что круга не возникает.
+window.swarm.onRenameTab(({ id, name }) => {
+  const s = sessions.get(String(id));
+  const clean = String(name || '').replace(/\s+/g, ' ').trim();
+  if (!s || !clean) return;
+  s.tab.querySelector('.label').textContent = clean;
+  persistTabs();          // имя переживает перезапуск, как и при переименовании мышью
+});
+
+// Кнопка «закрыть вкладку» в телеге. Через тот же closeSession, что и крестик: иначе
+// остались бы висеть xterm, DOM и место в раскладке.
+window.swarm.onCloseTab(({ id }) => closeSession(String(id)));
 try { JSON.parse(localStorage.getItem('swarm.collapsed') || '[]').forEach((c) => collapsedFolders.add(c)); } catch (_) {}
 restoreOrStart();
 

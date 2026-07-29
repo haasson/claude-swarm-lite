@@ -105,6 +105,41 @@ test('readUpdate survives junk and non-message updates', () => {
   assert.strictEqual(T.readUpdate({ update_id: 1, poll: {} }).kind, 'other');
 });
 
+// --- служебные записи форума ---------------------------------------------------
+// Единственный канал, по которому телега сообщает «тему переименовали/закрыли». Без их
+// разбора синхронизация возможна только в одну сторону — из сворма в телегу; ровно так и
+// было, и это первое, на что пожаловались.
+
+test('readUpdate разбирает переименование темы', () => {
+  const u = T.readUpdate(msgUpdate({
+    text: undefined, message_thread_id: 9, forum_topic_edited: { name: 'оплата' },
+  }));
+  assert.deepStrictEqual(u.service, { kind: 'topic-edited', name: 'оплата' });
+  assert.strictEqual(u.threadId, 9, 'у служебной записи тема есть даже без is_topic_message');
+});
+
+test('сменили одну иконку — имени нет, переносить нечего', () => {
+  const u = T.readUpdate(msgUpdate({
+    text: undefined, message_thread_id: 9, forum_topic_edited: { icon_custom_emoji_id: '5' },
+  }));
+  assert.strictEqual(u.service.kind, 'topic-edited');
+  assert.strictEqual(u.service.name, null);
+  // Пустая строка именем тоже не считается: вкладка без имени — вкладка, которую не позвать.
+  assert.strictEqual(T.readService({ forum_topic_edited: { name: '  ' } }).name, null);
+});
+
+test('закрытие и открытие темы различаются', () => {
+  assert.strictEqual(T.readService({ forum_topic_closed: {} }).kind, 'topic-closed');
+  assert.strictEqual(T.readService({ forum_topic_reopened: {} }).kind, 'topic-reopened');
+  assert.strictEqual(T.readService({ forum_topic_created: { name: 'a' } }).kind, 'topic-created');
+});
+
+test('обычное сообщение служебным не считается', () => {
+  assert.strictEqual(T.readUpdate(msgUpdate({})).service, null);
+  assert.strictEqual(T.readService(null), null);
+  assert.strictEqual(T.readService({ text: 'привет' }), null);
+});
+
 // --- routing -----------------------------------------------------------------
 // The rule that matters most: an answer must reach the tab it was written for, or no tab
 // at all. These tests exist to make «last active tab» impossible to reintroduce.
@@ -213,6 +248,33 @@ test('быстрое действие и разрешение не разбир�
   assert.strictEqual(T.parseCallbackData(qa), null, 'быстрая кнопка не сойдёт за разрешение');
   assert.strictEqual(T.parseAction(perm), null, 'разрешение не сойдёт за быструю кнопку');
   assert.deepStrictEqual(T.parseAction(qa), { tab: '7', action: 'auto' });
+});
+
+// Закрытие вкладки необратимо: агент завершается вместе с незаконченным ходом. Такой кнопке
+// нечего делать в панели, которая висит в шапке темы всегда и по которой промахиваются пальцем.
+test('в шапке темы нет кнопки, закрывающей вкладку', () => {
+  const kb = T.actionKeyboard('7');
+  const labels = kb.inline_keyboard.flat().map((b) => b.text);
+  assert.ok(!labels.includes(T.QA_ACTIONS.kill), 'закрытие вкладки в шапке: ' + labels.join(', '));
+  assert.ok(labels.includes(T.QA_ACTIONS.status), 'а обычные быстрые действия на месте');
+  // Зато по явному списку она собирается — это ответ на «тему закрыли, а вкладка жива».
+  const ask = T.actionKeyboard('7', ['reopen', 'kill']).inline_keyboard.flat();
+  assert.deepStrictEqual(ask.map((b) => b.callback_data), ['q|7|reopen', 'q|7|kill']);
+});
+
+// «Кратко или полностью» — это просьба к агенту, а не обрезка готового ответа: краткость в
+// телеге всегда делалась этой строкой.
+test('подробность выбирает формулировку, а неизвестная — краткую', () => {
+  assert.strictEqual(T.detailPrompt('full'), T.PROMPTS.full);
+  assert.strictEqual(T.detailPrompt('short'), T.PROMPTS.short);
+  assert.strictEqual(T.detailPrompt('нет такой'), T.PROMPTS.short);
+  assert.strictEqual(T.detailPrompt(undefined), T.PROMPTS.short);
+  assert.deepStrictEqual(T.DETAILS, ['short', 'full']);
+  // Обе заготовки запрещают интерактивный выбор: в чате его нечем нажать.
+  for (const p of Object.values(T.PROMPTS)) {
+    assert.ok(/выбором клавиатурой/.test(p), p);
+    assert.ok(!/\n/.test(p), 'подставляется одной строкой ввода');
+  }
 });
 
 test('actionData отказывается от неизвестного действия', () => {
