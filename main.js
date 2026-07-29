@@ -1601,27 +1601,38 @@ function tgCancelWaiting(d) {
 // Раньше в тему уезжала стрелочка с именем вкладки, а потом отдельным сообщением итог. По
 // стрелочке нельзя было понять, работает агент или всё заглохло, а лента распухала вдвое.
 // Теперь подтверждение — это ЗАГОТОВКА ответа: то же сообщение переписывается на итог,
-// когда ход закончится. Для голосового над ним остаётся строка «услышал: …».
+// когда ход закончится. Голосовое присылает расшифровку ОТДЕЛЬНЫМ сообщением до неё —
+// его никто не переписывает, поэтому «услышал: RoseVPN» остаётся на месте, что бы ни
+// случилось с ответом.
 const TG_THINKING = '⏳ получил, думаю…';
 
-async function tgAckSend(id, d, u, prefix) {
-  const text = prefix ? `${prefix}\n\n${TG_THINKING}` : TG_THINKING;
-  const msgId = await tgSend({ threadId: u.threadId, replyTo: u.messageId, text, silent: true });
+async function tgAckSend(id, d, u) {
+  const msgId = await tgSend({ threadId: u.threadId, replyTo: u.messageId, text: TG_THINKING, silent: true });
   tgRemember(msgId, id);          // ответом на него тоже можно продолжать разговор
-  if (d && msgId) d.tgAck = { messageId: msgId, prefix: prefix || '', chatId: TG.chatId };
+  if (d && msgId) d.tgAck = { messageId: msgId, chatId: TG.chatId };
 }
 
 // Переписать заготовку. Не вышло (сообщение удалили, прошли сутки, чат сменился) — отправим
 // обычным сообщением: тишина вместо ответа хуже лишней записи в ленте.
 async function tgAckResolve(id, d, text) {
   const ack = d && d.tgAck;
-  const body = ack && ack.prefix ? `${ack.prefix}\n\n${text}` : text;
+  const body = String(text);
   if (!ack || ack.chatId !== TG.chatId) {
     const msgId = await tgSend({ threadId: await tgTopicFor(id), text: body });
     tgRemember(msgId, id);
     return;
   }
   d.tgAck = null;
+  // Слишком длинный ответ в правку не влезет: Telegram режет сообщение на 4096, а правку
+  // просто отвергает целиком. Тогда заготовка становится указателем, а сам ответ уходит
+  // обычным сообщением — там он разобьётся на части штатно.
+  if (body.length > telegram.MAX_TEXT - 64) {
+    await tgFetchJson(telegram.apiUrl(TG.token, 'editMessageText'),
+      { chat_id: ack.chatId, message_id: ack.messageId, text: '✅ ответил — ниже' });
+    const longId = await tgSend({ threadId: await tgTopicFor(id), text: body });
+    tgRemember(longId, id);
+    return;
+  }
   const res = await tgFetchJson(telegram.apiUrl(TG.token, 'editMessageText'),
     { chat_id: ack.chatId, message_id: ack.messageId, text: body });
   if (res.ok && res.body && res.body.ok === true) {
@@ -1947,7 +1958,7 @@ function tgOnUpdate(u) {
     return;
   }
   if (d) d.tgPrimed = true;
-  tgAckSend(id, d, u, '').catch(reportMainError);
+  tgAckSend(id, d, u).catch(reportMainError);
 }
 
 // Голосовое: сначала адресат (иначе незачем и распознавать), потом эхо распознанного и
@@ -1980,10 +1991,14 @@ async function tgOnVoice(u) {
   // Эхо ДО печати в сессию, и именно поэтому await: «RoseVPN» легко становится «розовым
   // пн», и увидеть, ЧТО услышано, надо раньше, чем агент по этому пойдёт работать. Если
   // сначала печатать, то в ленте порядок обратный — ответ агента раньше расшифровки.
-  // Эхо остаётся в сообщении навсегда: оно и есть страховка от «розового пн». Ответ агента
-  // прирастёт к нему же, поэтому в теме будет одна запись «услышал → вот что вышло».
-  const echo = `🎙 услышал: «${r.text}»`;
-  await tgAckSend(id, d, u, echo);
+  // Расшифровка — ОТДЕЛЬНЫМ сообщением, которое потом никто не переписывает. Так человек
+  // видит своими глазами, что именно услышано («RoseVPN» или «розовый пн»), и может
+  // поправить, пока агент ещё думает. Вписывать её в сообщение с ответом нельзя: длинный
+  // ответ в правку не влезает (Telegram режет на 4096), и тогда расшифровка осталась бы
+  // висеть рядом с вечным «думаю…».
+  tgRemember(await tgSend({ threadId: u.threadId, replyTo: u.messageId,
+    text: `🎙 услышал: «${r.text}»` }), id);
+  await tgAckSend(id, d, u);
   const tagged = telegram.tagInput({ text: r.text, instruction: TG_PROMPT, primed: !!(d && d.tgPrimed) });
   if (!tgAnswer(id, tagged)) {
     await tgSend({ threadId: u.threadId, replyTo: u.messageId, text: 'Эта вкладка уже закрыта.' });
