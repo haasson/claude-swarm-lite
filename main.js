@@ -247,8 +247,9 @@ function makeDetector(cols, rows) {
     // .jsonl bound to it, and the last verdict read out of it.
     // Identity for the Telegram bridge: the tab's visible name and the key that outlives
     // the process (the forum topic hangs on it). tgTimer debounces the «ждёт» message.
-    // tgNotifiedAt — уведомление об ожидании УШЛО (а не «пытались»): пока пусто, такт
-    // пробует снова. tgAck — сообщение «получил, думаю…», которое станет ответом. mode —
+    // tgNotifiedAt — про это ожидание УЖЕ написали (ставится до отправки, снимается при
+    // неудаче и когда вкладка перестала ждать): без этой отметки одно и то же разрешение
+    // приходило дважды. tgAck — сообщение «получил, думаю…», которое станет ответом. mode —
     // последний увиденный режим разрешений: на экране его строка есть не всегда.
     tabKey: '', name: '', tgTimer: null, tgMode: false, tgPrimed: false, trReply: '',
     tgNotifiedAt: 0, tgAck: null, tgLastSent: '', trFinal: '', mode: null,
@@ -1580,11 +1581,21 @@ const TG_NOTIFY_DELAY_MS = 1200;
 function tgOnWaiting(id) {
   const d = det.get(id);
   if (!d || TG.chatId == null || !TG.token) return;
-  if (d.tgTimer) return;                       // already scheduled
+  // Уже запланировано ИЛИ уже отправлено — второй раз то же самое не присылаем. Оба условия
+  // нужны, потому что дублей было два источника:
+  //   • пока сообщение летит (с повторами это секунды), tgTimer уже сброшен, и такт заводил
+  //     вторую отправку;
+  //   • ожидание перерисовывается — меняется текст вопроса, — и ветка «статус изменился»
+  //     звала уведомление снова, хотя вкладка ждёт того же самого.
+  // Отметка снимается в tgCancelWaiting, то есть когда вкладка перестала ждать: следующее
+  // ожидание — новый повод написать.
+  if (d.tgTimer || d.tgNotifiedAt) return;
   d.tgTimer = setTimeout(() => {
     d.tgTimer = null;
     if (d.dead || d.status !== 'waiting') return;   // resolved at the keyboard already
-    tgNotifyWaiting(id, d).catch(reportMainError);
+    // Помечаем ДО отправки, иначе такт (каждые 400 мс) успеет начать вторую.
+    d.tgNotifiedAt = Date.now();
+    tgNotifyWaiting(id, d).catch((e) => { d.tgNotifiedAt = 0; reportMainError(e); });
   }, TG_NOTIFY_DELAY_MS);
 }
 
@@ -1685,9 +1696,9 @@ async function tgNotifyWaiting(id, d) {
         replyMarkup: kb,
       });
       tgRemember(msgId, id);
-      // Отмечаем УСПЕХ, а не факт попытки: если Telegram не принял (сеть), флаг остаётся
-      // пустым и такт попробует снова — иначе запрос разрешения тихо пропадал.
-      if (msgId) d.tgNotifiedAt = Date.now();
+      // Не приняли (сеть) — снимаем отметку, и такт попробует снова. Ставится она ДО
+      // отправки, в tgOnWaiting: иначе между попыткой и успехом влезает второе уведомление.
+      if (!msgId) d.tgNotifiedAt = 0;
       return;
     }
   }
@@ -1702,10 +1713,10 @@ async function tgNotifyWaiting(id, d) {
   const full = `${head} · ${tgTabName(id)}${body}${tail}`;
   // Вопрос прозой — это и есть исход хода, значит он вписывается в ту же заготовку: реплай
   // на неё маршрутизируется в ту же вкладку, потому что её id мы запомнили при отправке.
-  if (d.tgAck) { await tgAckResolve(id, d, full); d.tgNotifiedAt = Date.now(); return; }
+  if (d.tgAck) { await tgAckResolve(id, d, full); return; }
   const msgId = await tgSend({ threadId, text: full });
   if (!permission) tgRemember(msgId, id);
-  if (msgId) d.tgNotifiedAt = Date.now();
+  if (!msgId) d.tgNotifiedAt = 0;
 }
 
 // Переключение режима разрешений жмёт Shift+Tab по кругу и каждый раз СМОТРИТ на экран:
