@@ -331,7 +331,7 @@ const { Terminal: HeadlessTerminal } = require('@xterm/headless');
 const { extractQuestion, lastAgentLine, readMode, modeTitle, modeFlag, countSubagents, contentEnd, snapshotRows, setAskPhrases, parsePrompt } = require('./screen');
 // The status state machine + «ждёт» latch + hook arbitration live in a pure,
 // unit-tested module; osc.js sniffs hook markers out of the raw pty stream.
-const { tickStatus, applyHook, applyTranscript } = require('./detector');
+const { tickStatus, applyHook, applyTranscript, keyboardEvent } = require('./detector');
 const { extractHookSignals } = require('./osc');
 
 const TICK_MS = 300;
@@ -374,6 +374,9 @@ function makeDetector(cols, rows) {
     // Второе сравнивается с первым — иначе в чат уезжает ответ на ПРОШЛУЮ задачу (см.
     // tgOnDone: с хуками статус «готов» приходит раньше, чем стенограмма догоняет).
     turnStartedAt: 0, trReplyAt: 0, tgDoneTimer: null,
+    // Печатал ли человек в эту вкладку с последнего Enter. «Вернулся за компьютер» — это
+    // отправленное сообщение, а не любое шевеление: см. session:input.
+    typedAtKeyboard: false,
     cwd: '', startedAt: Date.now(), claudeSessionId: null,
     trFile: null, trMtime: 0, trEntries: null, trState: null, trText: '', trWhy: '', trTryAt: 0,
   };
@@ -486,16 +489,24 @@ setInterval(() => {
         // прошлого — см. tgOnDone, это и есть защита от «ответил не на то, что просили».
         if (next.status === 'running' && prev !== 'running') d.turnStartedAt = now;
         // Turn finished on a task that came from the phone → report back there.
+        //
+        // `d.tgAck` — ДОЛГ: в чате висит «получил, думаю…», то есть человек с телефона ждёт
+        // ответа именно на свой вопрос. Такой долг платится всегда, что бы за маком ни делали:
+        // раньше достаточно было напечатать в этой вкладке что угодно, режим снимался, и итог
+        // никуда не уезжал — заготовка оставалась с часиками навсегда, а спросивший так и не
+        // узнавал, что ему ответили. Спросил из телеги — получи ответ в телегу.
+        const owed = !!d.tgAck;
         const relay = next.status === 'ready' && prev === 'running' && TG.chatId != null
-          && (d.tgMode || TG.mirrorAll || tgAway());
+          && (owed || d.tgMode || TG.mirrorAll || tgAway());
         // В журнал — КАЖДАЯ смена статуса вкладки, за которой следит телеграм, и решение
         // про итог. Без этого «в телегу ничего не пришло» неотличимо от «ход не считался
         // законченным»: журнал показывал входящее сообщение и обрывался, а дальше начинались
         // догадки. Пишем и причину отказа, а не только факт.
-        if (TG.chatId != null && (d.tgMode || TG.mirrorAll)) {
+        if (TG.chatId != null && (owed || d.tgMode || TG.mirrorAll)) {
           tgLog(`  вкладка ${id}: ${prev} → ${next.status}${kind ? ':' + kind : ''}`
             + ` · итог ${relay ? 'отправляю' : 'нет'}`
-            + (relay ? '' : ` (нужен переход работает→готов; режим тлг=${d.tgMode ? 'да' : 'нет'}`
+            + (relay ? '' : ` (нужен переход работает→готов; долг=${owed ? 'да' : 'нет'}`
+              + `, режим тлг=${d.tgMode ? 'да' : 'нет'}`
               + `, зеркало=${TG.mirrorAll ? 'да' : 'нет'}, отошёл=${tgAway() ? 'да' : 'нет'})`));
         }
         if (relay) tgOnDone(id, d);
@@ -2876,11 +2887,20 @@ ipcMain.on('session:input', (_event, { id, data }) => {
   // full-size answers and interactive pickers are useful again. The mode follows where
   // YOU are, not where the last message came from.
   //
-  // Кроме ПУСТОГО Enter: он ничего не печатает, а лишь отправляет то, что уже лежит в
-  // поле ввода — как правило, ровно текст из телеги, которому не хватило отправки. Снимать
-  // на нём режим значило «помог мосту руками и этим отрезал себе ответ»: агент отвечал, а
-  // в телегу не приходило ничего. Печатаешь что-то своё — режим снимается, как и раньше.
-  if (/[^\r\n]/.test(String(data || ''))) tgClearMode(d);
+  // Но «за компьютером» — это ОТПРАВИЛ СООБЩЕНИЕ, а не «пошевелил чем-нибудь». Раньше режим
+  // снимался на любом непустом байте, и потому его снимала мышь: Клод умеет включать отчёты о
+  // мыши, и клик в терминале уходит сюда как последовательность. Человек ничего не отправлял —
+  // а ответ на свой же вопрос с телефона уже не получал.
+  //
+  // Печать и Enter приходят разными событиями, поэтому «напечатал» помним до отправки. Enter
+  // без печати сообщением не считается: он лишь досылает то, что уже лежит в поле ввода, а это
+  // обычно текст из телеги, которому не хватило отправки (см. detector.keyboardEvent).
+  const k = keyboardEvent(data);
+  if (k.typed) d.typedAtKeyboard = true;
+  if (k.submit) {
+    if (d.typedAtKeyboard) tgClearMode(d);
+    d.typedAtKeyboard = false;
+  }
   const now = Date.now();
   if (/[\r\n]/.test(String(data || ''))) {
     // Enter: you SENT something. Don't sit out the grace window — that froze the

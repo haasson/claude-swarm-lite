@@ -8,6 +8,56 @@
 
 const { inferWaitingKind, asksForInput } = require('./screen');
 
+// --- что человек сделал на клавиатуре -----------------------------------------
+// Байты из рендерера — это НЕ только печать. Там же приходят стрелки, отчёты мыши и прочие
+// escape-последовательности, а мост по этим байтам решает важное: вернулся ли человек за
+// компьютер, то есть перестала ли вкладка отвечать в телегу.
+//
+// Раньше «вернулся» значило «пришёл любой непустой байт», и это было слишком широко. Клод
+// умеет включать отчёты о мыши, и тогда КЛИК в терминале — хоть чтобы навести фокус, хоть
+// чтобы выделить текст, — уходил в сессию как последовательность и молча выключал отправку в
+// телегу. Человек ничего никому не отправлял, а ответ на свой же вопрос с телефона больше не
+// получал. Показательно, что отчёты о фокусе рендерер по этой же причине уже вырезает.
+//
+// Правильная граница — ОТПРАВКА сообщения: напечатал что-то и нажал Enter. Поэтому здесь два
+// ответа, и оба нужны, потому что печать и Enter приходят разными событиями:
+//   typed  — были ли настоящие печатные символы (последовательности не считаются);
+//   submit — был ли перевод строки.
+// Enter без печати сообщением не является: он лишь отправляет то, что уже лежит в поле ввода,
+// а это обычно ровно текст из телеги, которому не хватило отправки. Снимать режим на нём
+// значило бы «помог мосту руками и этим отрезал себе ответ».
+const ESC = '\x1b';
+
+// Индекс последнего байта escape-последовательности, начинающейся на i.
+function seqEnd(s, i) {
+  const next = s[i + 1];
+  if (next === '[') {
+    // Мышь в старом формате: ESC [ M и ТРИ сырых байта координат следом. Байты бывают
+    // печатными, так что не проглотить их — значит принять клик за печать.
+    if (s[i + 2] === 'M') return i + 5;
+    for (let j = i + 2; j < s.length; j++) {
+      const c = s.charCodeAt(j);
+      if (c >= 0x40 && c <= 0x7e) return j;       // финальный байт CSI (в т.ч. M/m у SGR-мыши)
+    }
+    return s.length;
+  }
+  if (next === 'O') return i + 2;                 // SS3: функциональные клавиши
+  return i + 1;                                   // Alt+клавиша и одиночный ESC
+}
+
+function keyboardEvent(data) {
+  const s = String(data == null ? '' : data);
+  let typed = false;
+  let submit = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === ESC) { i = seqEnd(s, i); continue; }
+    if (ch === '\r' || ch === '\n') { submit = true; continue; }
+    if (ch >= ' ' && ch !== '\x7f') typed = true;  // печатное; Backspace/DEL — правка, не текст
+  }
+  return { typed, submit };
+}
+
 const ACTIVE_MS = 1200;      // bytes seen this recently => the agent is working
 // Once «ждёт» is latched we stop believing transient running/ready reads (repaint
 // bursts, half-drawn prompts). We only release when the agent VISIBLY resumed —
@@ -250,6 +300,6 @@ function tickStatus(d, now, snap) {
 module.exports = {
   ACTIVE_MS, LATCH_RELEASE_MS, ANSWER_HINT_MS,
   RE_WAIT, RE_WAIT_NOW, RE_RUNNING,
-  decide, hasWaitChrome, hasPromptBox, applyLatch,
+  decide, hasWaitChrome, hasPromptBox, applyLatch, keyboardEvent,
   applyHook, applyTranscript, fromTranscript, decideFromTranscript, arbitrate, tickStatus,
 };

@@ -334,6 +334,49 @@ test('arbitrate: with a transcript bound, the screen phrase no longer upgrades r
   assert.strictEqual(D.tickStatus(d, NOW + 600, ASK).status, 'ready');
 });
 
+// --- что человек сделал на клавиатуре -----------------------------------------
+// По этим байтам мост решает, вернулся ли человек за компьютер, то есть перестала ли вкладка
+// отвечать в телегу. Живая беда: Клод умеет включать отчёты о мыши, и КЛИК в терминале уходил
+// в сессию как последовательность — режим снимался, человек ничего не отправлял, а ответ на
+// свой же вопрос с телефона больше не получал. Поэтому «вернулся» = напечатал И отправил.
+
+test('печать — это печать, Enter — это отправка', () => {
+  assert.deepStrictEqual(D.keyboardEvent('п'), { typed: true, submit: false });
+  assert.deepStrictEqual(D.keyboardEvent('\r'), { typed: false, submit: true });
+  assert.deepStrictEqual(D.keyboardEvent('да\r'), { typed: true, submit: true });
+  assert.deepStrictEqual(D.keyboardEvent(''), { typed: false, submit: false });
+});
+
+test('клик мышью не считается печатью — ни в новом формате, ни в старом', () => {
+  // SGR (?1006): ESC [ < кнопка ; x ; y M — цифры и «M» не должны сойти за набранный текст.
+  assert.deepStrictEqual(D.keyboardEvent('\x1b[<0;12;5M'), { typed: false, submit: false });
+  assert.deepStrictEqual(D.keyboardEvent('\x1b[<0;12;5m'), { typed: false, submit: false });
+  // Старый формат (?1000): ESC [ M и ТРИ сырых байта координат. Байты печатные, и если их не
+  // проглотить, клик читается как набранный текст — ровно этот случай и ломал мост.
+  assert.deepStrictEqual(D.keyboardEvent('\x1b[M !!'), { typed: false, submit: false });
+  // Два клика подряд одним куском.
+  assert.deepStrictEqual(D.keyboardEvent('\x1b[M !!\x1b[M#$%'), { typed: false, submit: false });
+});
+
+test('стрелки, функциональные клавиши и Alt тоже не печать', () => {
+  assert.deepStrictEqual(D.keyboardEvent('\x1b[A'), { typed: false, submit: false });
+  assert.deepStrictEqual(D.keyboardEvent('\x1b[1;5D'), { typed: false, submit: false });
+  assert.deepStrictEqual(D.keyboardEvent('\x1bOP'), { typed: false, submit: false });
+  assert.deepStrictEqual(D.keyboardEvent('\x1bb'), { typed: false, submit: false });
+  assert.deepStrictEqual(D.keyboardEvent('\x1b'), { typed: false, submit: false });
+});
+
+test('Backspace — правка, а не текст: пустой Enter после него сообщением не станет', () => {
+  assert.deepStrictEqual(D.keyboardEvent('\x7f'), { typed: false, submit: false });
+  assert.deepStrictEqual(D.keyboardEvent('\x7f\x7f\r'), { typed: false, submit: true });
+});
+
+test('текст после последовательности всё-таки видно', () => {
+  // Иначе «стрелка вверх, поправил, отправил» перестало бы считаться своим сообщением.
+  assert.deepStrictEqual(D.keyboardEvent('\x1b[Aда'), { typed: true, submit: false });
+  assert.deepStrictEqual(D.keyboardEvent('\x1b[M !!нет\r'), { typed: true, submit: true });
+});
+
 for (const [name, fn] of tests) {
   try { fn(); passed++; }
   catch (e) { console.error('FAIL: ' + name + '\n  ' + e.message); process.exitCode = 1; }
