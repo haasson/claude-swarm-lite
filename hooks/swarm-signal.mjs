@@ -20,6 +20,7 @@
 const FALLBACK = {
   mark: '(?:Сейчас от тебя)',
   none: '(?:Сейчас от тебя)\\s*[:.\\u2014-]*\\s*(?:ничего|жд[иёе]|ждать|ждите|подожди(?:те)?|дождись|дождитесь|не\\s+(?:нужно|требуется|надо))',
+  marker: 'Сейчас от тебя',   // phrases[0], for the deny reason below
 };
 
 function loadMatcher(readJson) {
@@ -27,10 +28,14 @@ function loadMatcher(readJson) {
   try { src = readJson(); } catch (_) { /* missing / unreadable → defaults */ }
   const mark = (src && typeof src.mark === 'string' && src.mark) || FALLBACK.mark;
   const none = (src && typeof src.none === 'string' && src.none) || FALLBACK.none;
+  // The plain first phrase, carried in the same file: we don't just MATCH the marker
+  // here, we sometimes have to name it back to the agent (see denyReason).
+  const first = src && Array.isArray(src.phrases) ? src.phrases[0] : null;
+  const marker = (typeof first === 'string' && first.trim()) || FALLBACK.marker;
   try {
-    return { mark: new RegExp(mark, 'i'), none: new RegExp(none, 'i') };
+    return { mark: new RegExp(mark, 'i'), none: new RegExp(none, 'i'), marker };
   } catch (_) {
-    return { mark: new RegExp(FALLBACK.mark, 'i'), none: new RegExp(FALLBACK.none, 'i') };
+    return { mark: new RegExp(FALLBACK.mark, 'i'), none: new RegExp(FALLBACK.none, 'i'), marker };
   }
 }
 
@@ -101,8 +106,14 @@ function markerFor(payload, matcher) {
 // nobody is looking at. So while a session is being driven from the phone (the app lists
 // those in swarm-tgmode.json beside this script) we DENY the tool. Claude gets the reason
 // and asks in prose instead — which the bridge can deliver and answer.
-const DENY_REASON = 'Пользователь отвечает из Telegram: интерактивный выбор ему недоступен.'
-  + ' Задай тот же вопрос обычным текстом (варианты — списком в тексте) и заверши ход.';
+// The sign-off matters as much as the refusal: a prose question that ends the turn
+// WITHOUT the marker reads as «готов» to the app, so the bridge never says the agent is
+// waiting — the question would just sit in a terminal nobody is looking at. That's the
+// exact failure this mode exists to prevent, so we name the phrase right here.
+const denyReason = (marker) => 'Пользователь отвечает из Telegram: интерактивный выбор ему недоступен.'
+  + ' Задай тот же вопрос обычным текстом (варианты — списком в тексте) и заверши ход,'
+  + ` закончив сообщение строкой «${marker}: …».`;
+const DENY_REASON = denyReason(FALLBACK.marker);
 
 function deniesPicker(payload, tgSessions) {
   if (!payload || payload.hook_event_name !== 'PreToolUse') return false;
@@ -125,7 +136,7 @@ function outputFor(payload, matcher, tgSessions) {
     out.hookSpecificOutput = {
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
-      permissionDecisionReason: DENY_REASON,
+      permissionDecisionReason: denyReason(matcher && matcher.marker ? matcher.marker : FALLBACK.marker),
     };
     if (seq) out.hookSpecificOutput.terminalSequence = seq;
   }
@@ -159,4 +170,4 @@ async function main() {
 // Run only when invoked directly (so tests can import the pure helpers).
 if (import.meta.url === `file://${process.argv[1]}`) main();
 
-export { tokenFor, markerFor, loadMatcher, callsUser, messageText, deniesPicker, outputFor, DENY_REASON, FALLBACK };
+export { tokenFor, markerFor, loadMatcher, callsUser, messageText, deniesPicker, outputFor, denyReason, DENY_REASON, FALLBACK };

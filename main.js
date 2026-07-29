@@ -94,12 +94,20 @@ function defaultWorkdir() {
 let STATUSLINE_SETTINGS = null;
 const { hookSettings } = require('./hook-config');
 const { DEFAULT_ASK_PHRASES, normalizePhrases, phraseSources, buildAskMatcher, asksWith, askExcerpt } = require('./ask-phrases');
+const { appendSystemPromptFlag } = require('./agent-rules');
 let STATUSLINE_COMMAND = null; // the provisioned statusline launcher command
 let HOOK_COMMAND = null;       // the provisioned hook launcher command
 // Opt-in: precise status via Claude hooks. Off by default; the renderer pushes the
 // user's saved pref on startup (settings:hooks) and rewrites swarm-settings.json.
 // Scoped to swarm sessions via --settings — never the user's global config.
 let HOOKS_ENABLED = false;
+// «Просить агента звать вас» — the launch-time rule (agent-rules.js) that teaches the
+// agent to ask through AskUserQuestion and to sign a prose question off with the
+// phrase. ON by default, unlike the hooks: without it the «ждёт ответа» status only
+// works for users who already have the convention in their own CLAUDE.md, and asking
+// every new user to set that up by hand is exactly what this replaces. Like the
+// statusline it's scoped to swarm launches and writes nothing into the user's config.
+let AGENT_RULES = true;
 
 // Copy a bundled script onto a real path (fs CAN read inside app.asar, but Node
 // can't exec from there) and return a launcher command that runs our own binary as
@@ -168,6 +176,20 @@ function injectStatusline(cmd) {
   if (/(^|\s)--settings(\s|=)/.test(cmd)) return cmd;
   if (!resume.supports(launcherOf(cmd))) return cmd;
   return `${cmd} --settings "${STATUSLINE_SETTINGS}"`;
+}
+
+// Append `--append-system-prompt "<rule>"` so the agent knows how to call the user
+// (see agent-rules.js). Same guards as the statusline: Claude launchers only, and we
+// keep out of the way of a user who set a system prompt themselves — theirs wins,
+// silently overriding it would be worse than losing the status hint. The flag is
+// spelled inline rather than via --append-system-prompt-file because it has been in
+// Claude Code far longer, and an unknown flag doesn't degrade — claude refuses to
+// start and the tab is dead.
+function injectAgentRules(cmd) {
+  if (!AGENT_RULES || !cmd) return cmd;
+  if (/(^|\s)--(append-)?system-prompt(-file)?(\s|=)/.test(cmd)) return cmd;
+  if (!resume.supports(launcherOf(cmd))) return cmd;
+  return `${cmd} ${appendSystemPromptFlag(ASK_PHRASES)}`;
 }
 
 // Pin the session id Claude will use, so we know EXACTLY which transcript file belongs
@@ -2618,7 +2640,7 @@ ipcMain.handle('session:create', (_event, opts = {}) => {
   });
 
   // Give the login shell a moment to finish sourcing the profile, then run claude.
-  const pinned = injectSessionId(injectStatusline(opts.command != null ? opts.command : START_COMMAND));
+  const pinned = injectSessionId(injectAgentRules(injectStatusline(opts.command != null ? opts.command : START_COMMAND)));
   const cmd = pinned.cmd;
   // Known id => exact transcript binding. Either we pinned it just now (a fresh tab),
   // or the renderer is restoring a conversation and told us the id it is resuming —
@@ -2843,6 +2865,9 @@ ipcMain.on('settings:hooks', (_e, enabled) => {
   HOOKS_ENABLED = !!enabled;
   try { writeSwarmSettings(); } catch (e) { reportMainError(e); }
 });
+// Same shape for «просить агента звать вас»: a pref pushed on startup and on toggle.
+// Nothing to write — the rule is a launch flag, so it applies to the next session.
+ipcMain.on('settings:agentRules', (_e, enabled) => { AGENT_RULES = !!enabled; });
 // Renderer pushes the «agent is calling me» phrases (on startup and on save). Takes
 // effect immediately for screen scraping; the hook picks the new file up on its next
 // run, so it applies within the current session too.

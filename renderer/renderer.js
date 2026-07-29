@@ -572,9 +572,15 @@ let resumeSessions = localStorage.getItem('swarm.resumeSessions') === '1';
 // Opt-in «precise status via Claude hooks» (Settings → Запуск). Off by default;
 // main gets it on startup + on save and (de)activates the hooks in swarm-settings.
 let hooksEnabled = localStorage.getItem('swarm.hooks') === '1';
+// «Просить агента звать вас» (Settings → Запуск): main appends the rule from
+// agent-rules.js to the launch command. ON unless turned off — a fresh install has no
+// such convention in its CLAUDE.md, so without this the «ждёт ответа» status would
+// simply never fire and the user would have to go teach the agent by hand.
+let agentRules = localStorage.getItem('swarm.agentRules') !== '0';
 // The phrases that mean «the agent is calling me» — the only signal that tells a
 // finished turn («готов») from a turn that ended with a question («ждёт ответа»).
-// It's the user's own CLAUDE.md convention, so it's editable (Settings → Запуск).
+// Taught to the agent at launch (agentRules) and/or by the user's own CLAUDE.md, so
+// it's editable (Settings → Запуск).
 // Kept as a plain list; main normalizes it and feeds both the screen detector and
 // the Stop hook. Empty list = «use the shipped default» (see ask-phrases.js).
 let askPhrases = loadAskPhrases();
@@ -1120,6 +1126,13 @@ function showSettingsModal(tab) {
             <span class="set-check-tx">Точный статус через хуки Claude
               <span class="set-check-sub">различает разрешение и вопрос точно, без угадывания по экрану; только Claude Code, применяется к новым вкладкам</span></span>
           </label>
+          <label class="set-check">
+            <input type="checkbox" id="set-agent-rules" />
+            <span class="set-check-tx">Просить агента звать вас
+              <span class="set-check-sub">на запуске просим спрашивать через выбор вариантов, а вопрос в тексте
+                заканчивать фразой ниже — иначе вкладка не отличит «ждёт ответа» от «готов»; только Claude Code,
+                применяется к новым вкладкам</span></span>
+          </label>
           <div class="set-field">
             <span class="set-label">Фразы, которыми агент зовёт вас</span>
             <span class="set-hint set-hint-top">Клод заканчивает ход одинаково и когда сделал дело, и когда задал
@@ -1128,10 +1141,12 @@ function showSettingsModal(tab) {
             <textarea class="set-input" id="set-ask-phrases" rows="3" spellcheck="false"
                       autocapitalize="off" autocorrect="off"
                       placeholder="Сейчас от тебя"></textarea>
-            <span class="set-hint">По одной в строке. Заведите пару: правило в вашем <code>CLAUDE.md</code>
-              («заканчивай сообщение строкой <i>Сейчас от тебя: …</i>») — и та же фраза здесь.
-              Ищем в любом месте сообщения, регистр не важен; «…: ничего, жди» вопросом не считаем.
-              До 12 фраз, до 60 символов каждая. Пусто — вернётся фраза по умолчанию.</span>
+            <span class="set-hint">По одной в строке. Просить агента об этом не нужно — галочка выше делает это
+              сама, той же фразой. Ищем в любом месте сообщения, регистр не важен; «…: ничего, жди» вопросом
+              не считаем. До 12 фраз, до 60 символов каждая. Пусто — вернётся фраза по умолчанию.</span>
+            <button type="button" class="set-check-btn set-field-btn" id="set-copy-rule">Скопировать правило для CLAUDE.md</button>
+            <span class="set-hint" id="set-copy-rule-note">Если работаете с агентом и вне сворма — вставьте это
+              правило в свой <code>CLAUDE.md</code>: там оно действует всегда, а не только в наших вкладках.</span>
             <div class="ask-test">
               <input class="set-input" type="text" id="set-ask-test" spellcheck="false"
                      autocapitalize="off" autocorrect="off"
@@ -1406,6 +1421,8 @@ function showSettingsModal(tab) {
   resumeI.checked = resumeSessions;
   const hooksI = overlay.querySelector('#set-hooks');
   hooksI.checked = hooksEnabled;
+  const rulesI = overlay.querySelector('#set-agent-rules');
+  rulesI.checked = agentRules;
   const askI = overlay.querySelector('#set-ask-phrases');
   askI.value = askPhrases.join('\n');   // empty box = the default phrase (placeholder)
   // Live «will this call me?» check. Runs the SAME matcher the detector and the hook
@@ -1427,6 +1444,21 @@ function showSettingsModal(tab) {
   askI.addEventListener('input', syncAskVerdict);
   askTestI.addEventListener('input', syncAskVerdict);
   syncAskVerdict();
+
+  // The same rule main injects at launch, but as a CLAUDE.md block — for agents run
+  // outside swarm, where our launch flag doesn't reach. Built from the phrases as
+  // currently TYPED (like the verdict above), so what you paste matches what you see.
+  const copyRuleB = overlay.querySelector('#set-copy-rule');
+  const copyRuleNoteEl = overlay.querySelector('#set-copy-rule-note');
+  const copyRuleNote = copyRuleNoteEl.innerHTML;   // restored after the «скопировано» flash
+  copyRuleB.addEventListener('click', () => {
+    const AR = window.SWARM_AGENT_RULES;
+    if (!AR) return;                               // script missing: settings still work
+    window.swarm.clipboardWrite(AR.claudeMdRule(draftPhrases()));
+    copyRuleNoteEl.textContent = 'Скопировано. Вставьте в CLAUDE.md — проекта или свой в ~/.claude.';
+    clearTimeout(copyRuleB._t);
+    copyRuleB._t = setTimeout(() => { copyRuleNoteEl.innerHTML = copyRuleNote; }, 4000);
+  });
 
   // --- Telegram panel -------------------------------------------------------
   // Everything here applies IMMEDIATELY (like the updates panel), not on «Сохранить»:
@@ -2104,6 +2136,11 @@ function showSettingsModal(tab) {
       hooksEnabled = hooksI.checked;
       localStorage.setItem('swarm.hooks', hooksEnabled ? '1' : '0');
       window.swarm.setHooksEnabled(hooksEnabled); // main rewrites swarm-settings.json
+    }
+    if (rulesI.checked !== agentRules) {
+      agentRules = rulesI.checked;
+      localStorage.setItem('swarm.agentRules', agentRules ? '1' : '0');
+      window.swarm.setAgentRules(agentRules); // main adds/drops the launch flag
     }
     const nextAsk = askI.value.split('\n').map((s) => s.trim()).filter(Boolean);
     if (nextAsk.join('\n') !== askPhrases.join('\n')) {
@@ -3555,6 +3592,7 @@ applyNotify(localStorage.getItem('swarm.notify') !== '0'); // master notificatio
 // carries (or omits) the hooks block before the first claude spawn.
 window.swarm.setHooksEnabled(hooksEnabled);
 window.swarm.setAskPhrases(askPhrases); // same reason: the hook file must be current
+window.swarm.setAgentRules(agentRules); // and the launch flag before the first command
 // Голос из телеги. Chromium декодирует Opus сам, поэтому ffmpeg приложению не нужен:
 // декодируем как есть, потом пересобираем в моно 16 кГц через OfflineAudioContext — ровно
 // то, что ест whisper.cpp. Обратно уходит Float32, WAV собирает main.

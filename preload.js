@@ -64,6 +64,10 @@ contextBridge.exposeInMainWorld('swarm', {
   // startup and on save; main feeds both the screen detector and the Stop hook.
   setAskPhrases: (list) => ipcRenderer.send('settings:askPhrases', list),
 
+  // «Просить агента звать вас»: main appends the rule (agent-rules.js) to the launch
+  // command as --append-system-prompt. On by default; applies to new sessions.
+  setAgentRules: (on) => ipcRenderer.send('settings:agentRules', on),
+
   // The tab's visible name. main keeps it only to title this tab's Telegram topic and
   // to sign its messages — pushed on create and on rename.
   setTabName: (id, name) => ipcRenderer.send('tabs:name', { id, name }),

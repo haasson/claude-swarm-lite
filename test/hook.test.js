@@ -8,7 +8,7 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 const { execFileSync } = require('child_process');
 const { extractHookSignals } = require('../osc');
-const { DEFAULT_SOURCES, phraseSources } = require('../ask-phrases');
+const { DEFAULT_SOURCES, DEFAULT_ASK_PHRASES, phraseSources } = require('../ask-phrases');
 
 let passed = 0;
 const tests = [];
@@ -94,7 +94,11 @@ test('a generic Notification (no type) emits nothing', () => {
 test('the hook fallback phrases are exactly ask-phrases.js defaults', () => {
   const code = `import(${JSON.stringify(pathToFileURL(SCRIPT).href)}).then((m) => console.log(JSON.stringify(m.FALLBACK)))`;
   const out = execFileSync(process.execPath, ['-e', code], { encoding: 'utf8' });
-  assert.deepStrictEqual(JSON.parse(out), DEFAULT_SOURCES);
+  const fb = JSON.parse(out);
+  assert.deepStrictEqual({ mark: fb.mark, none: fb.none }, DEFAULT_SOURCES);
+  // The plain marker is a THIRD copy of the default phrase (app, hook regexes, hook
+  // text) — it's the one the deny reason names back to the agent, so pin it too.
+  assert.strictEqual(fb.marker, DEFAULT_ASK_PHRASES[0]);
 });
 
 test('a custom phrase file replaces the default marker', () => {
@@ -155,6 +159,18 @@ test('the deny payload carries the status marker AND the decision', () => {
   assert.strictEqual(out.hookSpecificOutput.permissionDecision, 'deny');
   assert.ok(/Telegram/.test(out.hookSpecificOutput.permissionDecisionReason));
   assert.ok(out.terminalSequence, 'status must still be reported while denying');
+});
+
+test('the deny reason names the marker, in the user\'s own wording', () => {
+  // Otherwise the agent re-asks in prose with no sign-off: the turn reads as «готов»,
+  // the bridge stays silent, and the question waits in a terminal nobody is watching.
+  const phrases = ['Твой ход'];
+  const m = H.loadMatcher(() => Object.assign({ phrases }, phraseSources(phrases)));
+  const out = H.outputFor({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', session_id: 's1' }, m, ['s1']);
+  const reason = out.hookSpecificOutput.permissionDecisionReason;
+  assert.ok(reason.includes('Твой ход'), 'reason names the configured phrase: ' + reason);
+  // And what it tells the agent to write must be what the matcher then accepts.
+  assert.ok(H.callsUser(m, 'Сделал.\n\nТвой ход: что дальше'), 'the taught sign-off calls');
 });
 
 test('without Telegram mode the payload is exactly what it was before', () => {

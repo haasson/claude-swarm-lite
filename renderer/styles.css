@@ -1069,6 +1069,8 @@ body.pult-on #git-msg { display: none; }
   border-radius: 6px; padding: 7px 12px; font-size: 12px;
 }
 .set-check-btn:hover { border-color: var(--accent); color: var(--accent); }
+/* Кнопка-действие внутри поля настроек: не в ряду с вводом, а отдельной строкой. */
+.set-field-btn { display: block; margin-top: 8px; }
 .set-check-btn.danger:hover { border-color: var(--danger); color: var(--danger); }
 .upd-go-btn { margin-top: 10px; border-color: var(--accent); color: var(--accent); }
 
