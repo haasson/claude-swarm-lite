@@ -119,7 +119,7 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   align-items: stretch;
 }
 
-/* --- folder groups (2+ sessions sharing a working folder) ----------------- */
+/* --- folder groups (a group per working folder, even with a single tab) ---- */
 .tab-group { display: flex; flex-direction: column; gap: 5px; }
 .layout-top .tab-group {
   flex: 0 0 auto;
@@ -401,6 +401,23 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   z-index: 2;
 }
 .tab:hover .grip, .group-head:hover .grip { opacity: 1; }
+/* В шапке папки ручка, наоборот, не держит колонку: пока курсор не на шапке, её
+   ширина нулевая (и отрицательный margin гасит gap), а на ховере она плавно
+   раздвигает заголовок. Заголовков папок мало и они не «прыгают» под курсором,
+   как карточки, — там сдвиг читается как жест, а не как дёрганье.
+   Во время переноса держим ручку раскрытой: курсор уходит с шапки, и без этого
+   пустой слот папки схлопывался бы прямо посреди drag. */
+.group-head > .grip {
+  width: 0;
+  margin-right: -4px; /* = gap шапки */
+  transition: width 0.15s ease, margin-right 0.15s ease, opacity 0.15s ease;
+}
+.group-head:hover > .grip,
+.tab-group.dragging .group-head > .grip {
+  width: 9px;
+  margin-right: 0;
+  opacity: 1;
+}
 .grip:hover { color: var(--text); }
 .grip:active { cursor: grabbing; }
 
