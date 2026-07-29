@@ -7,13 +7,14 @@
 //
 // What it does, in order:
 //   1. sanity: clean tree, on `main`, token present
-//   2. bump version in package.json
-//   3. prepend a CHANGELOG.md section from commits since the last tag
-//   4. refresh the download links block in README.md
-//   5. commit "release: vX.Y.Z" + annotated tag vX.Y.Z (tag message = changelog)
-//   6. build the .dmg  (npm run dist)
-//   7. upload the .dmg to the GitLab generic package registry
-//   8. push main + the tag
+//   2. npm test — a red suite stops the release before anything is written
+//   3. bump version in package.json
+//   4. prepend a CHANGELOG.md section from commits since the last tag
+//   5. refresh the download links block in README.md
+//   6. commit "release: vX.Y.Z" + annotated tag vX.Y.Z (tag message = changelog)
+//   7. build the .dmg  (npm run dist)
+//   8. upload the .dmg to the GitLab generic package registry
+//   9. push main + the tag
 //
 // Pushing the tag triggers .gitlab-ci.yml, which builds the Windows .exe on a
 // Linux+Wine runner, uploads it next to the .dmg, and creates the GitLab Release
@@ -45,7 +46,22 @@ function sh(cmd, args) { execFileSync(cmd, args, { stdio: 'inherit' }); }
 if (git(['status', '--porcelain'])) fail('working tree is not clean — commit or stash first');
 if (git(['rev-parse', '--abbrev-ref', 'HEAD']) !== 'main') fail("switch to the 'main' branch first");
 
-// 2. bump --------------------------------------------------------------------
+// 2. tests -------------------------------------------------------------------
+// BEFORE the bump on purpose: everything below writes to the repo (package.json,
+// CHANGELOG.md, README.md, a commit, a tag), and a release that dies halfway leaves a
+// tree that has to be cleaned up by hand. Failing here leaves nothing to undo.
+//
+// A green suite was a habit until now, which means it was optional exactly when it
+// mattered — in a hurry. The suite is pure Node and takes seconds, so there's no
+// reason to make this skippable.
+step('tests …');
+try {
+  sh('npm', ['test']);
+} catch {
+  fail('tests failed — release stopped (the run is printed above)');
+}
+
+// 3. bump --------------------------------------------------------------------
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
 const [maj, min, pat] = pkg.version.split('.').map(Number);
 const version = bump === 'major' ? `${maj + 1}.0.0` : bump === 'minor' ? `${maj}.${min + 1}.0` : `${maj}.${min}.${pat + 1}`;
@@ -53,7 +69,7 @@ step(`version ${pkg.version} → ${version}`);
 pkg.version = version;
 writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
 
-// 3. changelog ---------------------------------------------------------------
+// 4. changelog ---------------------------------------------------------------
 let lastTag = '';
 try { lastTag = git(['describe', '--tags', '--abbrev=0']); } catch { /* first release */ }
 const range = lastTag ? `${lastTag}..HEAD` : 'HEAD';
@@ -66,7 +82,7 @@ try { clBody = readFileSync('CHANGELOG.md', 'utf8').replace(/^# Changelog\s*/, '
 writeFileSync('CHANGELOG.md', clHeader + entry + '\n' + clBody.replace(/^\n+/, ''));
 step('CHANGELOG.md updated');
 
-// 4. README download links ---------------------------------------------------
+// 5. README download links ---------------------------------------------------
 const dmgFile = `claude-swarm-lite-${version}-arm64.dmg`;
 const exeFile = `claude-swarm-lite-${version}-x64.exe`;
 const base = `https://${HOST}/api/v4/projects/${PROJECT_ID}/packages/generic/${PKG}/${version}`;
@@ -87,13 +103,13 @@ readme = readme.includes('<!--DL-->')
 writeFileSync('README.md', readme);
 step('README.md download links updated');
 
-// 5. commit + tag ------------------------------------------------------------
+// 6. commit + tag ------------------------------------------------------------
 sh('git', ['add', 'package.json', 'CHANGELOG.md', 'README.md']);
 sh('git', ['commit', '-m', `release: v${version}`]);
 sh('git', ['tag', '-a', `v${version}`, '-m', entry.trim()]);
 step(`committed + tagged v${version}`);
 
-// 6. build the dmg -----------------------------------------------------------
+// 7. build the dmg -----------------------------------------------------------
 // electron-builder re-verifies the Electron dist against GitHub on every build;
 // when GitHub's asset CDN is slow that download times out even though the zip is
 // already cached. If we find the cached zip, hand it to electron-builder via
@@ -123,7 +139,7 @@ sh('npm', distDir ? ['run', 'dist', '--', `-c.electronDist=${distDir}`] : ['run'
 const dmg = readdirSync('dist').find((f) => f === dmgFile) || readdirSync('dist').find((f) => f.endsWith('.dmg'));
 if (!dmg) fail('no .dmg found in dist/ after build');
 
-// 7. upload the dmg to the generic package registry --------------------------
+// 8. upload the dmg to the generic package registry --------------------------
 step(`uploading ${dmg} to the package registry …`);
 const bytes = readFileSync(path.join('dist', dmg));
 const put = await fetch(`${base}/${dmgFile}`, {
@@ -168,7 +184,7 @@ const manPut = await fetch(`${latestBase}/manifest.json`, {
 if (!manPut.ok) fail(`manifest upload failed: ${manPut.status} ${await manPut.text()}`);
 step('app.asar + manifest.json published');
 
-// 8. push --------------------------------------------------------------------
+// 9. push --------------------------------------------------------------------
 step('pushing main + tag …');
 const authed = `https://oauth2:${token}@${HOST}/ai-public/claude-swarm-lite.git`;
 sh('git', ['push', authed, 'main']);
