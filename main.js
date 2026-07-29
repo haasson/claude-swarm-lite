@@ -2033,6 +2033,11 @@ async function tgOnAction(qa, u, ack, routed) {
 async function tgOnCallback(u) {
   const ack = (text) => tgFetchJson(telegram.apiUrl(TG.token, 'answerCallbackQuery'),
     { callback_query_id: u.callbackId, text, show_alert: false }).catch(reportMainError);
+  // Нажатие в журнал ЦЕЛИКОМ и сразу, до всех проверок: раньше писали только успешные пути, и
+  // «я нажал, ничего не произошло» выглядело в журнале как отсутствие нажатия. Автор здесь
+  // важнее, чем у сообщения: разрешение — самое весомое действие моста.
+  tgLog(`← кнопка от ${telegram.senderLabel(u)} · thread=${u.threadId == null ? '-' : u.threadId}`
+    + ` data=${JSON.stringify(String(u.data || '').slice(0, 40))}`);
   // Кого адресует нажатие, решает ТЕМА, в которой висит кнопка: тема привязана к вкладке
   // ключом, переживающим перезапуск, а номер вкладки в payload — нет (см. telegram.callbackTab).
   const routed = tgRoute(u);
@@ -2148,7 +2153,8 @@ function tgOnUpdate(u) {
     return;
   }
   if (u.kind !== 'message') return;
-  tgLog(`← chat=${u.chatId} thread=${u.threadId == null ? '-' : u.threadId}`
+  tgLog(`← от ${telegram.senderLabel(u)} · chat=${u.chatId}`
+    + ` thread=${u.threadId == null ? '-' : u.threadId}`
     + ` reply=${u.replyToId == null ? '-' : u.replyToId} cmd=${u.command || '-'}`
     + ` text=${JSON.stringify(String(u.text || '').slice(0, 60))}`);
   // Pairing wins over everything: the chat that brings the code becomes THE chat. Until

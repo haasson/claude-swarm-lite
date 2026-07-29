@@ -90,12 +90,16 @@ function readUpdate(u) {
     const q = u.callback_query;
     const m = q.message || {};
     const chat = m.chat || {};
+    const qf = q.from || {};
     return {
       updateId: u.update_id,
       kind: 'callback',
       callbackId: q.id,
       data: String(q.data || ''),
-      fromId: (q.from || {}).id,
+      fromId: qf.id,
+      // Имя нужно и здесь, а не только у сообщений: нажатие кнопки разрешения — самое
+      // весомое действие моста, и в журнале должно быть видно, КТО его сделал.
+      fromName: [qf.first_name, qf.last_name].filter(Boolean).join(' ') || qf.username || '',
       chatId: chat.id,
       threadId: m.is_topic_message ? (m.message_thread_id || null) : null,
       messageId: m.message_id,
@@ -130,6 +134,19 @@ function readUpdate(u) {
     voice: msg.voice ? { fileId: msg.voice.file_id, seconds: msg.voice.duration || 0 } : null,
     raw: msg,
   };
+}
+
+// Кто написал или нажал — для журнала моста. Имя читается человеком, id различает: в группе
+// бывают два Саши, а разбор «коллега жалуется, что бот не ответил» упирался в то, что автора
+// в журнале не было вовсе, и приходилось искать по косвенным признакам.
+//
+// Имени может не быть (у аккаунта нет ни имени, ни username), id — есть всегда: тогда в
+// журнал идёт он один. Пустой скобки за именем не оставляем — строку читают глазами.
+function senderLabel(u) {
+  const name = String((u && u.fromName) || '').replace(/\s+/g, ' ').trim();
+  const id = u && u.fromId != null ? String(u.fromId) : '';
+  if (name && id) return `${name} (${id})`;
+  return name || id || '?';
 }
 
 // --- routing -----------------------------------------------------------------
@@ -479,7 +496,7 @@ module.exports = {
   API_HOST, MAX_TEXT, POLL_TIMEOUT_S, BACKOFF_MAX_MS, CODE_LEN, TG_TAG, tagInput,
   apiUrl, looksLikeToken, maskToken,
   pairCode, deepLink, pairingMatch,
-  readUpdate, routeMessage, chunkText, inlineKeyboard, callbackData, parseCallbackData, callbackTab, CB_MAX, backoffMs, retryAfterMs, classifyError,
+  readUpdate, senderLabel, routeMessage, chunkText, inlineKeyboard, callbackData, parseCallbackData, callbackTab, CB_MAX, backoffMs, retryAfterMs, classifyError,
   inputWrites, PASTE_ON, PASTE_OFF, ENTER, BACK_TAB, routeFailure,
   COMMANDS, QA_ACTIONS, actionData, parseAction, actionKeyboard,
   createPoller,

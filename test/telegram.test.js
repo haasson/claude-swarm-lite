@@ -223,6 +223,32 @@ test('actionData отказывается от неизвестного дейс
   assert.strictEqual(T.parseAction(null), null);
 });
 
+// Автор в журнале. Разбор «коллега жалуется, что бот не ответил» упирался в то, что автора в
+// журнале не было вовсе, и искать приходилось по косвенным признакам.
+
+test('senderLabel даёт имя с id, а без имени — один id', () => {
+  assert.strictEqual(T.senderLabel({ fromName: 'Саша', fromId: 42 }), 'Саша (42)');
+  assert.strictEqual(T.senderLabel({ fromName: '', fromId: 42 }), '42');
+  assert.strictEqual(T.senderLabel({ fromName: 'Саша' }), 'Саша', 'пустых скобок не оставляем');
+  assert.strictEqual(T.senderLabel({}), '?');
+  assert.strictEqual(T.senderLabel(null), '?');
+  // Перевод строки в имени разорвал бы строку журнала на две — а её читают построчно.
+  assert.strictEqual(T.senderLabel({ fromName: 'Са\nша', fromId: 7 }), 'Са ша (7)');
+});
+
+test('нажатие кнопки тоже несёт автора, а не только сообщение', () => {
+  const u = T.readUpdate({
+    update_id: 1,
+    callback_query: {
+      id: 'cb1', data: 'q|3|auto',
+      from: { id: 77, first_name: 'Саша', last_name: 'Петров' },
+      message: { message_id: 9, chat: { id: -100 }, is_topic_message: true, message_thread_id: 5 },
+    },
+  });
+  assert.strictEqual(u.kind, 'callback');
+  assert.strictEqual(T.senderLabel(u), 'Саша Петров (77)');
+});
+
 // Кого адресует нажатие. Живая беда, которую это закрывает: номер вкладки в callback_data
 // живёт только до перезапуска (id раздаются заново с единицы), а кнопки в шапке темы остаются
 // навсегда. После перезапуска «q|1|auto» из темы одного репозитория указывал на вкладку с
