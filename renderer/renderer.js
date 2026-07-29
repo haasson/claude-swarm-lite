@@ -577,6 +577,11 @@ let hooksEnabled = localStorage.getItem('swarm.hooks') === '1';
 // such convention in its CLAUDE.md, so without this the «ждёт ответа» status would
 // simply never fire and the user would have to go teach the agent by hand.
 let agentRules = localStorage.getItem('swarm.agentRules') !== '0';
+// Режим разрешений, с которым стартуют новые вкладки (Settings → Запуск). Пусто = не
+// вмешиваться, и это умолчание: режимы стоят по-разному, и выбирать за человека нельзя.
+// Смысл настройки в том, что «разреши уже всё» — самое частое, что делают руками сразу после
+// открытия вкладки, а с телефона Shift+Tab не нажать вообще.
+let permMode = localStorage.getItem('swarm.permMode') || '';
 // The phrases that mean «the agent is calling me» — the only signal that tells a
 // finished turn («готов») from a turn that ended with a question («ждёт ответа»).
 // Taught to the agent at launch (agentRules) and/or by the user's own CLAUDE.md, so
@@ -1134,6 +1139,15 @@ function showSettingsModal(tab) {
                 применяется к новым вкладкам</span></span>
           </label>
           <div class="set-field">
+            <span class="set-label">Вкладки стартуют в режиме</span>
+            <span class="set-hint set-hint-top">Режим разрешений, с которым открывается вкладка — и новая, и
+              восстановленная после перезапуска. Дальше он переключается как обычно: Shift+Tab за компьютером
+              или кнопкой из телеги. С телефона это единственный способ задать его заранее — Shift+Tab там не
+              нажать. Свой <span class="set-mono">--permission-mode</span> во флагах агента побеждает.</span>
+            <select class="set-input set-select" id="set-perm-mode"></select>
+            <span class="set-hint" id="set-perm-mode-note"></span>
+          </div>
+          <div class="set-field">
             <span class="set-label">Фразы, которыми агент зовёт вас</span>
             <span class="set-hint set-hint-top">Клод заканчивает ход одинаково и когда сделал дело, и когда задал
               вопрос. Отличить их можно только по тому, как агент заканчивает сообщение — поэтому вкладка
@@ -1338,7 +1352,7 @@ function showSettingsModal(tab) {
             только то, что видно на кнопке.
             <br>Команды: <span class="set-mono">/tabs</span> — кто чем занят,
             <span class="set-mono">/new</span> — ещё один агент в папке этой темы,
-            <span class="set-mono">/mode auto</span> — разрешить агенту правки без спроса,
+            <span class="set-mono">/mode edits</span> — разрешить агенту правки без спроса,
             <span class="set-mono">/sync</span> — привести темы в соответствие с вкладками,
             <span class="set-mono">/help</span> — напоминалка.</span>
           <span class="set-label set-label-gap">Как агент отвечает в телегу</span>
@@ -1423,6 +1437,32 @@ function showSettingsModal(tab) {
   hooksI.checked = hooksEnabled;
   const rulesI = overlay.querySelector('#set-agent-rules');
   rulesI.checked = agentRules;
+  // Режим для новых вкладок. Список приходит из main: подписи режимов живут в screen.js,
+  // рядом с их распознаванием на экране, и второй список здесь разошёлся бы с ним молча.
+  const permI = overlay.querySelector('#set-perm-mode');
+  const permNoteEl = overlay.querySelector('#set-perm-mode-note');
+  const permTitles = new Map();
+  const syncPermNote = () => {
+    permNoteEl.textContent = permI.value
+      ? permTitles.get(permI.value) || ''
+      : 'Как решит сам Claude Code — обычно спрашивает разрешение.';
+  };
+  permI.addEventListener('change', syncPermNote);
+  window.swarm.listModes().then((modes) => {
+    // «Не задавать» первым и по умолчанию: подсовывать всем режим, о котором не просили,
+    // нельзя — у режимов разная цена.
+    const opts = [{ id: '', title: 'не задавать' }].concat(modes || []);
+    permI.innerHTML = '';
+    for (const m of opts) {
+      permTitles.set(m.id, m.title);
+      const o = document.createElement('option');
+      o.value = m.id;
+      o.textContent = m.title;
+      permI.appendChild(o);
+    }
+    permI.value = permTitles.has(permMode) ? permMode : '';
+    syncPermNote();
+  });
   const askI = overlay.querySelector('#set-ask-phrases');
   askI.value = askPhrases.join('\n');   // empty box = the default phrase (placeholder)
   // Live «will this call me?» check. Runs the SAME matcher the detector and the hook
@@ -2141,6 +2181,11 @@ function showSettingsModal(tab) {
       agentRules = rulesI.checked;
       localStorage.setItem('swarm.agentRules', agentRules ? '1' : '0');
       window.swarm.setAgentRules(agentRules); // main adds/drops the launch flag
+    }
+    if (permI.value !== permMode) {
+      permMode = permI.value;
+      localStorage.setItem('swarm.permMode', permMode);
+      window.swarm.setPermissionMode(permMode);  // main adds/drops --permission-mode
     }
     const nextAsk = askI.value.split('\n').map((s) => s.trim()).filter(Boolean);
     if (nextAsk.join('\n') !== askPhrases.join('\n')) {
@@ -3593,6 +3638,7 @@ applyNotify(localStorage.getItem('swarm.notify') !== '0'); // master notificatio
 window.swarm.setHooksEnabled(hooksEnabled);
 window.swarm.setAskPhrases(askPhrases); // same reason: the hook file must be current
 window.swarm.setAgentRules(agentRules); // and the launch flag before the first command
+window.swarm.setPermissionMode(permMode); // тем же порядком: режим должен быть до первой вкладки
 // Голос из телеги. Chromium декодирует Opus сам, поэтому ffmpeg приложению не нужен:
 // декодируем как есть, потом пересобираем в моно 16 кГц через OfflineAudioContext — ровно
 // то, что ест whisper.cpp. Обратно уходит Float32, WAV собирает main.

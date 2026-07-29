@@ -68,6 +68,13 @@ contextBridge.exposeInMainWorld('swarm', {
   // command as --append-system-prompt. On by default; applies to new sessions.
   setAgentRules: (on) => ipcRenderer.send('settings:agentRules', on),
 
+  // «Новые вкладки стартуют в режиме»: main добавляет --permission-mode к команде запуска.
+  // Пусто = не вмешиваться. Применяется к новым вкладкам, режим остаётся переключаемым.
+  setPermissionMode: (mode) => ipcRenderer.send('settings:permissionMode', mode),
+  // Режимы и их подписи приходят из main (screen.js — их единственный источник), чтобы
+  // список в панели не разошёлся с тем, что читается с экрана. [{ id, title }]
+  listModes: () => ipcRenderer.invoke('settings:modes'),
+
   // The tab's visible name. main keeps it only to title this tab's Telegram topic and
   // to sign its messages — pushed on create and on rename.
   setTabName: (id, name) => ipcRenderer.send('tabs:name', { id, name }),

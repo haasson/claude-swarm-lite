@@ -292,14 +292,48 @@ test('readMode узнаёт все четыре режима живого Claude
 });
 
 // Цена у режимов разная, и подписи не должны её смазывать: accept edits разрешает ТОЛЬКО
-// правки, auto — вообще всё. Обещать одно, делая другое, здесь недопустимо.
-test('modeTitle различает «правки без спроса» и «без вопросов вообще»', () => {
+// правки, а auto судит каждое действие сам. Обещать одно, делая другое, здесь недопустимо.
+test('modeTitle различает «правки без спроса» и «авто»', () => {
   assert.match(S.modeTitle('accept-edits'), /правки без спроса/);
   assert.match(S.modeTitle('accept-edits'), /остальное спрашивает/);
-  assert.match(S.modeTitle('auto'), /без вопросов/);
+  assert.match(S.modeTitle('auto'), /сам решает/);
   assert.notStrictEqual(S.modeTitle('auto'), S.modeTitle('accept-edits'));
   assert.match(S.modeTitle('manual'), /спрашивает разрешение/);
   assert.match(S.modeTitle('plan'), /план/);
+});
+
+// В обратную сторону подпись врать тоже не должна. Здесь стояло «делает всё без вопросов», а
+// auto в 2.1.220 всё равно спрашивает на опасном (65 категорий, `claude auto-mode defaults`):
+// человек нажимал «вообще без вопросов», получал запрос разрешения и решал, что режим не
+// переключился. Настоящая тишина — только bypass, и вот он про неё и говорит.
+test('подпись auto не обещает тишины, которой не будет', () => {
+  assert.doesNotMatch(S.modeTitle('auto'), /без вопросов|ни о чём|не спрашивает/);
+  assert.match(S.modeTitle('auto'), /спрашивает только на опасном/);
+  assert.match(S.modeTitle('bypass'), /без спроса совсем/);
+});
+
+// Соответствие «наш режим → значение --permission-mode». Расхождение здесь не деградирует:
+// неизвестное значение claude не проглатывает, он отказывается стартовать, и вкладка
+// встречает человека мёртвой оболочкой вместо агента.
+test('у каждого режима есть флаг Claude Code, и написание точное', () => {
+  assert.deepStrictEqual(S.modeFlag('manual'), 'manual');
+  assert.deepStrictEqual(S.modeFlag('accept-edits'), 'acceptEdits');
+  assert.deepStrictEqual(S.modeFlag('plan'), 'plan');
+  assert.deepStrictEqual(S.modeFlag('auto'), 'auto');
+  assert.deepStrictEqual(S.modeFlag('bypass'), 'bypassPermissions');
+  // Ни один режим не должен остаться без флага: список режимов и список флагов обязаны
+  // совпадать по ключам, иначе селект в настройках предложит то, что не запустится.
+  assert.deepStrictEqual(Object.keys(S.MODE_FLAGS).sort(), Object.keys(S.MODE_TITLES).sort());
+  // Только те значения, которые понимает живой `--permission-mode` (claude --help, 2.1.220).
+  const KNOWN = ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'];
+  for (const flag of Object.values(S.MODE_FLAGS)) assert.ok(KNOWN.includes(flag), flag);
+});
+
+test('modeFlag не выдумывает флаг для неизвестного режима', () => {
+  // Иначе в командную строку уехало бы `--permission-mode undefined`, и вкладка не стартует.
+  assert.strictEqual(S.modeFlag('нет такого'), null);
+  assert.strictEqual(S.modeFlag(''), null);
+  assert.strictEqual(S.modeFlag(null), null);
 });
 
 // Иначе фраза агента «давай обсудим plan mode» переключала бы режим по кругу вслепую.

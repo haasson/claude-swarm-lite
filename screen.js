@@ -104,14 +104,38 @@ const MODE_RULES = [
 // Живой круг Shift+Tab в Claude Code 2.1.220 (снят с TUI, см. тесты):
 //   manual → accept edits → plan → auto → manual …
 // Четыре режима, и «auto» — НЕ синоним «accept edits»: правки без спроса разрешают только
-// правки, а auto не спрашивает вообще ни о чём. Путать их нельзя: это разная цена.
+// правки, а auto судит каждое действие само. Путать их нельзя: это разная цена.
+//
+// И «auto» — НЕ «без вопросов совсем». У него в 2.1.220 свой классификатор
+// (`claude auto-mode defaults`): 17 разрешающих правил и 65 категорий, на которых он всё
+// равно спросит, — разрушительный git, необратимое удаление, деплой в прод, секреты,
+// ослабление TLS, публикация наружу. Подписи это учитывают: обещать тишину, которой не
+// будет, — та же ложь про цену, только в обратную сторону, и человек решает, что режим не
+// переключился, когда запрос всё-таки приходит. Настоящая тишина — это bypass.
 const MODE_TITLES = {
   manual: 'обычный — спрашивает разрешение',
   'accept-edits': 'правки без спроса — остальное спрашивает',
   plan: 'планирование — сначала план, без изменений',
-  auto: 'авто — делает всё без вопросов',
+  auto: 'авто — сам решает, спрашивает только на опасном',
   bypass: 'без спроса совсем (bypass permissions)',
 };
+
+// Как тот же режим называется во ФЛАГЕ Claude Code: `--permission-mode <mode>`. Наши имена
+// не совпадают с его написанием (у нас «accept-edits», у него «acceptEdits»), а расхождение
+// здесь — это вкладка, которая не стартует вовсе: неизвестное значение флага claude не
+// проглатывает, он отказывается запускаться. Поэтому соответствие живёт рядом с самими
+// режимами и закреплено тестом.
+const MODE_FLAGS = {
+  manual: 'manual',
+  'accept-edits': 'acceptEdits',
+  plan: 'plan',
+  auto: 'auto',
+  bypass: 'bypassPermissions',
+};
+
+function modeFlag(id) {
+  return MODE_FLAGS[id] || null;
+}
 
 function readMode(snapshot) {
   const lines = String(snapshot == null ? '' : snapshot).split('\n');
@@ -382,7 +406,8 @@ function countSubagents(snapshot) {
 }
 
 module.exports = {
-  extractQuestion, lastAgentLine, readMode, modeTitle, inferWaitingKind, asksForInput, setAskPhrases, countSubagents,
+  extractQuestion, lastAgentLine, readMode, modeTitle, modeFlag, MODE_TITLES, MODE_FLAGS,
+  inferWaitingKind, asksForInput, setAskPhrases, countSubagents,
   parsePrompt, fingerprintOf,
   contentEnd, snapshotRows,
 };

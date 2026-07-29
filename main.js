@@ -108,6 +108,13 @@ let HOOKS_ENABLED = false;
 // every new user to set that up by hand is exactly what this replaces. Like the
 // statusline it's scoped to swarm launches and writes nothing into the user's config.
 let AGENT_RULES = true;
+// «Вкладки стартуют в режиме» — режим разрешений, с которым запускается вкладка, и новая, и
+// восстановленная (иначе перезапуск молча возвращал бы всех в «спрашивать разрешение»).
+// Пусто = не вмешиваемся, вкладка начинает как Claude Code сам считает нужным — это и есть
+// умолчание: подсовывать всем режим, о котором они не просили, нельзя, цена у режимов разная.
+// Это ПЕРВЫЙ режим, а не запертый: Shift+Tab за клавиатурой и кнопки из телеги работают
+// дальше как обычно.
+let PERMISSION_MODE = '';
 
 // Copy a bundled script onto a real path (fs CAN read inside app.asar, but Node
 // can't exec from there) and return a launcher command that runs our own binary as
@@ -192,6 +199,25 @@ function injectAgentRules(cmd) {
   return `${cmd} ${appendSystemPromptFlag(ASK_PHRASES)}`;
 }
 
+// Append `--permission-mode <mode>` so a new tab starts in the mode the user picked
+// (Настройки → Запуск). Смысл: «разреши уже всё» — самое частое, что делают руками сразу
+// после открытия вкладки, а из телеги это вообще единственный способ, потому что Shift+Tab
+// с телефона не нажать.
+//
+// Те же три оговорки, что у соседей: только лончеры Claude, и СВОЙ `--permission-mode` во
+// флажках побеждает — человек, написавший флаг руками, знает, чего хочет. Плюс проверка
+// самого значения: неизвестный режим claude не проглатывает, а отказывается стартовать, и
+// вкладка встречает человека мёртвой оболочкой вместо агента. Лучше запустить без флага.
+function injectPermissionMode(cmd) {
+  if (!PERMISSION_MODE || !cmd) return cmd;
+  const flag = modeFlag(PERMISSION_MODE);
+  if (!flag) return cmd;
+  if (/(^|\s)--permission-mode(\s|=)/.test(cmd)) return cmd;
+  if (/(^|\s)--dangerously-skip-permissions(\s|$)/.test(cmd)) return cmd;
+  if (!resume.supports(launcherOf(cmd))) return cmd;
+  return `${cmd} --permission-mode ${flag}`;
+}
+
 // Pin the session id Claude will use, so we know EXACTLY which transcript file belongs
 // to this tab: ~/.claude/projects/<slug>/<id>.jsonl. Without it the file has to be
 // guessed by folder + mtime, which is a coin flip once two tabs share a folder — and a
@@ -237,7 +263,7 @@ process.on('unhandledRejection', (reason) => reportMainError(reason));
 // tell "waiting for a prompt" apart from "idle/done". We deliberately do NOT
 // surface Claude's token counter or activity words — just the four states.
 const { Terminal: HeadlessTerminal } = require('@xterm/headless');
-const { extractQuestion, lastAgentLine, readMode, modeTitle, countSubagents, contentEnd, snapshotRows, setAskPhrases, parsePrompt } = require('./screen');
+const { extractQuestion, lastAgentLine, readMode, modeTitle, modeFlag, countSubagents, contentEnd, snapshotRows, setAskPhrases, parsePrompt } = require('./screen');
 // The status state machine + «ждёт» latch + hook arbitration live in a pure,
 // unit-tested module; osc.js sniffs hook markers out of the raw pty stream.
 const { tickStatus, applyHook, applyTranscript } = require('./detector');
@@ -1915,10 +1941,11 @@ async function tgOnAction(qa, u, ack, routed) {
     return;
   }
   if (r.already) { await ack(`${name}: уже «${modeTitle(want)}».`); return; }
+  // Ответ через modeTitle, а не тремя ветками руками. Раньше ветки было две, и нажатие
+  // «✍️ правки без спроса» отвечало «снова спрашивает разрешение» — то есть кнопка сообщала
+  // ровно противоположное тому, что сделала. Подпись и ответ теперь из одного места.
   await ack(r.ok
-    ? (want === 'auto'
-      ? `${name}: авто — делает всё без вопросов. Разрешения больше не придут.`
-      : `${name}: снова спрашивает разрешение.`)
+    ? `${name}: ${modeTitle(want)}.`
     : `Не смог переключить — сейчас ${r.landed ? modeTitle(r.landed) : 'режим не разобрал'}.`);
 }
 
@@ -2081,7 +2108,7 @@ function tgOnUpdate(u) {
       '/tabs — вкладки и что у них сейчас',
       '/sync — подтянуть темы под открытые вкладки',
       '/new — ещё один агент в папке этой темы',
-      '/mode — режим разрешений вкладки: auto (правки без спроса), plan, manual',
+      '/mode — режим разрешений вкладки: manual, edits, plan, auto',
     ].join('\n') }).catch(reportMainError);
     return;
   }
@@ -2199,9 +2226,13 @@ async function tgNewTab(u) {
 // «сделай accept edits» — поэтому жмём по одному разу и СМОТРИМ на экран, пока не попадём в
 // нужный. Без чтения экрана это была бы стрельба в темноте.
 // Четыре режима живого Claude Code, и auto — САМОСТОЯТЕЛЬНЫЙ, а не синоним accept edits:
-// правки без спроса разрешают только правки, а auto не спрашивает вообще ни о чём. Раньше
+// правки без спроса разрешают только правки, а auto судит каждое действие сам. Раньше
 // здесь стояло auto → accept-edits, и «/mode auto» честно останавливался на «правках»,
 // потому что просил не то.
+//
+// Псевдоним «без-вопросов» оставлен, хотя обещает лишнее: люди его уже набирали, и убрать
+// его значило бы отвечать «не понял режим» на то, что вчера работало. Ответ теперь говорит
+// правду про цену, а вход остаётся широким.
 const TG_MODE_ALIASES = {
   auto: 'auto', авто: 'auto', автомод: 'auto', 'без-вопросов': 'auto',
   edits: 'accept-edits', 'accept-edits': 'accept-edits', правки: 'accept-edits',
@@ -2230,14 +2261,15 @@ async function tgMode(u) {
         + '\n/mode manual — спрашивает разрешение на всё'
         + '\n/mode edits — правки без спроса, остальное спрашивает'
         + '\n/mode plan — сначала план, без изменений'
-        + '\n/mode auto — делает всё без вопросов' });
+        + '\n/mode auto — сам решает; на опасном (git с потерями, удаление, деплой, секреты)'
+        + ' всё равно спросит' });
     return;
   }
   const want = TG_MODE_ALIASES[arg];
   if (!want) {
     await tgSend({ threadId: u.threadId, replyTo: u.messageId,
-      text: 'Не понял режим. Бывают: auto (правки без спроса), plan (планирование),'
-        + ' manual (спрашивает разрешение).' });
+      text: 'Не понял режим. Бывают: manual (спрашивает разрешение), edits (правки без'
+        + ' спроса), plan (планирование), auto (сам решает).' });
     return;
   }
   const r = await tgSwitchMode(id, d, want);
@@ -2257,8 +2289,8 @@ async function tgMode(u) {
   await tgSend({ threadId: u.threadId, replyTo: u.messageId,
     text: r.ok
       ? `${tgTabName(id)}: режим «${modeTitle(want)}».`
-        + (want === 'auto' ? ' Агент больше ни о чём не спрашивает.'
-          : want === 'accept-edits' ? ' Правки идут без спроса, остальное спрашивает.' : '')
+        + (want === 'auto' ? ' На опасном (git с потерями, удаление, деплой, секреты) всё'
+          + ' равно спросит — настоящая тишина только в bypass.' : '')
       : `Не смог переключить: сейчас ${r.landed ? '«' + modeTitle(r.landed) + '»' : 'режим не видно'}.`
         + ' Возможно, агент занят и строки режима на экране нет — попробуй, когда он ответит,'
         + ' или переключи за компьютером (Shift+Tab).' });
@@ -2640,7 +2672,8 @@ ipcMain.handle('session:create', (_event, opts = {}) => {
   });
 
   // Give the login shell a moment to finish sourcing the profile, then run claude.
-  const pinned = injectSessionId(injectAgentRules(injectStatusline(opts.command != null ? opts.command : START_COMMAND)));
+  const pinned = injectSessionId(injectPermissionMode(
+    injectAgentRules(injectStatusline(opts.command != null ? opts.command : START_COMMAND))));
   const cmd = pinned.cmd;
   // Known id => exact transcript binding. Either we pinned it just now (a fresh tab),
   // or the renderer is restoring a conversation and told us the id it is resuming —
@@ -2868,6 +2901,26 @@ ipcMain.on('settings:hooks', (_e, enabled) => {
 // Same shape for «просить агента звать вас»: a pref pushed on startup and on toggle.
 // Nothing to write — the rule is a launch flag, so it applies to the next session.
 ipcMain.on('settings:agentRules', (_e, enabled) => { AGENT_RULES = !!enabled; });
+// И для «новые вкладки стартуют в режиме». Проверяем значение здесь, а не только в панели:
+// сюда приходит то, что лежало в localStorage, а там мог остаться режим из версии, где он
+// назывался иначе. Неизвестное — это пусто, то есть «не вмешиваться»; подставить с ним флаг
+// значило бы, что вкладка вообще не запустится.
+ipcMain.on('settings:permissionMode', (_e, mode) => {
+  const want = String(mode || '');
+  PERMISSION_MODE = modeFlag(want) ? want : '';
+});
+
+// Список режимов для селекта в настройках — ОТСЮДА, а не списком в рендерере: подписи и
+// сами режимы живут в screen.js (там же, где их читают с экрана), и второй список рядом
+// разошёлся бы с первым молча. Порядок — живой круг Shift+Tab, чтобы селект читался как
+// то же самое, что человек видит в терминале.
+//
+// bypass в списке НЕТ намеренно: в круг Shift+Tab он не входит, требует отдельного согласия
+// Claude Code, и вкладка, которой флаг не понравился, встречает человека мёртвой оболочкой.
+// Кому нужен именно он — пишет флаг в поле флагов сам, и там его никто не перебьёт.
+ipcMain.handle('settings:modes', () => {
+  return ['manual', 'accept-edits', 'plan', 'auto'].map((id) => ({ id, title: modeTitle(id) }));
+});
 // Renderer pushes the «agent is calling me» phrases (on startup and on save). Takes
 // effect immediately for screen scraping; the hook picks the new file up on its next
 // run, so it applies within the current session too.
