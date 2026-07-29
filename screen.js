@@ -193,7 +193,10 @@ function asksForInput(snapshot) {
 const OPTION_LINE_RE = /^\s*[❯>→➜▸►▶]?\s*(\d+)\.\s+(.*\S)/;
 const OPT_TEXT_MAX = 58;   // a Telegram inline button label, not a paragraph
 const TITLE_MAX = 300;
-const TITLE_LINES = 5;     // how far above the first option we look for the question
+// Докуда смотреть вверх от вариантов. Не «сколько строк текста», а докуда вообще имеет смысл
+// идти: настоящей границей служит сплошная линейка запроса, а это просто предохранитель,
+// чтобы на экране без рамки не собрать в заголовок пол-переписки.
+const TITLE_LINES = 14;
 
 // Deterministic, dependency-free hash (djb2) — this only has to detect CHANGE, so a
 // short base36 digest is plenty and keeps this module pure.
@@ -213,8 +216,16 @@ const FRAME_RE = /[│┃╭╰┌└├]/;
 const GAP_MAX = 2;   // внутри бокса между вариантами бывает пустая строка рамки
 // Маркер выбора Ink: он есть в ЛЮБОМ диалоге выбора и не бывает в прозе агента.
 const MARKER_RE = /^[❯>→➜▸►▶]\s*\d+\.\s/;
-// Линейка — граница блока в диалоге без рамки: сплошная сверху, пунктирная вокруг диффа.
+// Линейки в диалоге бывают двух смыслов, и путать их нельзя:
+//   сплошная (──── ═══) — ВЕРХНЯЯ ГРАНИЦА запроса, выше неё уже переписка;
+//   пунктирная (╌╌╌╌) — внутренний разделитель вокруг диффа, через него надо ПЕРЕШАГИВАТЬ.
+const SOLID_RULE_RE = /^[\s─━═]+$/;
+const DASH_RULE_RE = /^[\s╌╍┄┅┈┉_-]+$/;
 const RULE_RE = /^[\s─━╌╍┄┅┈┉═_-]+$/;
+// Строка содержимого файла в диффе: «  1 привет», « 12 +const a = 1». Это не заголовок
+// запроса, а то, ЧТО меняют — в кнопку такое не пишут.
+const DIFF_LINE_RE = /^\s*\d+\s+\S/;
+const TITLE_KEEP = 6;      // сколько осмысленных строк над блоком берём в текст запроса
 const ANCHOR_BELOW = 3;   // на сколько строк ниже блока искать «Esc to cancel»
 
 // Строка-подсказка под блоком («Esc to cancel · Tab to amend») — признак, что это диалог, а
@@ -275,12 +286,24 @@ function parsePrompt(snapshot) {
   //    правки над вопросом стоит пунктир, а выше него — сам дифф, и без остановки в текст
   //    кнопки уезжали строки файла («1 привет») вместо вопроса.
   const head = [];
+  let kept = 0;
   for (let i = block[0].i - 1; i >= 0 && block[0].i - i <= TITLE_LINES; i--) {
-    const t = clean(lines[i]);
-    if (RULE_RE.test(lines[i]) && !HAS_TEXT_RE.test(t)) break;
+    const raw = lines[i];
+    const t = clean(raw);
+    // Сплошная линейка — верх запроса: выше только переписка, туда не лезем. Проверяем и
+    // очищенную строку: у бокса верх выглядит как «╭────╮», и без этого прозаический список
+    // «Предлагаю план: 1. …» над запросом попадал бы в текст кнопки.
+    if (!HAS_TEXT_RE.test(t) && (SOLID_RULE_RE.test(t) || SOLID_RULE_RE.test(raw))) break;
+    // Пустые строки и пунктирные разделители перешагиваем, НЕ тратя на них бюджет: в живом
+    // диалоге на команду между «Bash command» и вопросом стоят две пустые строки, и
+    // прежний счётчик на пять строк упирался в них — в телегу уезжало одно голое
+    // «Do you want to proceed?», без самой команды.
     if (!t || !HAS_TEXT_RE.test(t)) continue;
+    if (!HAS_TEXT_RE.test(t) && (DASH_RULE_RE.test(t) || DASH_RULE_RE.test(raw))) continue;
+    if (DIFF_LINE_RE.test(t)) continue;         // содержимое файла — не заголовок запроса
     if (STATUSLINE_RE.test(t) || CHROME_RE.test(t) || HINT_RE.test(t)) continue;
     head.unshift(t);
+    if (++kept >= TITLE_KEEP) break;
   }
   let title = head.join(' · ');
   if (title.length > TITLE_MAX) title = title.slice(0, TITLE_MAX - 1).trimEnd() + '…';

@@ -341,14 +341,50 @@ const PERM_REAL_TRUST = [
   ' Enter to confirm · Esc to cancel',
 ].join('\n');
 
+// НАСТОЯЩИЙ запрос на команду, снятый с живого TUI. Здесь самое важное — САМА КОМАНДА —
+// лежит выше пустых строк, и прежний сбор заголовка (пять строк вверх, пустые тратили
+// бюджет) до неё не доходил: в телегу уезжало голое «Do you want to proceed?», по которому
+// нельзя решить, разрешать или нет.
+const PERM_REAL_BASH = [
+  '⏺ Running 1 shell command…',
+  '  ⎿  $ touch /tmp/swarm-perm-probe.txt',
+  '',
+  '────────────────────────────────────────────────────────────────────────────────',
+  ' Bash command',
+  '',
+  '   touch /tmp/swarm-perm-probe.txt',
+  '   Create empty probe file in /tmp',
+  '',
+  ' Do you want to proceed?',
+  ' ❯ 1. Yes',
+  '   2. Yes, and always allow access to tmp/ from this project',
+  '   3. No',
+  '',
+  ' Esc to cancel · Tab to amend · ctrl+e to explain',
+].join('\n');
+
+test('parsePrompt даёт КОМАНДУ, а не голое «Do you want to proceed?»', () => {
+  const p = S.parsePrompt(PERM_REAL_BASH);
+  assert.ok(p, 'настоящий диалог обязан разбираться');
+  assert.match(p.title, /touch \/tmp\/swarm-perm-probe\.txt/, 'команда обязана быть: ' + p.title);
+  assert.match(p.title, /Bash command/, 'вид запроса тоже: ' + p.title);
+  assert.match(p.title, /Create empty probe file/, 'объяснение агента полезно: ' + p.title);
+  assert.match(p.title, /Do you want to proceed\?/);
+  assert.ok(!/Esc to cancel/.test(p.title), 'подсказка не заголовок: ' + p.title);
+  assert.deepStrictEqual(p.options.map((o) => o.n), [1, 2, 3]);
+});
+
 test('parsePrompt разбирает НАСТОЯЩИЙ запрос разрешения (без рамки, с линейками)', () => {
   const p = S.parsePrompt(PERM_REAL_EDIT);
   assert.ok(p, 'настоящий диалог обязан разбираться — иначе кнопок нет вообще');
   assert.deepStrictEqual(p.options.map((o) => o.n), [1, 2, 3]);
   assert.strictEqual(p.options[0].text, 'Yes');
   assert.strictEqual(p.options[2].text, 'No');
-  // Заголовок — вопрос, а НЕ строки диффа над ним: «1 привет» не должно уехать в кнопку.
-  assert.strictEqual(p.title, 'Do you want to create zametka.txt?');
+  // В заголовке — ЧТО именно делают: вид запроса, файл и вопрос.
+  assert.match(p.title, /Create file/, p.title);
+  assert.match(p.title, /zametka\.txt/, p.title);
+  assert.match(p.title, /Do you want to create zametka\.txt\?/, p.title);
+  // Но НЕ содержимое файла: строки диффа — это не то, что одобряют кнопкой.
   assert.ok(!/привет/.test(p.title), 'содержимое файла не заголовок: ' + p.title);
   assert.ok(!/Tab to amend/.test(p.title), 'подсказка не заголовок: ' + p.title);
 });

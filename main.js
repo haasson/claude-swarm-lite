@@ -1623,9 +1623,12 @@ async function tgNotifyWaiting(id, d) {
       // висеть на свежей записи. А заготовка «думаю…» превращается в указатель, иначе она
       // осталась бы врать, что агент ещё думает.
       if (d.tgAck) await tgAckResolve(id, d, `🔐 ${tgTabName(id)} просит разрешение — кнопки ниже`);
+      // Части запроса — каждая своей строкой: «Bash command · rm -rf build · Do you want to
+      // proceed?» одной строкой на телефоне читается как мешанина, а решение по нему
+      // принимают за секунды и не разглядывая.
       const msgId = await tgSend({
         threadId,
-        text: `🔐 ${tgTabName(id)} просит разрешение\n\n${prompt.title}`,
+        text: `🔐 ${tgTabName(id)} просит разрешение\n\n${prompt.title.split(' · ').join('\n')}`,
         replyMarkup: kb,
       });
       tgRemember(msgId, id);
