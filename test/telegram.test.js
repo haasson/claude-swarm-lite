@@ -202,6 +202,54 @@ test('inputWrites нормализует переводы строк и не п�
   assert.deepStrictEqual(T.inputWrites(null), []);
 });
 
+// --- быстрые кнопки: одно касание вместо набора команды -----------------------
+// Главное требование к ним — НЕ пересекаться с кнопками разрешения. Там нажатие печатает
+// номер в живой диалог, и принять «⚡ правки без спроса» за выбор варианта было бы худшим,
+// что этот мост умеет. Поэтому у них свой префикс и раздельный разбор.
+
+test('быстрое действие и разрешение не разбираются друг за друга', () => {
+  const qa = T.actionData('7', 'auto');
+  const perm = T.callbackData('7', 'abc123', 2);
+  assert.strictEqual(T.parseCallbackData(qa), null, 'быстрая кнопка не сойдёт за разрешение');
+  assert.strictEqual(T.parseAction(perm), null, 'разрешение не сойдёт за быструю кнопку');
+  assert.deepStrictEqual(T.parseAction(qa), { tab: '7', action: 'auto' });
+});
+
+test('actionData отказывается от неизвестного действия', () => {
+  assert.strictEqual(T.actionData('7', 'rm-rf'), null);
+  assert.strictEqual(T.parseAction('q|7|rm-rf'), null);
+  assert.strictEqual(T.parseAction('q|7'), null);
+  assert.strictEqual(T.parseAction(''), null);
+  assert.strictEqual(T.parseAction(null), null);
+});
+
+test('actionKeyboard даёт кнопки с подписями и рабочими данными', () => {
+  const kb = T.actionKeyboard('3');
+  const flat = kb.inline_keyboard.flat();
+  assert.ok(flat.length >= 3, 'кнопок должно быть несколько');
+  for (const b of flat) {
+    assert.ok(b.text && b.text.length > 1, 'подпись пустой быть не может');
+    assert.deepStrictEqual(T.parseAction(b.callback_data).tab, '3');
+    assert.ok(b.callback_data.length <= T.CB_MAX, 'Telegram режет callback_data по 64 байтам');
+  }
+  assert.ok(kb.inline_keyboard.every((row) => row.length <= 2), 'по две в ряд: подписи длинные');
+});
+
+// Подпись кнопки обязана называть цену: включение режима «правки без спроса» — не
+// безобидное нажатие, и человек должен видеть это ДО касания, а не после.
+test('кнопка автомода прямо говорит, что правки пойдут без спроса', () => {
+  assert.match(T.QA_ACTIONS.auto, /без спроса/);
+});
+
+test('список команд для меню бота непустой и с описаниями', () => {
+  assert.ok(T.COMMANDS.length >= 4);
+  for (const c of T.COMMANDS) {
+    assert.match(c.command, /^[a-z]+$/, 'Telegram принимает только латиницу в имени команды');
+    assert.ok(c.description && c.description.length > 5, c.command + ': нужно описание');
+    assert.ok(c.description.length <= 256);
+  }
+});
+
 // Shift+Tab, которым Claude Code переключает режим разрешений: приложение должно посылать
 // ровно то, что посылает терминал (CSI Z), иначе для Claude это будет не нажатие, а мусор.
 test('BACK_TAB — это CSI Z, то есть настоящий Shift+Tab', () => {

@@ -244,6 +244,58 @@ function inputWrites(text) {
 const CB_PREFIX = 'p';
 const CB_MAX = 64;
 
+// --- быстрые действия: команды одним касанием ---------------------------------
+// Список для кнопки «Меню» у поля ввода (setMyCommands): с телефона набирать «/mode auto»
+// неудобно, а в меню это выбор из списка с описанием.
+const COMMANDS = [
+  { command: 'tabs', description: 'вкладки и кто чем занят' },
+  { command: 'mode', description: 'режим вкладки: auto (правки без спроса), plan, manual' },
+  { command: 'new', description: 'ещё один агент в папке этой темы' },
+  { command: 'sync', description: 'привести темы в соответствие с вкладками' },
+  { command: 'help', description: 'что я умею' },
+];
+
+// Кнопки под шапкой темы. ПРЕФИКС ДРУГОЙ, чем у разрешений («p»), и это главное здесь:
+// разбор строго раздельный, поэтому нажатие быстрой кнопки не может быть истолковано как
+// выбор варианта в диалоге разрешения — там номер печатается в живую сессию, и спутать эти
+// два вида кнопок было бы худшей ошибкой моста.
+const QA_PREFIX = 'q';
+const QA_ACTIONS = {
+  status: 'что сейчас',
+  auto: '⚡ правки без спроса',
+  manual: '🔒 спрашивать разрешение',
+  new: '➕ ещё агент здесь',
+};
+
+function actionData(tab, action) {
+  if (!QA_ACTIONS[action]) return null;
+  const data = [QA_PREFIX, tab, action].join('|');
+  return data.length <= CB_MAX ? data : null;
+}
+
+function parseAction(raw) {
+  const parts = String(raw == null ? '' : raw).split('|');
+  if (parts.length !== 3 || parts[0] !== QA_PREFIX) return null;
+  if (!parts[1] || !QA_ACTIONS[parts[2]]) return null;
+  return { tab: parts[1], action: parts[2] };
+}
+
+// Клавиатура быстрых действий для темы вкладки. Две в ряд: на телефоне подписи длинные.
+function actionKeyboard(tab, actions) {
+  const list = (Array.isArray(actions) ? actions : Object.keys(QA_ACTIONS))
+    .filter((a) => QA_ACTIONS[a]);
+  const rows = [];
+  let row = [];
+  for (const a of list) {
+    const data = actionData(tab, a);
+    if (!data) continue;
+    row.push({ text: QA_ACTIONS[a], callback_data: data });
+    if (row.length === 2) { rows.push(row); row = []; }
+  }
+  if (row.length) rows.push(row);
+  return rows.length ? { inline_keyboard: rows } : null;
+}
+
 function callbackData(tab, fingerprint, n) {
   const data = [CB_PREFIX, tab, fingerprint, n].join('|');
   return data.length <= CB_MAX ? data : null;
@@ -396,5 +448,6 @@ module.exports = {
   pairCode, deepLink, pairingMatch,
   readUpdate, routeMessage, chunkText, inlineKeyboard, callbackData, parseCallbackData, CB_MAX, backoffMs, retryAfterMs, classifyError,
   inputWrites, PASTE_ON, PASTE_OFF, ENTER, BACK_TAB, routeFailure,
+  COMMANDS, QA_ACTIONS, actionData, parseAction, actionKeyboard,
   createPoller,
 };

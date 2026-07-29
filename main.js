@@ -1246,6 +1246,13 @@ async function tgConnect() {
   tgPoller.start();
   tgApplyKeepAwake();
   tgPush();
+  // Список команд для кнопки «Меню» у поля ввода: с телефона «/mode auto» набирать неудобно,
+  // а в меню это выбор из списка с описанием. Ставится при каждом подключении — дешевле, чем
+  // помнить, ставили ли уже, и переживает смену набора команд между версиями.
+  tgFetchJson(telegram.apiUrl(TG.token, 'setMyCommands'), {
+    commands: telegram.COMMANDS,
+    scope: { type: 'all_group_chats' },
+  }).catch(reportMainError);
   // Restored tabs after a relaunch: reopen/create their topics without waiting for one to
   // speak. Delayed a little so the renderer has finished restoring and naming them.
   setTimeout(() => tgEnsureTopics().catch(reportMainError), 4000);
@@ -1330,7 +1337,14 @@ async function tgTopicFor(id) {
   // Say what this topic is for, and leave a message worth replying to. An empty topic
   // gives you nothing to aim at; this line is the anchor for «пиши сюда».
   const where = d.cwd ? '\n' + d.cwd : '';
-  tgRemember(await tgSend({ threadId, text: `Вкладка «${tgTabName(id)}».${where}\n\nПиши сюда — попадёт в этого агента.`, silent: true }), id);
+  // Под шапкой темы — кнопки частых действий. Смысл: с телефона не надо набирать команды,
+  // а шапка всегда наверху темы, то есть это постоянная панель управления вкладкой.
+  tgRemember(await tgSend({
+    threadId,
+    text: `Вкладка «${tgTabName(id)}».${where}\n\nПиши сюда — попадёт в этого агента.`,
+    silent: true,
+    replyMarkup: telegram.actionKeyboard(String(id)),
+  }), id);
   tgLog(`  создана тема ${threadId} для вкладки ${id}`);
   return threadId;
 }
@@ -1634,6 +1648,53 @@ async function tgNotifyWaiting(id, d) {
   if (!permission) tgRemember(msgId, id);
 }
 
+// Переключение режима разрешений жмёт Shift+Tab по кругу и каждый раз СМОТРИТ на экран:
+// Claude Code не принимает «поставь accept edits», а жать вслепую — стрельба в темноте.
+const TG_MODE_MAX_STEPS = 4;         // круг короткий; больше — значит не поняли, где мы
+const TG_MODE_SETTLE_MS = 220;       // TUI успевает перерисовать строку режима
+
+// Нажали быструю кнопку под шапкой темы. Все действия — из тех, что и так доступны
+// командами; кнопка лишь избавляет от набора текста с телефона.
+async function tgOnAction(qa, u, ack) {
+  const d = det.get(qa.tab);
+  if (!d || d.dead || !sessions.has(qa.tab)) { await ack('Эта вкладка уже закрыта.'); return; }
+  const name = tgTabName(qa.tab);
+  tgLog(`  быстрая кнопка: вкладка ${qa.tab} → ${qa.action}`);
+  if (qa.action === 'status') {
+    const marks = { running: '🟠 работает', waiting: '🟡 ждёт', ready: '🟢 готов' };
+    const kind = d.status === 'waiting' && d.waitingKind
+      ? ` (${d.waitingKind === 'permission' ? 'разрешение' : 'вопрос'})` : '';
+    await ack(`${name}: ${marks[d.status] || '⚪'}${kind}`);
+    return;
+  }
+  if (qa.action === 'new') {
+    if (!d.cwd) { await ack('Не знаю папку этой вкладки.'); return; }
+    safeSend('app:createTab', { cwd: d.cwd });
+    await ack('Открываю ещё одного агента в этой папке.');
+    return;
+  }
+  // Режимы: то же, что /mode, но одним касанием. Ответ во всплывашке говорит, чем это
+  // кончилось — включая цену «правки без спроса», чтобы нажатие не выглядело безобидным.
+  const want = qa.action === 'auto' ? 'accept-edits' : 'manual';
+  const was = readMode(snapshot(d));
+  if (was === want) { await ack(`${name}: уже «${modeTitle(want)}».`); return; }
+  let landed = was;
+  for (let i = 0; i < TG_MODE_MAX_STEPS; i++) {
+    const p = sessions.get(qa.tab);
+    if (!p) break;
+    p.write(telegram.BACK_TAB);
+    await new Promise((r) => setTimeout(r, TG_MODE_SETTLE_MS));
+    landed = readMode(snapshot(d));
+    if (landed === want) break;
+  }
+  tgLog(`  режим вкладки ${qa.tab}: ${was || '?'} → ${landed || '?'} (кнопка ${qa.action})`);
+  await ack(landed === want
+    ? (want === 'accept-edits'
+      ? `${name}: правки без спроса. Разрешения по ним больше не придут.`
+      : `${name}: снова спрашивает разрешение.`)
+    : `Не смог переключить — сейчас ${landed ? modeTitle(landed) : 'режим не разобрал'}.`);
+}
+
 // A tapped button. Everything is re-checked here, because a lot can happen between the
 // message going out and your thumb landing on it: the tab may be gone, the prompt may have
 // been answered at the keyboard, or a DIFFERENT prompt may now be on screen. Printing the
@@ -1642,6 +1703,12 @@ async function tgNotifyWaiting(id, d) {
 async function tgOnCallback(u) {
   const ack = (text) => tgFetchJson(telegram.apiUrl(TG.token, 'answerCallbackQuery'),
     { callback_query_id: u.callbackId, text, show_alert: false }).catch(reportMainError);
+  // Быстрые действия разбираются ПЕРВЫМИ и совершенно отдельно от разрешений: у них свой
+  // префикс, свой обработчик и никакого отпечатка — потому что они ничего не печатают в
+  // диалог. Спутать «⚡ правки без спроса» с выбором варианта в запросе разрешения было бы
+  // худшим, что этот мост умеет, поэтому пути не пересекаются даже случайно.
+  const qa = telegram.parseAction(u.data);
+  if (qa) { await tgOnAction(qa, u, ack); return; }
   const cb = telegram.parseCallbackData(u.data);
   if (!cb) { await ack('Не понял эту кнопку.'); return; }
   const routed = tgRoute(u);
@@ -1880,9 +1947,6 @@ async function tgNewTab(u) {
 // Циклом, а не «установить режим»: Claude Code переключает режимы по кругу и не принимает
 // «сделай accept edits» — поэтому жмём по одному разу и СМОТРИМ на экран, пока не попадём в
 // нужный. Без чтения экрана это была бы стрельба в темноте.
-const TG_MODE_MAX_STEPS = 4;         // круг короткий; больше — значит не поняли, где мы
-const TG_MODE_SETTLE_MS = 220;       // TUI успевает перерисовать строку режима
-
 const TG_MODE_ALIASES = {
   auto: 'accept-edits', авто: 'accept-edits', автомод: 'accept-edits',
   'accept-edits': 'accept-edits', edits: 'accept-edits', правки: 'accept-edits',
