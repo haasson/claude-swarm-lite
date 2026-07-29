@@ -247,7 +247,11 @@ function makeDetector(cols, rows) {
     // .jsonl bound to it, and the last verdict read out of it.
     // Identity for the Telegram bridge: the tab's visible name and the key that outlives
     // the process (the forum topic hangs on it). tgTimer debounces the «ждёт» message.
+    // tgNotifiedAt — уведомление об ожидании УШЛО (а не «пытались»): пока пусто, такт
+    // пробует снова. tgAck — сообщение «получил, думаю…», которое станет ответом. mode —
+    // последний увиденный режим разрешений: на экране его строка есть не всегда.
     tabKey: '', name: '', tgTimer: null, tgMode: false, tgPrimed: false, trReply: '',
+    tgNotifiedAt: 0, tgAck: null, tgLastSent: '', trFinal: '', mode: null,
     tgTopicLive: false, tgTopicName: '',
     cwd: '', startedAt: Date.now(), claudeSessionId: null,
     trFile: null, trMtime: 0, trEntries: null, trState: null, trText: '', trWhy: '', trTryAt: 0,
@@ -367,6 +371,12 @@ setInterval(() => {
               + `, зеркало=${TG.mirrorAll ? 'да' : 'нет'}, отошёл=${tgAway() ? 'да' : 'нет'})`));
         }
         if (relay) tgNotifyDone(id, d).catch(reportMainError);
+      }
+      // Уведомление могло не уйти — сеть рвётся ровно тогда, когда мак уснул или сменил
+      // вайфай. Пока вкладка ждёт, а отправка не удалась, пробуем снова: потерянный запрос
+      // разрешения это тишина в телеге, а человек ждёт именно его. Дребезг гасит tgOnWaiting.
+      if (d.status === 'waiting' && !d.tgNotifiedAt && TG.chatId != null && !d.tgTimer) {
+        tgOnWaiting(id);
       }
     } catch (_) {
       // A detector hiccup must never crash the app or freeze the UI.
@@ -779,6 +789,11 @@ function tgSave() {
 
 // One call to Telegram. getUpdates holds the request open for ~25 s, so the abort timer
 // must be longer than that — but finite, or a half-dead connection hangs the loop.
+//
+// НЕ БРОСАЕТ. Обрыв связи (сон мака, смена сети, VPN) — штатное событие для моста, а не
+// исключение: пока эта функция бросала, «fetch failed» всплывал в логе приложения, а
+// уведомление о запросе разрешения просто терялось. Сетевая беда выглядит здесь как обычный
+// отказ Telegram (status 0), и все вызывающие, которые и так проверяют ok, ведут себя верно.
 async function tgFetchJson(url, body) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), (telegram.POLL_TIMEOUT_S + 15) * 1000);
@@ -792,7 +807,28 @@ async function tgFetchJson(url, body) {
     let parsed = null;
     try { parsed = await res.json(); } catch (_) { /* non-JSON error page */ }
     return { ok: res.ok, status: res.status, body: parsed };
+  } catch (e) {
+    const why = (e && e.name === 'AbortError') ? 'таймаут' : ((e && e.message) || String(e));
+    return { ok: false, status: 0, body: null, netError: why };
   } finally { clearTimeout(timer); }
+}
+
+// Повтор для отправки: сетевой обрыв и 5xx у Telegram — не повод терять сообщение. Три
+// попытки с растущей паузой; дальше отказ уходит в журнал и в панель настроек.
+const TG_SEND_TRIES = 3;
+
+async function tgFetchWithRetry(url, body) {
+  let res = null;
+  for (let i = 0; i < TG_SEND_TRIES; i++) {
+    res = await tgFetchJson(url, body);
+    const transient = res.status === 0 || res.status >= 500;
+    if (!transient) return res;
+    if (i + 1 < TG_SEND_TRIES) {
+      tgLog(`  сеть подвела (${res.netError || 'HTTP ' + res.status}) — повтор ${i + 2}/${TG_SEND_TRIES}`);
+      await new Promise((r) => setTimeout(r, 800 * (i + 1)));
+    }
+  }
+  return res;
 }
 
 // Send text to the bound chat (or to `chatId` during pairing, before one is bound).
@@ -810,7 +846,7 @@ async function tgSend(opts) {
     if (o.replyTo) body.reply_to_message_id = o.replyTo;
     // Buttons go on the LAST chunk: that's the one the answer hangs off.
     if (o.replyMarkup && part === parts[parts.length - 1]) body.reply_markup = o.replyMarkup;
-    let res = await tgFetchJson(telegram.apiUrl(TG.token, 'sendMessage'), body);
+    let res = await tgFetchWithRetry(telegram.apiUrl(TG.token, 'sendMessage'), body);
     // The user deleted the topic we remembered. Don't swallow the message: forget the
     // mapping (a fresh topic gets made next time) and deliver this one to General.
     if (!res.ok && body.message_thread_id && /thread not found/i.test(
@@ -1550,6 +1586,8 @@ function tgOnWaiting(id) {
 
 function tgCancelWaiting(d) {
   if (d && d.tgTimer) { clearTimeout(d.tgTimer); d.tgTimer = null; }
+  // Вкладка больше не ждёт: следующее ожидание — новый повод уведомить.
+  if (d) d.tgNotifiedAt = 0;
 }
 
 // The agent finished a turn it was given from the phone: send back what it said. Only
@@ -1632,6 +1670,9 @@ async function tgNotifyWaiting(id, d) {
         replyMarkup: kb,
       });
       tgRemember(msgId, id);
+      // Отмечаем УСПЕХ, а не факт попытки: если Telegram не принял (сеть), флаг остаётся
+      // пустым и такт попробует снова — иначе запрос разрешения тихо пропадал.
+      if (msgId) d.tgNotifiedAt = Date.now();
       return;
     }
   }
@@ -1646,9 +1687,10 @@ async function tgNotifyWaiting(id, d) {
   const full = `${head} · ${tgTabName(id)}${body}${tail}`;
   // Вопрос прозой — это и есть исход хода, значит он вписывается в ту же заготовку: реплай
   // на неё маршрутизируется в ту же вкладку, потому что её id мы запомнили при отправке.
-  if (d.tgAck) { await tgAckResolve(id, d, full); return; }
+  if (d.tgAck) { await tgAckResolve(id, d, full); d.tgNotifiedAt = Date.now(); return; }
   const msgId = await tgSend({ threadId, text: full });
   if (!permission) tgRemember(msgId, id);
+  if (msgId) d.tgNotifiedAt = Date.now();
 }
 
 // Переключение режима разрешений жмёт Shift+Tab по кругу и каждый раз СМОТРИТ на экран:
