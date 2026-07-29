@@ -1282,19 +1282,19 @@ function showSettingsModal(tab) {
         </div>
         <div class="set-field" id="set-tg-chat-field" hidden>
           <span class="set-label">Шаг 2. Группа с темами</span>
-          <span class="set-hint set-hint-top">Каждая вкладка получает свою тему — иначе на
-            телефоне их не различить. Создайте группу, включите «Темы», добавьте бота
-            <b>администратором с правом «Управление темами»</b>. Затем отсканируйте код и
-            отправьте его в эту группу.</span>
+          <span class="set-hint set-hint-top" id="set-tg-step2-why">Каждая вкладка получает свою
+            тему — иначе на телефоне их не различить. Создайте группу, включите в её настройках
+            «Темы», добавьте туда бота <b>администратором</b> с правами «Управление темами» и
+            «Удаление сообщений». Затем нажмите «Привязать группу» и отправьте код в эту группу.</span>
           <div class="tg-pair" id="set-tg-pair" hidden>
-            <img class="tg-qr" id="set-tg-qr" alt="QR для привязки группы" />
+            <img class="tg-qr" id="set-tg-qr" alt="QR: добавить бота в группу" hidden />
             <div class="tg-pair-side">
               <div class="tg-code" id="set-tg-code"></div>
               <a class="tg-link" id="set-tg-link" href="#" target="_blank" rel="noreferrer">добавить бота в группу</a>
               <div class="set-hint" id="set-tg-ttl"></div>
             </div>
           </div>
-          <div class="tg-row">
+          <div class="tg-row tg-row-wrap">
             <button type="button" class="set-check-btn" id="set-tg-pair-btn">Привязать группу</button>
             <button type="button" class="set-check-btn" id="set-tg-check" hidden>Проверить права</button>
             <button type="button" class="set-check-btn" id="set-tg-unpair" hidden>Отвязать</button>
@@ -1303,51 +1303,71 @@ function showSettingsModal(tab) {
           <div class="tg-state" id="set-tg-check-note"></div>
         </div>
         <div class="set-field" id="set-tg-extra" hidden>
-          <span class="set-label">В группе</span>
-          <span class="set-hint set-hint-top">Пишете в тему — попадаете в её агента; вопросы и
-            итоги приходят туда же. В общей теме: <span class="set-mono">/tabs</span> — кто чем
-            занят, <span class="set-mono">/sync</span> — подтянуть темы под вкладки,
-            <span class="set-mono">/help</span> — напоминалка. Запрос разрешения приходит с
-            кнопками — вариантами самого Клода: нажали в телеге, приложение напечатало этот
-            номер. Словами разрешение не даётся: одобрить можно только то, что видно на
-            кнопке.</span>
-          <span class="set-label">Как агент отвечает в телегу</span>
+          <span class="set-label">Как этим пользоваться</span>
+          <span class="set-hint set-hint-top">Пишете в тему — попадаете в её агента; его вопросы и
+            итоги приходят туда же. Закрыли вкладку — её тема исчезает из группы.
+            <br>Запрос разрешения приходит <b>кнопками с вариантами самого Клода</b>: нажали —
+            приложение напечатало этот номер. Словами разрешение не даётся, одобрить можно
+            только то, что видно на кнопке.
+            <br>Команды: <span class="set-mono">/tabs</span> — кто чем занят,
+            <span class="set-mono">/new</span> — ещё один агент в папке этой темы,
+            <span class="set-mono">/mode auto</span> — разрешить агенту правки без спроса,
+            <span class="set-mono">/sync</span> — привести темы в соответствие с вкладками,
+            <span class="set-mono">/help</span> — напоминалка.</span>
+          <span class="set-label set-label-gap">Как агент отвечает в телегу</span>
           <span class="set-hint set-hint-top">Подставляется к первому сообщению из телеги, дальше
             идёт короткая метка <span class="set-mono">[тлг]</span>. Пусто — вернётся формулировка
             по умолчанию.</span>
-          <textarea class="set-input" id="set-tg-prompt" rows="2" spellcheck="false"></textarea>
-          <span class="set-label">Голосовые сообщения</span>
-          <span class="set-hint set-hint-top" id="set-tg-voice-hint"></span>
-          <div class="tg-row">
-            <select class="set-input" id="set-voice-model"></select>
+          <textarea class="set-input set-prose" id="set-tg-prompt" rows="2" spellcheck="false"></textarea>
+
+          <span class="set-label set-label-gap">Голосовые сообщения</span>
+          <span class="set-hint set-hint-top">Можно надиктовать задачу голосом. Распознаётся
+            <b>на этом компьютере</b> — запись никуда не отправляется. Для этого нужна модель
+            распознавания: её нет в приложении, поэтому кнопка скачает её один раз. Не нужны
+            голосовые — просто не нажимайте, ничего не скачается.</span>
+          <div class="tg-row tg-row-wrap">
+            <label class="set-inline">Качество
+              <select class="set-input set-select" id="set-voice-model"></select>
+            </label>
             <button type="button" class="set-check-btn" id="set-voice-install">Включить голосовые</button>
             <button type="button" class="set-check-btn" id="set-voice-cancel" hidden>Отменить</button>
             <button type="button" class="set-check-btn danger" id="set-voice-remove" hidden>Удалить</button>
           </div>
           <div class="upd-progress" id="set-voice-progress" hidden><div class="upd-bar" id="set-voice-bar"></div></div>
           <div class="tg-state" id="set-voice-note"></div>
-          <button type="button" class="set-check-btn" id="set-voice-manual">Указать пути вручную</button>
-          <button type="button" class="set-check-btn" id="set-tg-log">Показать журнал моста</button>
+          <div class="tg-row tg-row-wrap">
+            <button type="button" class="set-check-btn" id="set-voice-manual">Уже есть whisper.cpp</button>
+          </div>
           <div id="set-voice-manual-box" hidden>
+            <span class="set-hint set-hint-top" id="set-tg-voice-hint"></span>
             <div class="tg-row">
               <input class="set-input" type="text" id="set-tg-wbin" spellcheck="false"
-                     placeholder="whisper-cli (пусто — искать в PATH)" />
+                     placeholder="путь к whisper-cli (пусто — искать в PATH)" />
             </div>
             <div class="tg-row">
               <input class="set-input" type="text" id="set-tg-wmodel" spellcheck="false"
                      placeholder="путь к модели ggml-*.bin" />
             </div>
           </div>
+
+          <span class="set-label set-label-gap">Когда присылать итоги</span>
           <label class="set-check">
             <input type="checkbox" id="set-tg-mirror" />
             <span class="set-check-tx">Присылать итоги всех ходов
-              <span class="set-check-sub">по умолчанию — только когда тебя нет за маком дольше пяти минут</span></span>
+              <span class="set-check-sub">по умолчанию — только те, что начаты из телеги, и все, если вас нет за компьютером дольше пяти минут</span></span>
           </label>
           <label class="set-check">
             <input type="checkbox" id="set-tg-awake" />
-            <span class="set-check-tx">Не давать маку засыпать, пока группа привязана
-              <span class="set-check-sub">со спящим маком отвечать некому: агенты живут здесь</span></span>
+            <span class="set-check-tx">Не давать компьютеру засыпать, пока группа привязана
+              <span class="set-check-sub">со спящей машиной отвечать некому: агенты живут здесь, а не на сервере</span></span>
           </label>
+
+          <span class="set-label set-label-gap">Если что-то не так</span>
+          <span class="set-hint set-hint-top">Мост пишет журнал: кто что прислал, куда ушло и
+            почему. Пригодится, чтобы разобраться или отправить разработчику.</span>
+          <div class="tg-row tg-row-wrap">
+            <button type="button" class="set-check-btn" id="set-tg-log">Показать журнал моста</button>
+          </div>
         </div>
       </div>
 
@@ -1406,6 +1426,7 @@ function showSettingsModal(tab) {
   const tgChatField = overlay.querySelector('#set-tg-chat-field');
   const tgPairBox = overlay.querySelector('#set-tg-pair');
   const tgQrI = overlay.querySelector('#set-tg-qr');
+  const tgStep2Why = overlay.querySelector('#set-tg-step2-why');
   const tgCodeEl = overlay.querySelector('#set-tg-code');
   const tgLinkA = overlay.querySelector('#set-tg-link');
   const tgTtlEl = overlay.querySelector('#set-tg-ttl');
@@ -1443,7 +1464,9 @@ function showSettingsModal(tab) {
       for (const m of models) {
         const o = document.createElement('option');
         o.value = m.id;
-        o.textContent = `${m.label} — ${vMb(m.bytes)}${m.recommended ? ' (обычный выбор)' : ''}`;
+        // В подписи — и вес, и смысл: без этого «Обычная — 148 МБ» не отвечает на вопрос
+        // «а что я вообще выбираю».
+        o.textContent = `${m.label}, ${vMb(m.bytes)} — ${m.note || ''}`.replace(/ — $/, '');
         o.title = m.note || '';
         if (m.recommended) o.selected = true;
         vModelSel.appendChild(o);
@@ -1496,8 +1519,11 @@ function showSettingsModal(tab) {
     if (st.error) return '⚠ ' + st.error;
     if (!st.live) return 'Подключаюсь…';
     const who = st.bot ? '@' + st.bot : 'бот';
-    if (st.chatId == null) return `${who} на связи. Группа не привязана — нажмите «Привязать чат».`;
-    return `${who} на связи, группа привязана: вкладки получают свои темы.`;
+    if (st.chatId == null) return `${who} на связи. Группа не привязана — нажмите «Привязать группу».`;
+    // Название группы, если оно известно: «привязана» без имени не даёт убедиться, что это
+    // та самая группа, особенно когда их несколько.
+    const where = st.check && st.check.title ? ` «${st.check.title}»` : '';
+    return `${who} на связи, группа${where} привязана: вкладки получают свои темы.`;
   }
 
   function renderTg(st) {
@@ -1511,7 +1537,17 @@ function showSettingsModal(tab) {
     tgCheckB.hidden = st.chatId == null;
     tgExtra.hidden = st.chatId == null;
     // Привязались — код мёртв, и висящий QR только вводит в заблуждение («битый»).
-    if (st.chatId != null) { stopTgTtl(); tgPairBox.hidden = true; }
+    if (st.chatId != null) {
+      stopTgTtl();
+      tgPairBox.hidden = true;
+      // И убираем саму картинку: иначе она остаётся в DOM и всплывает битой, если панель
+      // покажут снова.
+      tgQrI.hidden = true;
+      tgQrI.removeAttribute('src');
+    }
+    // Шаг 2 объясняет, КАК привязать группу. Когда она уже привязана, объяснение только
+    // отвлекает — вместо него видно, что именно привязано.
+    tgStep2Why.hidden = st.chatId != null;
     tgPairBtn.textContent = st.chatId == null ? 'Привязать группу' : 'Привязать другую';
     // The rights check: the one place where «бот молчит в топике» gets a name.
     tgCheckNote.textContent = st.check ? st.check.note : '';
@@ -1522,10 +1558,10 @@ function showSettingsModal(tab) {
     tgMirrorI.checked = !!st.mirrorAll;
     if (document.activeElement !== tgWBinI) tgWBinI.value = st.whisperBin || '';
     if (document.activeElement !== tgWModelI) tgWModelI.value = st.whisperModel || '';
-    // Инструкция по ручной установке своя на ОС (brew есть только на маке) — её присылает
-    // main. Обычному пути она не нужна, поэтому висит над скрытыми полями.
-    tgVoiceHintEl.textContent = 'Распознавание идёт на этой машине: звук никуда не уходит.';
-    vManualB.title = st.voiceHint || '';
+    // Инструкция по ручной установке — своя на ОС (brew есть только на маке), её присылает
+    // main. Обычному пути она не нужна, поэтому лежит внутри скрытого блока «уже есть
+    // whisper.cpp», а не пугает всех остальных.
+    tgVoiceHintEl.textContent = st.voiceHint || '';
     renderVoice(st);
   }
 
@@ -1550,7 +1586,9 @@ function showSettingsModal(tab) {
   tgPairBtn.addEventListener('click', async () => {
     const r = await window.swarm.telegram.pair();
     if (!r || r.error) { tgStateEl.textContent = '⚠ ' + ((r && r.error) || 'не получилось'); return; }
-    tgQrI.src = r.qr;
+    // Картинку показываем ТОЛЬКО когда есть что показать: <img> без src — это «битая
+    // картинка» в панели, и ровно её видел пользователь при уже привязанной группе.
+    if (r.qr) { tgQrI.src = r.qr; tgQrI.hidden = false; } else { tgQrI.hidden = true; }
     tgCodeEl.textContent = r.code;
     tgLinkA.href = r.link;
     tgPairBox.hidden = false;

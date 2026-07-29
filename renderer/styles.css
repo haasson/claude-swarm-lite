@@ -610,6 +610,23 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 /* Multi-line variant (the «agent is calling me» phrases): same box, no resize
    handle dragging the modal layout around. */
 textarea.set-input { resize: vertical; min-height: 62px; line-height: 1.5; }
+/* Прозаические поля (инструкция агенту) — не код: моно 13px выглядит в них огромным и
+   разъезжается по ширине. Системный шрифт того же размера, что подписи рядом. */
+.set-input.set-prose {
+  font-family: inherit; font-size: 12px; line-height: 1.45;
+}
+/* Разделитель между смысловыми блоками одной панели: без него подписи «слипаются» и
+   панель читается как одна простыня. */
+.set-label-gap { margin-top: 18px; }
+/* Кнопки в строке умеют переноситься: на узком окне и на Windows (там шрифт шире) три
+   кнопки в ряд не влезали и уезжали за край. */
+.tg-row-wrap { flex-wrap: wrap; row-gap: 7px; }
+/* Подпись перед селектом, чтобы «Обычная, 148 МБ» не висело без объяснения, ЧТО это. */
+.set-inline {
+  display: inline-flex; align-items: center; gap: 7px;
+  color: var(--muted); font-size: 11px; white-space: nowrap;
+}
+.set-inline .set-select { width: auto; min-width: 0; flex: 0 1 auto; font-size: 12px; }
 .set-hint { display: block; color: var(--muted); font-size: 11px; line-height: 1.5; margin-top: 5px; }
 /* A hint that sits ABOVE its field (the «why» line before the phrase box). */
 .set-hint-top { margin-top: 0; margin-bottom: 7px; }
