@@ -215,7 +215,7 @@ process.on('unhandledRejection', (reason) => reportMainError(reason));
 // tell "waiting for a prompt" apart from "idle/done". We deliberately do NOT
 // surface Claude's token counter or activity words — just the four states.
 const { Terminal: HeadlessTerminal } = require('@xterm/headless');
-const { extractQuestion, countSubagents, contentEnd, snapshotRows, setAskPhrases, parsePrompt } = require('./screen');
+const { extractQuestion, lastAgentLine, countSubagents, contentEnd, snapshotRows, setAskPhrases, parsePrompt } = require('./screen');
 // The status state machine + «ждёт» latch + hook arbitration live in a pure,
 // unit-tested module; osc.js sniffs hook markers out of the raw pty stream.
 const { tickStatus, applyHook, applyTranscript } = require('./detector');
@@ -471,19 +471,32 @@ function bindTranscript(d, taken) {
     if (st.mtimeMs < d.startedAt - transcript.BIND_MTIME_SLACK_MS) continue;
     let cwdInside = null;
     let text = '';
+    let userText = '';
     try {
       const entries = transcript.parseEntries(tailText(file, TR_TAIL_BYTES));
       cwdInside = transcript.cwdOf(entries);
       // Kept for the tie-break below: what the agent last SAID is also on its own screen.
       text = transcript.entryText(transcript.lastMain(entries) || {});
+      // А это для самого надёжного ключа: реплики ЧЕЛОВЕКА. Если вкладку ведут из телеги,
+      // мост знает свой текст дословно и найдёт файл по нему (см. pickByInjected).
+      userText = entries.filter((e) => e.type === 'user')
+        .map((e) => transcript.entryText(e)).join('\n');
     } catch (_) {}
-    cands.push({ file, mtimeMs: st.mtimeMs, cwdInside, text });
+    cands.push({ file, mtimeMs: st.mtimeMs, cwdInside, text, userText });
   }
   const one = transcript.pickBinding(cands, { startedAt: d.startedAt, cwd: d.cwd, taken });
   if (one) return one;
+  const same = cands.filter((c) => c.cwdInside === d.cwd && !taken.has(c.file));
+  // Вкладку ведут из телеги? Тогда у нас есть точный ключ — наш собственный текст с меткой
+  // [тлг]. Он сильнее и свежести, и экрана, поэтому пробуется первым и работает даже когда
+  // в папке три живых разговора (тот случай, где вкладка оставалась без стенограммы вовсе).
+  const byInjected = transcript.pickByInjected(same, d.tgLastSent);
+  if (byInjected) {
+    trLog(`tab=${d.name || '?'} найдена по тексту из телеги → ${path.basename(byInjected)}`);
+    return byInjected;
+  }
   // Ambiguous by folder — the normal case with several tabs on one repo. Match what's on
   // THIS tab's screen against each candidate's last message.
-  const same = cands.filter((c) => c.cwdInside === d.cwd && !taken.has(c.file));
   if (same.length < 2) return null;
   const byScreen = transcript.pickByScreen(same, snapshot(d));
   if (byScreen) trLog(`tab=${d.name || '?'} разведены по экрану → ${path.basename(byScreen)}`);
@@ -1345,6 +1358,10 @@ function tgAnswer(id, text) {
   const [body, enter] = telegram.inputWrites(text);
   if (!body) return false;
   p.write(body);
+  // Запоминаем ДОСЛОВНО напечатанное: по этому тексту стенограмма находит файл вкладки,
+  // когда в папке несколько живых разговоров и догадки не срабатывают.
+  const dd = det.get(id);
+  if (dd) dd.tgLastSent = String(text).replace(/\r\n?/g, '\n').slice(0, 200);
   setTimeout(() => {
     // Вкладка могла умереть за эти миллисекунды — тогда Enter уже некому.
     const live = sessions.get(id);
@@ -1415,7 +1432,10 @@ async function tgNotifyDone(id, d) {
   // Пустой отчёт «✅ вкладка — готов.» бесполезен: человек в дороге узнаёт, что ход
   // закончился, но не узнаёт чем. Экран короче и без переносов, зато он есть всегда.
   const fromTr = String(d.trReply || '').trim();
-  const text = fromTr || String(extractQuestion(snapshot(d)) || '').trim();
+  // lastAgentLine, а НЕ extractQuestion: вторая берёт нижнюю значимую строку, а внизу стоит
+  // поле ввода — из-за этого в чат уезжала то линейка рамки, то собственный вопрос
+  // пользователя, отражённый ему же как «ответ агента».
+  const text = fromTr || String(lastAgentLine(snapshot(d)) || '').trim();
   tgLog(`  → итог вкладки ${id}: ${text ? text.length + ' симв.' : 'текста нет'}`
     + ` (${fromTr ? 'стенограмма' : text ? 'экран, стенограмма не привязана' : 'ни стенограммы, ни экрана'})`);
   const msgId = await tgSend({

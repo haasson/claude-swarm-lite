@@ -75,6 +75,32 @@ function clean(line) {
 // The one-line gist of what an agent is asking, for the pult chip. Scans bottom
 // -up because the live prompt sits at the bottom of the screen. Best effort by
 // design: null just means the chip shows the tab name (see the spec).
+// Что агент сказал ПОСЛЕДНИМ — для отчёта в телегу, когда стенограмма не привязана.
+//
+// Отдельная функция, а не extractQuestion: та возвращает нижнюю значимую строку, а внизу у
+// Claude Code стоит ПОЛЕ ВВОДА с текстом человека. Из-за этого в чат уезжало то линейка
+// рамки, то собственный вопрос пользователя, отражённый ему же как «ответ агента». Поэтому
+// строки поля ввода и прозы человека (начинаются с ❯) пропускаются наравне с мебелью.
+const USER_LINE_RE = /^[❯>»]\s*\S/;
+const AGENT_BULLET_RE = /^[⏺]\s*/;
+
+function lastAgentLine(snapshot) {
+  const lines = String(snapshot == null ? '' : snapshot).split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const t = clean(lines[i]);
+    if (!t || !HAS_TEXT_RE.test(t)) continue;   // рамки, линейки, пустое поле ввода
+    if (STATUSLINE_RE.test(t)) continue;        // статуслайн пользователя
+    if (OPTION_RE.test(t)) continue;            // «❯ 1. Yes»
+    if (HINT_RE.test(t)) continue;              // «Esc to cancel»
+    if (CHROME_RE.test(t)) continue;            // «⏸ manual mode on», «✻ Churned for 7s»
+    if (USER_LINE_RE.test(t)) continue;         // поле ввода и реплики человека
+    const s = t.replace(AGENT_BULLET_RE, '');
+    if (!s || !HAS_TEXT_RE.test(s)) continue;
+    return s.length > MAX ? s.slice(0, MAX - 1).trimEnd() + '…' : s;
+  }
+  return null;
+}
+
 function extractQuestion(snapshot) {
   const lines = String(snapshot == null ? '' : snapshot).split('\n');
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -271,7 +297,7 @@ function countSubagents(snapshot) {
 }
 
 module.exports = {
-  extractQuestion, inferWaitingKind, asksForInput, setAskPhrases, countSubagents,
+  extractQuestion, lastAgentLine, inferWaitingKind, asksForInput, setAskPhrases, countSubagents,
   parsePrompt, fingerprintOf,
   contentEnd, snapshotRows,
 };

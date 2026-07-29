@@ -177,6 +177,43 @@ test('screenKey ignores whitespace, case and punctuation', () => {
   assert.strictEqual(T.screenKey('Готово!  Тесты — зелёные.'), T.screenKey('готово тесты\nзелёные'));
 });
 
+// --- привязка по тексту, который напечатал мост -------------------------------
+// Живой случай: три вкладки на одной папке, все разговоры свежие, ни один не выигрывает
+// по однозначности — вкладка осталась без стенограммы, и в телегу уехало «✅ готов» без
+// текста ответа. Но мост ЗНАЕТ, что напечатал, и метка [тлг] есть только в его репликах.
+
+const injected = '[тлг: отвечай коротко] Посмотри, почему падает тест на миграциях';
+
+test('pickByInjected находит файл по дословному тексту из телеги', () => {
+  const cands = [
+    { file: 'other.jsonl', userText: 'привет\nсделай рефакторинг' },
+    { file: 'mine.jsonl', userText: 'старое сообщение\n' + injected },
+  ];
+  assert.strictEqual(T.pickByInjected(cands, injected), 'mine.jsonl');
+});
+
+test('pickByInjected молчит, когда текста нет ни в одном файле', () => {
+  const cands = [{ file: 'a.jsonl', userText: 'привет' }, { file: 'b.jsonl', userText: 'ага' }];
+  assert.strictEqual(T.pickByInjected(cands, injected), null);
+});
+
+// Короткий ключ ничего не доказывает: «да» встречается в любом разговоре, и привязка по
+// нему увела бы статус одного агента на вкладку другого.
+test('pickByInjected не верит короткому совпадению', () => {
+  const cands = [{ file: 'a.jsonl', userText: 'да, вариант 2' }];
+  assert.strictEqual(T.pickByInjected(cands, 'да'), null);
+  assert.strictEqual(T.pickByInjected(cands, ''), null);
+  assert.strictEqual(T.pickByInjected(cands, null), null);
+});
+
+test('pickByInjected отказывается при двух совпадениях, как остальные ключи', () => {
+  const cands = [
+    { file: 'a.jsonl', userText: injected },
+    { file: 'b.jsonl', userText: injected },
+  ];
+  assert.strictEqual(T.pickByInjected(cands, injected), null);
+});
+
 for (const [name, fn] of tests) {
   try { fn(); passed++; }
   catch (e) { console.error('FAIL: ' + name + '\n  ' + e.message); process.exitCode = 1; }

@@ -154,6 +154,25 @@ function pickBinding(cands, opts) {
   return hits[0] || null;
 }
 
+// Самый надёжный ключ, если вкладку ведут из телеги: мост ЗНАЕТ, что он напечатал. Его
+// текст уходит в стенограмму как реплика пользователя с меткой [тлг], которой больше нигде
+// нет. Поэтому файл, в котором она лежит, — это файл этой вкладки, и никакие догадки по
+// свежести и экрану тут не нужны.
+//
+// Понадобилось после живого случая: три вкладки на одной папке, все разговоры свежие, ни
+// один не выиграл по однозначности — и вкладка осталась без стенограммы, а в телегу уехало
+// «✅ готов» без текста ответа.
+function pickByInjected(cands, needle) {
+  const key = String(needle == null ? '' : needle).trim();
+  if (key.length < 12) return null;          // короткое совпадение ничего не доказывает
+  const hits = [];
+  for (const c of Array.isArray(cands) ? cands : []) {
+    if (c && String(c.userText || '').includes(key)) hits.push(c.file);
+    if (hits.length > 1) return null;        // невозможно, но пусть будет как везде
+  }
+  return hits[0] || null;
+}
+
 // Several transcripts in one folder is the NORMAL case — that's what a swarm looks like:
 // three tabs open on the same repo. Refusing to bind any of them (see pickBinding) leaves
 // those tabs on screen-scraping, which is exactly the quality we're trying to leave behind.
@@ -192,4 +211,5 @@ function pickByScreen(cands, snapshot) {
 module.exports = {
   READY_DEBOUNCE_MS, BIND_MTIME_SLACK_MS, SCREEN_KEY_LEN, screenKey, pickByScreen,
   projectSlug, parseEntries, blockTypes, entryText, lastMain, classify, cwdOf, pickBinding,
+  pickByInjected,
 };
