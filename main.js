@@ -1136,6 +1136,13 @@ async function tgCheckChat(chatId) {
     return { ok: false, title, isForum, note: `В «${title}» у бота нет права «Управление темами» —`
       + ' вкладки не получат своих тем. Включи это право в его админ-настройках.' };
   }
+  // Право на удаление — не гейт: без него мост работает, просто закрытые вкладки оставляют
+  // за собой тему с замочком. Поэтому не отказ, а предупреждение в той же строке.
+  if (member.can_delete_messages === false) {
+    return { ok: true, title, isForum: true, note: `«${title}»: бот администратор, темы доступны.`
+      + ' Добавь ему право «Удаление сообщений» — иначе темы закрытых вкладок останутся в'
+      + ' списке с замочком вместо того, чтобы исчезать.' };
+  }
   return { ok: true, title, isForum: true, note: `«${title}»: бот администратор, темы доступны.` };
 }
 
@@ -1350,13 +1357,38 @@ function tgOnTabGone(d) {
   tgCloseTopic(d);             // the topic list mirrors the open tabs
 }
 
-// The tab is gone: say so in its topic and close it.
+// Вкладку закрыли — тему СНОСИМ, а не закрываем. Закрытая тема остаётся в списке группы с
+// замочком: список тем должен быть списком открытых вкладок, а не музеем закрытых. Вместе с
+// темой пропадает и её переписка — это осознанно, чат здесь зеркало живых вкладок, а не
+// архив (история хода целиком есть в самой вкладке и в стенограмме Клода).
+//
+// ВАЖНО: не при выходе из приложения. На закрытии окна умирают все pty сразу, и снос тут
+// стирал бы всю группу при каждом перезапуске, хотя вкладки вернутся и займут свои темы.
 function tgCloseTopic(d) {
   const threadId = tgTopicOf(d);
   if (!threadId || TG.chatId == null) return;
-  tgSend({ threadId, text: '⚪ вкладка закрыта', silent: true })
-    .then(() => tgTopicCall('closeForumTopic', threadId))
-    .catch(reportMainError);
+  if (allowClose) return;              // приложение закрывается — темы переживут перезапуск
+  tgDeleteTopic(threadId).catch(reportMainError);
+}
+
+// Снос темы. Требует права «Удаление сообщений»: без него Telegram отвечает отказом, и
+// молча оставить тему висеть — значит соврать пользователю, что убрали. Поэтому откат на
+// закрытие плюс внятная ошибка в настройках.
+async function tgDeleteTopic(threadId) {
+  const res = await tgFetchJson(telegram.apiUrl(TG.token, 'deleteForumTopic'),
+    { chat_id: TG.chatId, message_thread_id: threadId });
+  if (res.ok && res.body && res.body.ok === true) {
+    tgLog(`  тема ${threadId} снесена`);
+    tgForgetTopic(threadId);           // карта не должна помнить то, чего больше нет
+    return;
+  }
+  const why = (res.body && res.body.description) || `HTTP ${res.status}`;
+  tgLog(`  ✗ тему ${threadId} снести не смог: ${why} — закрываю`);
+  tgError = 'Чтобы закрытые вкладки исчезали из группы, боту нужно право «Удаление'
+    + ' сообщений» в админ-настройках. Пока темы будут просто закрываться.';
+  tgPush();
+  await tgSend({ threadId, text: '⚪ вкладка закрыта', silent: true });
+  await tgTopicCall('closeForumTopic', threadId);
 }
 
 // Every live tab gets its topic NOW, not when it happens to speak. A topic is the only
@@ -1775,20 +1807,20 @@ async function tgSync(threadId) {
     return;
   }
   await tgEnsureTopics();
-  // The other direction: topics whose tab is gone. Closed, not forgotten — the mapping
-  // stays so the same tab returning after a relaunch reopens its own topic.
+  // Обратная сторона: темы, чьих вкладок больше нет. Сносим — /sync означает «пусть в группе
+  // будет то же, что на машине», а закрытая тема с замочком остаётся мусором в списке.
   const live = new Set();
   for (const [id, d] of det) if (!d.dead && d.tabKey && sessions.has(id)) live.add(d.tabKey);
-  let closed = 0;
+  let gone = 0;
   for (const [key, thread] of Object.entries(TG.topics)) {
     if (live.has(key)) continue;
-    await tgTopicCall('closeForumTopic', thread);
-    closed++;
+    await tgDeleteTopic(thread);
+    gone++;
   }
   const names = [...det].filter(([id, d]) => !d.dead && sessions.has(id)).map(([id]) => tgTabName(id));
   await tgSend({ threadId, text: `Тем под открытые вкладки: ${names.length}`
     + (names.length ? ' — ' + names.join(', ') : '')
-    + (closed ? `\nЗакрыто тем от закрытых вкладок: ${closed}` : '') });
+    + (gone ? `\nУбрано тем от закрытых вкладок: ${gone}` : '') });
 }
 
 // /tabs — what every agent is doing right now, so you can orient from the phone without
