@@ -729,9 +729,30 @@ function tgBlank() { return { token: '', chatId: null, isForum: false, topics: {
 // темы доступны» without re-asking Telegram on every render.
 let tgCheck = null;
 
+// Доступность шифрования — С КЭШЕМ и только по нужде.
+//
+// На macOS каждое обращение к safeStorage лезет в связку ключей, а приложение подписано
+// ad-hoc (без Developer ID — решение пользователя). Для системы каждая пересборка это НОВОЕ
+// приложение, поэтому доступ к прежней записи требует пароля. Раньше на старте таких
+// обращений было два — чтение конфига и isEncryptionAvailable() из tgState(), — и пароль
+// спрашивали дважды, даже у тех, кто телеграм вообще не настраивал.
+//
+// Теперь: если файла конфига нет, связку не трогаем совсем (у большинства — ни одного
+// запроса), а результат проверки помним, чтобы не спрашивать повторно.
+let tgEncOk = null;
+
+function tgEncAvailable() {
+  if (tgEncOk === null) {
+    try { tgEncOk = safeStorage.isEncryptionAvailable(); } catch (_) { tgEncOk = false; }
+  }
+  return tgEncOk;
+}
+
 // Anything unreadable — no keychain access, a file copied from another machine, a
 // half-written save — means «not configured». Never a crash on launch.
 function tgLoad() {
+  // Нет файла — нечего расшифровывать: молча остаёмся ненастроенными, связка не трогается.
+  if (!fs.existsSync(tgPath())) { TG = tgBlank(); TG_PROMPT = TG_PROMPT_DEFAULT; return; }
   try {
     const d = JSON.parse(safeStorage.decryptString(fs.readFileSync(tgPath())));
     TG = {
@@ -750,7 +771,7 @@ function tgLoad() {
 }
 
 function tgSave() {
-  if (!safeStorage.isEncryptionAvailable()) {
+  if (!tgEncAvailable()) {
     throw new Error('Система не даёт безопасно сохранить токен (нет доступа к keychain)');
   }
   fs.writeFileSync(tgPath(), safeStorage.encryptString(JSON.stringify(TG)), { mode: 0o600 });
@@ -1152,7 +1173,10 @@ async function tgCheckChat(chatId) {
 
 function tgState() {
   return {
-    available: safeStorage.isEncryptionAvailable(),
+    // Не дёргаем связку ключей ради отрисовки настроек: пока никто не сохранял токен,
+    // считаем, что всё в порядке. Настоящая проверка случится при сохранении — там же, где
+    // от неё есть польза, и с внятной ошибкой, если система откажет.
+    available: tgEncOk === null ? true : tgEncOk,
     configured: !!TG.token,
     masked: telegram.maskToken(TG.token),
     bot: tgBot,
