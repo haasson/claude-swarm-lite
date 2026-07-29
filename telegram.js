@@ -249,6 +249,7 @@ const CB_MAX = 64;
 // неудобно, а в меню это выбор из списка с описанием.
 const COMMANDS = [
   { command: 'tabs', description: 'вкладки и кто чем занят' },
+  { command: 'usage', description: 'расход: контекст вкладки, 5 часов, неделя' },
   { command: 'mode', description: 'режим вкладки: auto, edits, plan, manual' },
   { command: 'new', description: 'ещё один агент в папке этой темы' },
   { command: 'sync', description: 'привести темы в соответствие с вкладками' },

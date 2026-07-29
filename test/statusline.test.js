@@ -5,7 +5,11 @@
 // misleading zero — and the limit percentages must never reach the line before the
 // context one, because the app parses the first % as the context fill.
 const assert = require('assert');
-const { renderLine, renderLimits, usedPct, fmtEta } = require('../swarm-statusline');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { execFileSync } = require('child_process');
+const { renderLine, renderLimits, usedPct, fmtEta, ctxUsed, usageSnapshot, usageReport } = require('../swarm-statusline');
 
 let passed = 0;
 const tests = [];
@@ -134,6 +138,130 @@ test('the line still renders without limits at all', () => {
   const line = strip(renderLine(payload(), NOW));
   assert.match(line, /Opus 5 │ some-project/);
   assert.match(line, /24%/);
+});
+
+// --- /usage: те же числа, но как данные и как текст в чат ---------------------
+// Отчёт в телегу обязан говорить то же, что полоска на вкладке: одно направление
+// (израсходовано), одно округление, один отсчёт. Поэтому снимок и строка считают
+// контекст ОДНОЙ функцией, и это пиняется — расхождение на 16% (буфер автосжатия)
+// человек не спишет на округление, он решит, что одно из двух врёт.
+test('the snapshot and the line agree on how full the context is', () => {
+  const p = payload({ five_hour: { used_percentage: 37, resets_at: NOW + 8040 } });
+  const snap = usageSnapshot(p, NOW);
+  assert.strictEqual(snap.ctx.used, ctxUsed(p.context_window));
+  assert.match(strip(renderLine(p, NOW)), new RegExp(`${snap.ctx.used}%`));
+});
+
+test('the snapshot keeps the reset as an absolute time, not a countdown', () => {
+  // Снимок может быть минутной давности (простаивающая вкладка не перерисовывает
+  // строку), и отсчёт, посчитанный при съёмке, к моменту ответа был бы уже неверным.
+  const snap = usageSnapshot(payload({ seven_day: { used_percentage: 62, resets_at: NOW + 300_000 } }), NOW);
+  assert.strictEqual(snap.seven.resetsAt, NOW + 300_000);
+  assert.strictEqual(snap.seven.spent, 62);
+  assert.strictEqual(snap.at, NOW);
+});
+
+test('absent limits stay absent in the snapshot — never a bare zero', () => {
+  const snap = usageSnapshot(payload(null), NOW);
+  assert.strictEqual(snap.five, null);
+  assert.strictEqual(snap.seven, null);
+  assert.strictEqual(usageSnapshot({}, NOW).ctx, null);
+});
+
+test('the report states both windows once and the context per tab', () => {
+  // Окна подписки — на аккаунт, а не на вкладку: назвать их дважды значило бы
+  // предложить человеку сравнивать два одинаковых числа как разные.
+  const snap = (used, at) => ({
+    at, session: 's', ctx: { used, total: 1_000_000 },
+    five: { spent: 37, resetsAt: NOW + 8040 },
+    seven: { spent: 62, resetsAt: NOW + 300_000 },
+  });
+  const text = usageReport([
+    { name: 'api', usage: snap(62, NOW) },
+    { name: 'web', usage: snap(18, NOW) },
+  ], NOW);
+  assert.strictEqual((text.match(/5 часов:/g) || []).length, 1, 'окно 5ч названо один раз');
+  assert.match(text, /5 часов: 37% · сброс через 2ч14м/);
+  assert.match(text, /7 дней: 62% · сброс через 3д11ч/);
+  assert.match(text, /62% из 1M · api/);
+  assert.match(text, /18% из 1M · web/);
+});
+
+test('the fullest tab comes first, and tabs with no data come last', () => {
+  const snap = (used) => ({ at: NOW, session: 's', ctx: { used, total: 1_000_000 }, five: null, seven: null });
+  const text = usageReport([
+    { name: 'web', usage: snap(18) },
+    { name: 'shell', usage: null, why: 'нет данных' },
+    { name: 'api', usage: snap(81) },
+  ], NOW);
+  const order = text.split('\n').filter((l) => / · (api|web|shell)$/.test(l) || / · shell \(/.test(l));
+  assert.deepStrictEqual(order.map((l) => l.split(' · ').pop().replace(/ \(.*/, '')), ['api', 'web', 'shell']);
+});
+
+test('a nearly spent window is marked with a glyph, not colour', () => {
+  const text = usageReport([{
+    name: 'api',
+    usage: { at: NOW, session: 's', ctx: null, five: { spent: 94, resetsAt: NOW + 600 }, seven: { spent: 40, resetsAt: null } },
+  }], NOW);
+  assert.match(text, /⚠ 5 часов: 94%/);
+  assert.ok(!/⚠ 7 дней/.test(text), 'спокойное окно без пометки');
+});
+
+test('a tab without a snapshot is listed with the reason, not skipped', () => {
+  // Молча пропущенная вкладка читается как «расход нулевой».
+  const text = usageReport([{ name: 'shell', usage: null, why: 'нет данных: это не разговор Claude Code' }], NOW);
+  assert.match(text, /— · shell \(нет данных: это не разговор Claude Code\)/);
+  assert.match(text, /Лимиты подписки неизвестны/);
+});
+
+test('a stale snapshot says so, while its countdown stays exact', () => {
+  const text = usageReport([{
+    name: 'api',
+    usage: { at: NOW - 3600, session: 's', ctx: { used: 40, total: 1_000_000 }, five: { spent: 50, resetsAt: NOW + 600 }, seven: null },
+  }], NOW);
+  assert.match(text, /сняты 1ч назад/);
+  assert.match(text, /сброс через 10м/);   // от абсолютного времени, а не от съёмки
+});
+
+test('a past reset drops the countdown instead of counting backwards', () => {
+  const text = usageReport([{
+    name: 'api',
+    usage: { at: NOW, session: 's', ctx: null, five: { spent: 5, resetsAt: NOW - 60 }, seven: null },
+  }], NOW);
+  assert.match(text, /5 часов: 5%$/m);
+});
+
+test('run for real, the script leaves the snapshot beside itself', () => {
+  // Ставим копию скрипта в отдельную папку — как это делает приложение
+  // (provisionNodeLauncher копирует его в userData) — и запускаем как настоящий
+  // статуслайн. Проверяем и то, что строка напечаталась, и то, что рядом лёг файл:
+  // без файла /usage молчит, а без строки ломается полоска на вкладке.
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-usage-')));
+  const staged = path.join(dir, 'swarm-statusline.js');
+  fs.copyFileSync(path.join(__dirname, '..', 'swarm-statusline.js'), staged);
+  const data = Object.assign(payload({
+    five_hour: { used_percentage: 37, resets_at: NOW + 8040 },
+    seven_day: { used_percentage: 62, resets_at: NOW + 300_000 },
+  }), { session_id: 'sid-42' });
+  const out = execFileSync(process.execPath, [staged], { input: JSON.stringify(data), encoding: 'utf8' });
+  assert.match(strip(out), /24%/, 'строка статуса печатается по-прежнему');
+  const snap = JSON.parse(fs.readFileSync(path.join(dir, 'usage', 'sid-42.json'), 'utf8'));
+  assert.strictEqual(snap.ctx.used, 24);
+  assert.strictEqual(snap.five.spent, 37);
+  assert.strictEqual(snap.seven.resetsAt, NOW + 300_000);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a session id with a path in it writes no file at all', () => {
+  // Имя файла склеивается из id, поэтому «../» в нём — это запись куда угодно.
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-usage-')));
+  const staged = path.join(dir, 'swarm-statusline.js');
+  fs.copyFileSync(path.join(__dirname, '..', 'swarm-statusline.js'), staged);
+  const data = Object.assign(payload({ five_hour: { used_percentage: 5 } }), { session_id: '../escaped' });
+  execFileSync(process.execPath, [staged], { input: JSON.stringify(data), encoding: 'utf8' });
+  assert.strictEqual(fs.existsSync(path.join(dir, 'usage')), false, 'папка снимков не создана');
+  assert.strictEqual(fs.existsSync(path.join(path.dirname(dir), 'escaped.json')), false, 'наружу не записано');
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 for (const [name, fn] of tests) {

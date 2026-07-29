@@ -121,6 +121,7 @@ let STATUSLINE_SETTINGS = null;
 const { hookSettings } = require('./hook-config');
 const { DEFAULT_ASK_PHRASES, normalizePhrases, phraseSources, buildAskMatcher, asksWith, askExcerpt } = require('./ask-phrases');
 const { appendSystemPromptFlag } = require('./agent-rules');
+const statusline = require('./swarm-statusline');   // числа расхода + текст для /usage
 let STATUSLINE_COMMAND = null; // the provisioned statusline launcher command
 let HOOK_COMMAND = null;       // the provisioned hook launcher command
 // Opt-in: precise status via Claude hooks. Off by default; the renderer pushes the
@@ -194,6 +195,44 @@ function provisionStatusline() {
   HOOK_COMMAND = provisionNodeLauncher(dir, path.join('hooks', 'swarm-signal.mjs'), 'swarm-signal');
   writeSwarmSettings();
   applyAskPhrases();
+  pruneUsage();
+}
+
+// --- «сколько израсходовано»: снимки от статуслайна ---------------------------
+// Статуслайн кладёт рядом с собой числа по сессии (swarm-statusline.js usageSnapshot):
+// заполнение контекста и расход двух окон подписки. Читаем их для /usage, а не парсим
+// строку с экрана — в строке числа округлены, отсчёт до сброса скрыт, пока окно не
+// поджало, и самой строки не видно, когда вкладка не на экране.
+function usageFile(sessionId) {
+  const s = String(sessionId || '');
+  if (!s || /[/\\]|\.\./.test(s)) return null;
+  return path.join(app.getPath('userData'), statusline.USAGE_DIR, s + '.json');
+}
+
+function readUsage(sessionId) {
+  const file = usageFile(sessionId);
+  if (!file) return null;
+  try {
+    const snap = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return snap && typeof snap === 'object' ? snap : null;
+  } catch (_) { return null; }   // нет файла — вкладка ещё не отрисовала статуслайн
+}
+
+// Снимки закрытых разговоров иначе копятся навсегда: каждая вкладка — новый id, а
+// /clear и перезапуски рождают их каждый день. Неделя — с запасом больше окна 7д,
+// то есть дольше, чем эти числа вообще о чём-то говорят.
+const USAGE_TTL_MS = 7 * 24 * 3600 * 1000;
+
+function pruneUsage() {
+  try {
+    const dir = path.join(app.getPath('userData'), statusline.USAGE_DIR);
+    for (const f of fs.readdirSync(dir)) {
+      const p = path.join(dir, f);
+      try {
+        if (Date.now() - fs.statSync(p).mtimeMs > USAGE_TTL_MS) fs.unlinkSync(p);
+      } catch (_) { /* исчез сам — тем лучше */ }
+    }
+  } catch (_) { /* папки ещё нет */ }
 }
 
 // The launcher of a command line — first real token, skipping `VAR=value` prefixes.
@@ -2124,6 +2163,7 @@ function tgOnUpdate(u) {
   if (u.chatId !== TG.chatId) { tgLog('  чужой чат — игнорирую'); return; }
 
   if (u.command === 'tabs') { tgSendTabs(u.threadId).catch(reportMainError); return; }
+  if (u.command === 'usage') { tgUsage(u).catch(reportMainError); return; }
   if (u.command === 'sync') { tgSync(u.threadId).catch(reportMainError); return; }
   if (u.command === 'new') { tgNewTab(u).catch(reportMainError); return; }
   if (u.command === 'mode') { tgMode(u).catch(reportMainError); return; }
@@ -2132,6 +2172,7 @@ function tgOnUpdate(u) {
       'Уже на связи. Каждая вкладка живёт в своей теме — пиши в тему, попадёшь в её агента.',
       '',
       '/tabs — вкладки и что у них сейчас',
+      '/usage — расход: контекст вкладки, 5 часов, неделя',
       '/sync — подтянуть темы под открытые вкладки',
       '/new — ещё один агент в папке этой темы',
       '/mode — режим разрешений вкладки: manual, edits, plan, auto',
@@ -2359,6 +2400,26 @@ async function tgSendTabs(threadId) {
     lines.push(`${marks[d.status] || '⚪'}${kind} · ${tgTabName(id)}`);
   }
   await tgSend({ threadId, text: lines.length ? lines.join('\n') : 'Открытых вкладок нет.' });
+}
+
+// /usage — расход: контекст и два окна подписки. В теме вкладки отвечаем про неё, в
+// общей теме — про все: окна подписки общие на аккаунт, а контекст у каждой свой,
+// поэтому «по вкладкам» — это ответ на вопрос «кого пора сжимать».
+async function tgUsage(u) {
+  const id = tgRoute(u);
+  const ids = id != null ? [id] : [...det].filter(([, d]) => !d.dead).map(([sid]) => sid);
+  const rows = ids.map((sid) => {
+    const d = det.get(sid);
+    return {
+      name: tgTabName(sid),
+      usage: readUsage(d && d.claudeSessionId),
+      // Причина важнее прочерка: своя строка статуса в команде запуска — это наш
+      // осознанный отказ вмешиваться, а не поломка, и человеку это надо различать.
+      why: d && d.claudeSessionId ? 'нет данных: вкладка ещё не отрисовала строку статуса'
+        : 'нет данных: это не разговор Claude Code',
+    };
+  });
+  await tgSend({ threadId: u.threadId, text: statusline.usageReport(rows, Math.floor(Date.now() / 1000)) });
 }
 
 // --- IPC: the settings panel ---------------------------------------------------

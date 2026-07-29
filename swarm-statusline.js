@@ -109,6 +109,115 @@ function renderLimits(rateLimits, nowSec) {
   return ` \x1b[2m│\x1b[0m ${parts.join(' \x1b[2m·\x1b[0m ')}`;
 }
 
+// How full the context is, as a number. Claude auto-compacts before the window is
+// truly full, so "used" is scaled against the USABLE region (window minus the
+// auto-compact buffer) — that matches the number Claude itself shows, not raw
+// tokens / total. Shared by the line and the snapshot below, because two answers to
+// «сколько занято» differing by 16% would be worse than either of them alone.
+function ctxUsed(win) {
+  const remaining = win && win.remaining_percentage;
+  if (remaining == null || !isFinite(remaining)) return null;
+  const totalCtx = (win && win.total_tokens) || 1_000_000;
+  const acw = parseInt(process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW || '0', 10);
+  const bufferPct = acw > 0 ? Math.min(100, (acw / totalCtx) * 100) : 16.5;
+  const usableRemaining = Math.max(0, ((remaining - bufferPct) / (100 - bufferPct)) * 100);
+  return Math.max(0, Math.min(100, Math.round(100 - usableRemaining)));
+}
+
+// 1_000_000 → "1M", 200_000 → "200K". The window size, for «62% из 1M».
+function fmtTok(n) {
+  return n >= 1e6 ? (n / 1e6).toFixed(n % 1e6 ? 1 : 0) + 'M' : Math.round(n / 1000) + 'K';
+}
+
+// --- the same numbers as DATA, for the Telegram bridge ------------------------
+// The line above is for the eye; the bridge has to ANSWER with these numbers when
+// somebody asks «/usage» from a phone. Re-reading them off the rendered line would be
+// the wrong source: it rounds, it hides the reset countdown below LIMIT_TIGHT to save
+// width, and the app only sees it at all when the tab happens to be on screen.
+//
+// So the statusline also drops the raw numbers beside itself as JSON, one file per
+// session, and main reads them (see readUsage). Same trick as the hook's
+// swarm-phrases.json: this script is COPIED into userData (provisionNodeLauncher), so
+// __dirname is a writable app dir, not the read-only asar.
+//
+// `resetsAt` is kept as an absolute time on purpose: a snapshot can be minutes old (an
+// idle tab doesn't re-render), but the countdown computed from it is still exact.
+function usageSnapshot(data, nowSec) {
+  const d = data || {};
+  const win = d.context_window || {};
+  const rl = d.rate_limits || {};
+  const limit = (l) => {
+    const spent = usedPct(l);
+    if (spent == null) return null;
+    return { spent, resetsAt: l && typeof l.resets_at === 'number' ? l.resets_at : null };
+  };
+  const used = ctxUsed(win);
+  return {
+    at: nowSec,
+    session: String(d.session_id || ''),
+    model: d.model?.display_name || '',
+    ctx: used == null ? null : { used, total: (win && win.total_tokens) || 1_000_000 },
+    five: limit(rl.five_hour),
+    seven: limit(rl.seven_day),
+  };
+}
+
+// The /usage answer, as chat text. It lives here, next to the numbers, so the chat and
+// the tab can't drift apart on what «израсходовано» means — same direction (spent),
+// same rounding, same countdown wording.
+//
+// The two windows are per ACCOUNT, not per tab, so they're stated once, taken from the
+// freshest snapshot we have; the context is per session, so it's stated per tab. Rows
+// with no snapshot are listed too, with the reason — a tab silently missing from the
+// list would read as «расход нулевой».
+function usageReport(rows, nowSec) {
+  const list = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  const withData = list.filter((r) => r.usage);
+  const freshest = withData.map((r) => r.usage).sort((a, b) => (b.at || 0) - (a.at || 0))[0] || null;
+  const out = [];
+
+  const limitLine = (label, l) => {
+    if (!l) return null;
+    const eta = l.resetsAt != null && l.resetsAt > nowSec ? ` · сброс через ${fmtEta(l.resetsAt - nowSec)}` : '';
+    // Тот же глиф, что в строке статуса, и по той же причине: пометка должна читаться
+    // и там, где нет цвета. В чате цвета нет вовсе.
+    const warn = l.spent >= LIMIT_CRIT ? '⚠ ' : '';
+    return `${warn}${label} ${l.spent}%${eta}`;
+  };
+  const limits = freshest ? [limitLine('5 часов:', freshest.five), limitLine('7 дней:', freshest.seven)].filter(Boolean) : [];
+  if (limits.length) {
+    out.push('Лимиты подписки');
+    out.push(...limits);
+    // Числа лимитов — снимок, а не живое значение: если он старый, надо сказать, иначе
+    // человек примет вчерашний расход за сегодняшний. Отсчёт до сброса от этого не
+    // портится — он считается от абсолютного времени.
+    const age = nowSec - (freshest.at || nowSec);
+    if (age > 300) out.push(`(сняты ${fmtEta(age)} назад — вкладка с тех пор молчала)`);
+  } else {
+    out.push('Лимиты подписки неизвестны: Клод сообщает их только по подписке и только'
+      + ' после первого ответа в сессии.');
+  }
+
+  out.push('');
+  out.push(list.length > 1 ? 'Контекст по вкладкам' : 'Контекст');
+  if (!list.length) out.push('Открытых вкладок нет.');
+  // Самые полные сверху: список отвечает на вопрос «кого пора сжимать», а не «в каком
+  // порядке открыты вкладки». Без данных — в конец, они ничего не говорят.
+  const ordered = list.slice().sort((a, b) => {
+    const av = a.usage && a.usage.ctx ? a.usage.ctx.used : -1;
+    const bv = b.usage && b.usage.ctx ? b.usage.ctx.used : -1;
+    return bv - av;
+  });
+  for (const r of ordered) {
+    const u = r.usage;
+    out.push(u && u.ctx
+      ? `${u.ctx.used}% из ${fmtTok(u.ctx.total)} · ${r.name}`
+      : `— · ${r.name} (${r.why || 'нет данных: статуслайн приложения в этой вкладке не работает'})`);
+  }
+
+  return out.join('\n');
+}
+
 // The whole line, from the JSON Claude Code sends on stdin. Pure so it's testable.
 function renderLine(data, nowSec) {
   const model = data.model?.display_name || 'Claude';
@@ -116,21 +225,11 @@ function renderLine(data, nowSec) {
   const dir = path.basename(cwd);
   const session = data.session_id || '';
   const pin = renderPin(readPin(cwd, session));
-  const remaining = data.context_window?.remaining_percentage;
+  const used = ctxUsed(data.context_window);
 
   let ctx = '';
-  if (remaining != null) {
-    // Claude auto-compacts before the window is truly full, so "used" is scaled
-    // against the usable region (window minus the auto-compact buffer) — matches
-    // the number Claude itself shows, not raw tokens / total.
-    const totalCtx = data.context_window?.total_tokens || 1_000_000;
-    const acw = parseInt(process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW || '0', 10);
-    const bufferPct = acw > 0 ? Math.min(100, (acw / totalCtx) * 100) : 16.5;
-    const usableRemaining = Math.max(0, ((remaining - bufferPct) / (100 - bufferPct)) * 100);
-    const used = Math.max(0, Math.min(100, Math.round(100 - usableRemaining)));
-
-    const fmtTok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(n % 1e6 ? 1 : 0) + 'M' : Math.round(n / 1000) + 'K');
-    const win = fmtTok(totalCtx);
+  if (used != null) {
+    const win = fmtTok(data.context_window?.total_tokens || 1_000_000);
     const filled = Math.floor(used / 10);
     const bar = '█'.repeat(filled) + '░'.repeat(10 - filled);
     if (used < 50) ctx = ` \x1b[32m${bar} ${used}%\x1b[0m \x1b[2m${win}\x1b[0m`;
@@ -148,6 +247,22 @@ function renderLine(data, nowSec) {
   return `\x1b[2m${model}\x1b[0m │ \x1b[2m${dir}\x1b[0m${ctx}${limits}${pin}`;
 }
 
+// Drop the snapshot next to this script, one file per session (see usageSnapshot).
+// Never throws: this runs inside Claude's statusline, and a write failure must cost
+// the user a missing /usage answer, not an error line across their terminal.
+const USAGE_DIR = 'usage';
+
+function writeUsage(snap) {
+  try {
+    const s = snap && snap.session;
+    if (!s || /[/\\]|\.\./.test(s)) return;                  // same guard as readPin
+    if (!snap.ctx && !snap.five && !snap.seven) return;       // nothing worth a file
+    const dir = path.join(__dirname, USAGE_DIR);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, s + '.json'), JSON.stringify(snap));
+  } catch (_) { /* no snapshot this time — the line still renders */ }
+}
+
 function main() {
   let input = '';
   const timeout = setTimeout(() => process.exit(0), 3000);
@@ -156,7 +271,10 @@ function main() {
   process.stdin.on('end', () => {
     clearTimeout(timeout);
     try {
-      process.stdout.write(renderLine(JSON.parse(input), Math.floor(Date.now() / 1000)));
+      const data = JSON.parse(input);
+      const nowSec = Math.floor(Date.now() / 1000);
+      process.stdout.write(renderLine(data, nowSec));
+      writeUsage(usageSnapshot(data, nowSec));
     } catch (_) {
       // Bad/empty stdin must never make Claude show an error line — print nothing.
     }
@@ -166,4 +284,4 @@ function main() {
 // Only read stdin when actually run as the statusline; the tests require this file.
 if (require.main === module) main();
 
-module.exports = { renderLine, renderLimits, usedPct, fmtEta };
+module.exports = { renderLine, renderLimits, usedPct, fmtEta, ctxUsed, fmtTok, usageSnapshot, usageReport, USAGE_DIR };
