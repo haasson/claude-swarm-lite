@@ -72,9 +72,43 @@ function clean(line) {
     .trim();
 }
 
-// The one-line gist of what an agent is asking, for the pult chip. Scans bottom
-// -up because the live prompt sits at the bottom of the screen. Best effort by
-// design: null just means the chip shows the tab name (see the spec).
+// Режим разрешений, как его показывает сам Claude Code в строке под полем ввода:
+// «⏸ manual mode on», «⏵⏵ accept edits on», «⏸ plan mode on». Нужен для управления
+// режимом из телеги: жать shift+tab вслепую нельзя — надо видеть, куда попали.
+//
+// Порядок проверок важен: строка про accept edits тоже содержит слово mode, а плановый
+// режим в разных сборках подписан то «plan mode», то «⏸ plan».
+const MODE_RULES = [
+  [/bypass(?:ing)?\s+permissions/i, 'bypass'],
+  [/accept\s+edits/i, 'accept-edits'],
+  [/plan\s+mode/i, 'plan'],
+  [/\b(?:manual|normal|default)\s+mode/i, 'manual'],
+  [/\bauto\s+mode/i, 'auto'],
+];
+const MODE_TITLES = {
+  bypass: 'без спроса (bypass permissions)',
+  'accept-edits': 'правки без спроса (accept edits)',
+  plan: 'планирование (plan mode)',
+  manual: 'обычный (спрашивает разрешение)',
+  auto: 'автоматический',
+};
+
+function readMode(snapshot) {
+  const lines = String(snapshot == null ? '' : snapshot).split('\n');
+  // Снизу вверх: строка режима — часть мебели под полем ввода, а выше в прозе агента
+  // слова «plan mode» могут встретиться просто по смыслу.
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const t = clean(lines[i]);
+    if (!t || !CHROME_RE.test(t)) continue;      // строка режима — это мебель
+    for (const [re, id] of MODE_RULES) if (re.test(t)) return id;
+  }
+  return null;
+}
+
+function modeTitle(id) {
+  return MODE_TITLES[id] || String(id || 'неизвестный');
+}
+
 // Что агент сказал ПОСЛЕДНИМ — для отчёта в телегу, когда стенограмма не привязана.
 //
 // Отдельная функция, а не extractQuestion: та возвращает нижнюю значимую строку, а внизу у
@@ -101,6 +135,9 @@ function lastAgentLine(snapshot) {
   return null;
 }
 
+// The one-line gist of what an agent is asking, for the pult chip. Scans bottom
+// -up because the live prompt sits at the bottom of the screen. Best effort by
+// design: null just means the chip shows the tab name (see the spec).
 function extractQuestion(snapshot) {
   const lines = String(snapshot == null ? '' : snapshot).split('\n');
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -297,7 +334,7 @@ function countSubagents(snapshot) {
 }
 
 module.exports = {
-  extractQuestion, lastAgentLine, inferWaitingKind, asksForInput, setAskPhrases, countSubagents,
+  extractQuestion, lastAgentLine, readMode, modeTitle, inferWaitingKind, asksForInput, setAskPhrases, countSubagents,
   parsePrompt, fingerprintOf,
   contentEnd, snapshotRows,
 };

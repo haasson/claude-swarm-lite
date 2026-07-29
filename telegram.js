@@ -222,6 +222,11 @@ const PASTE_ON = '\x1b[200~';
 const PASTE_OFF = '\x1b[201~';
 const ENTER = '\r';
 
+// Shift+Tab — то, чем Claude Code переключает режим разрешений. В терминале это CSI Z
+// (обратный табулятор): именно его посылает терминал, когда жмут Shift+Tab, поэтому для
+// приложения нажатие из телеги ничем не отличается от нажатия за клавиатурой.
+const BACK_TAB = '\x1b[Z';
+
 function inputWrites(text) {
   const body = String(text == null ? '' : text).replace(/\r\n?/g, '\n');
   if (!body) return [];
@@ -390,6 +395,6 @@ module.exports = {
   apiUrl, looksLikeToken, maskToken,
   pairCode, deepLink, pairingMatch,
   readUpdate, routeMessage, chunkText, inlineKeyboard, callbackData, parseCallbackData, CB_MAX, backoffMs, retryAfterMs, classifyError,
-  inputWrites, PASTE_ON, PASTE_OFF, ENTER, routeFailure,
+  inputWrites, PASTE_ON, PASTE_OFF, ENTER, BACK_TAB, routeFailure,
   createPoller,
 };

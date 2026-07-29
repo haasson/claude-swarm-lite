@@ -215,7 +215,7 @@ process.on('unhandledRejection', (reason) => reportMainError(reason));
 // tell "waiting for a prompt" apart from "idle/done". We deliberately do NOT
 // surface Claude's token counter or activity words — just the four states.
 const { Terminal: HeadlessTerminal } = require('@xterm/headless');
-const { extractQuestion, lastAgentLine, countSubagents, contentEnd, snapshotRows, setAskPhrases, parsePrompt } = require('./screen');
+const { extractQuestion, lastAgentLine, readMode, modeTitle, countSubagents, contentEnd, snapshotRows, setAskPhrases, parsePrompt } = require('./screen');
 // The status state machine + «ждёт» latch + hook arbitration live in a pure,
 // unit-tested module; osc.js sniffs hook markers out of the raw pty stream.
 const { tickStatus, applyHook, applyTranscript } = require('./detector');
@@ -1513,6 +1513,42 @@ function tgCancelWaiting(d) {
 // The agent finished a turn it was given from the phone: send back what it said. Only
 // for tabs in Telegram mode — otherwise every turn you run at your own desk would land
 // in the chat and the bridge would become a log nobody reads.
+// --- одно сообщение на ход: «думаю» → ответ -----------------------------------
+// Раньше в тему уезжала стрелочка с именем вкладки, а потом отдельным сообщением итог. По
+// стрелочке нельзя было понять, работает агент или всё заглохло, а лента распухала вдвое.
+// Теперь подтверждение — это ЗАГОТОВКА ответа: то же сообщение переписывается на итог,
+// когда ход закончится. Для голосового над ним остаётся строка «услышал: …».
+const TG_THINKING = '⏳ получил, думаю…';
+
+async function tgAckSend(id, d, u, prefix) {
+  const text = prefix ? `${prefix}\n\n${TG_THINKING}` : TG_THINKING;
+  const msgId = await tgSend({ threadId: u.threadId, replyTo: u.messageId, text, silent: true });
+  tgRemember(msgId, id);          // ответом на него тоже можно продолжать разговор
+  if (d && msgId) d.tgAck = { messageId: msgId, prefix: prefix || '', chatId: TG.chatId };
+}
+
+// Переписать заготовку. Не вышло (сообщение удалили, прошли сутки, чат сменился) — отправим
+// обычным сообщением: тишина вместо ответа хуже лишней записи в ленте.
+async function tgAckResolve(id, d, text) {
+  const ack = d && d.tgAck;
+  const body = ack && ack.prefix ? `${ack.prefix}\n\n${text}` : text;
+  if (!ack || ack.chatId !== TG.chatId) {
+    const msgId = await tgSend({ threadId: await tgTopicFor(id), text: body });
+    tgRemember(msgId, id);
+    return;
+  }
+  d.tgAck = null;
+  const res = await tgFetchJson(telegram.apiUrl(TG.token, 'editMessageText'),
+    { chat_id: ack.chatId, message_id: ack.messageId, text: body });
+  if (res.ok && res.body && res.body.ok === true) {
+    tgLog(`  → ответ вписан в сообщение ${ack.messageId}`);
+    return;
+  }
+  tgLog(`  ✗ не смог переписать ${ack.messageId}: ${(res.body && res.body.description) || res.status}`);
+  const msgId = await tgSend({ threadId: await tgTopicFor(id), text: body });
+  tgRemember(msgId, id);
+}
+
 async function tgNotifyDone(id, d) {
   // Текст итога — дословный из стенограммы, а если её нет, ПОСЛЕДНЯЯ строка с экрана.
   // Пустой отчёт «✅ вкладка — готов.» бесполезен: человек в дороге узнаёт, что ход
@@ -1524,12 +1560,9 @@ async function tgNotifyDone(id, d) {
   const text = fromTr || String(lastAgentLine(snapshot(d)) || '').trim();
   tgLog(`  → итог вкладки ${id}: ${text ? text.length + ' симв.' : 'текста нет'}`
     + ` (${fromTr ? 'стенограмма' : text ? 'экран, стенограмма не привязана' : 'ни стенограммы, ни экрана'})`);
-  const msgId = await tgSend({
-    threadId: await tgTopicFor(id),
-    text: `✅ ${tgTabName(id)}${text ? '\n\n' + text : ' — готов.'}`,
-  });
-  // Answerable too: replying to the report continues the same session.
-  tgRemember(msgId, id);
+  // Если ход начался сообщением из телеги, ответ вписывается в ЕГО же сообщение («получил,
+  // думаю…» → ответ). Иначе (зеркало итогов, когда человека нет за маком) — обычная запись.
+  await tgAckResolve(id, d, `✅ ${tgTabName(id)}${text ? '\n\n' + text : ' — готов.'}`);
 }
 
 async function tgNotifyWaiting(id, d) {
@@ -1544,6 +1577,10 @@ async function tgNotifyWaiting(id, d) {
   if (prompt && prompt.options.length) {
     const kb = telegram.inlineKeyboard(prompt.options, String(id), prompt.fingerprint);
     if (kb) {
+      // Кнопки — отдельным сообщением: отпечаток строится при отправке, и клавиатура должна
+      // висеть на свежей записи. А заготовка «думаю…» превращается в указатель, иначе она
+      // осталась бы врать, что агент ещё думает.
+      if (d.tgAck) await tgAckResolve(id, d, `🔐 ${tgTabName(id)} просит разрешение — кнопки ниже`);
       const msgId = await tgSend({
         threadId,
         text: `🔐 ${tgTabName(id)} просит разрешение\n\n${prompt.title}`,
@@ -1558,7 +1595,11 @@ async function tgNotifyWaiting(id, d) {
   const tail = permission
     ? '\n\nВариантов не разобрал — ответь за компьютером.'
     : '\n\nОтветь реплаем на это сообщение.';
-  const msgId = await tgSend({ threadId, text: `${head} · ${tgTabName(id)}${body}${tail}` });
+  const full = `${head} · ${tgTabName(id)}${body}${tail}`;
+  // Вопрос прозой — это и есть исход хода, значит он вписывается в ту же заготовку: реплай
+  // на неё маршрутизируется в ту же вкладку, потому что её id мы запомнили при отправке.
+  if (d.tgAck) { await tgAckResolve(id, d, full); return; }
+  const msgId = await tgSend({ threadId, text: full });
   if (!permission) tgRemember(msgId, id);
 }
 
@@ -1687,6 +1728,7 @@ function tgOnUpdate(u) {
   if (u.command === 'tabs') { tgSendTabs(u.threadId).catch(reportMainError); return; }
   if (u.command === 'sync') { tgSync(u.threadId).catch(reportMainError); return; }
   if (u.command === 'new') { tgNewTab(u).catch(reportMainError); return; }
+  if (u.command === 'mode') { tgMode(u).catch(reportMainError); return; }
   if (u.command === 'start' || u.command === 'help') {
     tgSend({ threadId: u.threadId, text: [
       'Уже на связи. Каждая вкладка живёт в своей теме — пиши в тему, попадёшь в её агента.',
@@ -1694,6 +1736,7 @@ function tgOnUpdate(u) {
       '/tabs — вкладки и что у них сейчас',
       '/sync — подтянуть темы под открытые вкладки',
       '/new — ещё один агент в папке этой темы',
+      '/mode — режим разрешений вкладки: auto (правки без спроса), plan, manual',
     ].join('\n') }).catch(reportMainError);
     return;
   }
@@ -1737,7 +1780,7 @@ function tgOnUpdate(u) {
     return;
   }
   if (d) d.tgPrimed = true;
-  tgSend({ threadId: u.threadId, replyTo: u.messageId, text: `→ ${tgTabName(id)}`, silent: true }).catch(reportMainError);
+  tgAckSend(id, d, u, '').catch(reportMainError);
 }
 
 // Голосовое: сначала адресат (иначе незачем и распознавать), потом эхо распознанного и
@@ -1770,8 +1813,10 @@ async function tgOnVoice(u) {
   // Эхо ДО печати в сессию, и именно поэтому await: «RoseVPN» легко становится «розовым
   // пн», и увидеть, ЧТО услышано, надо раньше, чем агент по этому пойдёт работать. Если
   // сначала печатать, то в ленте порядок обратный — ответ агента раньше расшифровки.
-  await tgSend({ threadId: u.threadId, replyTo: u.messageId,
-    text: `🎙 услышал: «${r.text}»\n→ ${tgTabName(id)}` });
+  // Эхо остаётся в сообщении навсегда: оно и есть страховка от «розового пн». Ответ агента
+  // прирастёт к нему же, поэтому в теме будет одна запись «услышал → вот что вышло».
+  const echo = `🎙 услышал: «${r.text}»`;
+  await tgAckSend(id, d, u, echo);
   const tagged = telegram.tagInput({ text: r.text, instruction: TG_PROMPT, primed: !!(d && d.tgPrimed) });
   if (!tgAnswer(id, tagged)) {
     await tgSend({ threadId: u.threadId, replyTo: u.messageId, text: 'Эта вкладка уже закрыта.' });
@@ -1795,6 +1840,77 @@ async function tgNewTab(u) {
   safeSend('app:createTab', { cwd: d.cwd });
   await tgSend({ threadId: u.threadId, text: `Открываю ещё одного агента в ${d.cwd}.`
     + ' Его тема появится в группе через пару секунд.' });
+}
+
+// /mode — посмотреть и переключить режим разрешений из телеги, тем же Shift+Tab, которым
+// это делают за клавиатурой. Смысл: с телефона видно, что агент упёрся в разрешения на
+// каждую правку, и можно разрешить их пачкой, не подходя к маку.
+//
+// Циклом, а не «установить режим»: Claude Code переключает режимы по кругу и не принимает
+// «сделай accept edits» — поэтому жмём по одному разу и СМОТРИМ на экран, пока не попадём в
+// нужный. Без чтения экрана это была бы стрельба в темноте.
+const TG_MODE_MAX_STEPS = 4;         // круг короткий; больше — значит не поняли, где мы
+const TG_MODE_SETTLE_MS = 220;       // TUI успевает перерисовать строку режима
+
+const TG_MODE_ALIASES = {
+  auto: 'accept-edits', авто: 'accept-edits', автомод: 'accept-edits',
+  'accept-edits': 'accept-edits', edits: 'accept-edits', правки: 'accept-edits',
+  plan: 'plan', план: 'plan', планирование: 'plan',
+  manual: 'manual', обычный: 'manual', normal: 'manual', ручной: 'manual',
+};
+
+function tgModeNow(d) {
+  return readMode(snapshot(d));
+}
+
+async function tgMode(u) {
+  const id = tgRoute(u);
+  const d = id == null ? null : det.get(id);
+  if (!d || !sessions.has(id)) {
+    await tgSend({ threadId: u.threadId, replyTo: u.messageId,
+      text: '/mode работает в теме вкладки — оттуда я знаю, какому агенту переключать режим.' });
+    return;
+  }
+  const arg = String(u.text || '').replace(/^\/\S+\s*/, '').trim().toLowerCase();
+  const now = tgModeNow(d);
+  if (!arg) {
+    await tgSend({ threadId: u.threadId, replyTo: u.messageId,
+      text: `${tgTabName(id)}: режим ${now ? modeTitle(now) : 'не разобрал'}.`
+        + '\n\n/mode auto — правки без спроса\n/mode plan — планирование'
+        + '\n/mode manual — обычный, спрашивает разрешение' });
+    return;
+  }
+  const want = TG_MODE_ALIASES[arg];
+  if (!want) {
+    await tgSend({ threadId: u.threadId, replyTo: u.messageId,
+      text: 'Не понял режим. Бывают: auto (правки без спроса), plan (планирование),'
+        + ' manual (спрашивает разрешение).' });
+    return;
+  }
+  if (now === want) {
+    await tgSend({ threadId: u.threadId, replyTo: u.messageId,
+      text: `${tgTabName(id)} уже в режиме «${modeTitle(want)}».` });
+    return;
+  }
+  // Жмём Shift+Tab и каждый раз смотрим, куда попали.
+  let landed = now;
+  for (let i = 0; i < TG_MODE_MAX_STEPS; i++) {
+    const p = sessions.get(id);
+    if (!p) break;
+    p.write(telegram.BACK_TAB);
+    await new Promise((r) => setTimeout(r, TG_MODE_SETTLE_MS));
+    landed = tgModeNow(d);
+    if (landed === want) break;
+  }
+  tgLog(`  режим вкладки ${id}: ${now || '?'} → ${landed || '?'} (просили ${want})`);
+  const ok = landed === want;
+  await tgSend({ threadId: u.threadId, replyTo: u.messageId,
+    text: ok
+      ? `${tgTabName(id)}: режим «${modeTitle(want)}».`
+        + (want === 'accept-edits' ? ' Правки агент теперь делает без спроса — разрешения'
+          + ' по ним больше не придут.' : '')
+      : `Не смог переключить: сейчас ${landed ? '«' + modeTitle(landed) + '»' : 'не разобрал режим'}.`
+        + ' Похоже, на экране не строка режима — переключи за компьютером (Shift+Tab).' });
 }
 
 // /sync — make the group match the machine. Normally topics keep themselves in step

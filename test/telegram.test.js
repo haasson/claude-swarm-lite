@@ -202,6 +202,12 @@ test('inputWrites нормализует переводы строк и не п�
   assert.deepStrictEqual(T.inputWrites(null), []);
 });
 
+// Shift+Tab, которым Claude Code переключает режим разрешений: приложение должно посылать
+// ровно то, что посылает терминал (CSI Z), иначе для Claude это будет не нажатие, а мусор.
+test('BACK_TAB — это CSI Z, то есть настоящий Shift+Tab', () => {
+  assert.strictEqual(T.BACK_TAB, '\x1b[Z');
+});
+
 // --- tagging the injected text ------------------------------------------------
 
 test('tagInput: the first message carries the whole convention', () => {

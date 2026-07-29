@@ -240,6 +240,36 @@ const PERM = [
   '  Esc to cancel',
 ].join('\n');
 
+// --- режим разрешений: читаем, прежде чем жать Shift+Tab ----------------------
+// Строка режима — из живого Claude Code 2.1.220. Жать вслепую нельзя: /mode из телеги
+// переключает по кругу и должен ВИДЕТЬ, куда попал, иначе это стрельба в темноте.
+
+test('readMode узнаёт режимы по строке под полем ввода', () => {
+  assert.strictEqual(S.readMode('  ⏸ manual mode on · ? for shortcuts · ← for agents'), 'manual');
+  assert.strictEqual(S.readMode('  ⏵⏵ accept edits on (shift+tab to cycle)'), 'accept-edits');
+  assert.strictEqual(S.readMode('  ⏸ plan mode on (shift+tab to cycle)'), 'plan');
+  assert.strictEqual(S.readMode('  ⏵⏵ bypassing permissions'), 'bypass');
+});
+
+// Иначе фраза агента «давай обсудим plan mode» переключала бы режим по кругу вслепую.
+test('readMode не принимает прозу агента за строку режима', () => {
+  assert.strictEqual(S.readMode('⏺ Давай обсудим plan mode для этой задачи'), null);
+  assert.strictEqual(S.readMode(''), null);
+  assert.strictEqual(S.readMode(null), null);
+});
+
+test('readMode берёт НИЖНЮЮ строку режима, а не первую попавшуюся', () => {
+  const scr = ['⏺ Раньше был accept edits mode on, теперь нет',
+    '────────', '❯ ', '  ⏸ plan mode on (shift+tab to cycle)'].join('\n');
+  assert.strictEqual(S.readMode(scr), 'plan');
+});
+
+test('modeTitle объясняет режим по-русски, а неизвестный не роняет', () => {
+  assert.match(S.modeTitle('accept-edits'), /без спроса/);
+  assert.strictEqual(S.modeTitle('нет такого'), 'нет такого');
+  assert.strictEqual(S.modeTitle(null), 'неизвестный');
+});
+
 // НАСТОЯЩИЙ экран после законченного хода — то, что видит мост, когда стенограмма не
 // привязана и текст итога приходится брать с экрана. Снят с живого TUI.
 const SCREEN_DONE = [
