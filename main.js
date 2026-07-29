@@ -331,6 +331,10 @@ setInterval(() => {
       // hook wins, screen only upgrades a «ready» to a prose question); otherwise
       // the screen-scrape + «ждёт» latch fallback (never released by mere typing).
       const next = tickStatus(d, now, snap);
+      // Режим разрешений помним: на экране его строка есть не всегда (при открытом запросе
+      // её нет вовсе), а /mode должен отвечать «какой сейчас» и в этот момент тоже.
+      const mode = readMode(snap);
+      if (mode) d.mode = mode;
       const kind = next.status === 'waiting' ? (next.kind || null) : null;
       const statusline = extractStatusline(d);
       // How many sub-agents are running (Claude's Task/agent tool). Sent raw; the
@@ -1698,6 +1702,31 @@ async function tgNotifyWaiting(id, d) {
 const TG_MODE_MAX_STEPS = 4;         // круг короткий; больше — значит не поняли, где мы
 const TG_MODE_SETTLE_MS = 220;       // TUI успевает перерисовать строку режима
 
+// Переключение режима, общее для /mode и быстрых кнопок. Возвращает, что получилось; слова
+// для человека подбирает вызывающий.
+//
+// Главное здесь — отказ, когда на экране запрос разрешения. Тогда строки режима нет вообще
+// (внизу «Esc to cancel · Tab to amend»), а Shift+Tab уходит в сам диалог, поэтому крутить
+// режим бессмысленно. И именно в этот момент человек чаще всего и пробует — потому что ему
+// надоели вопросы; поэтому вместо «не разобрал режим» надо сказать, что делать.
+async function tgSwitchMode(id, d, want) {
+  if (parsePrompt(snapshot(d))) return { blocked: 'permission' };
+  const was = readMode(snapshot(d)) || d.mode || null;
+  if (was === want) return { ok: true, was, landed: was, already: true };
+  let landed = was;
+  for (let i = 0; i < TG_MODE_MAX_STEPS; i++) {
+    const p = sessions.get(id);
+    if (!p) break;
+    p.write(telegram.BACK_TAB);
+    await new Promise((r) => setTimeout(r, TG_MODE_SETTLE_MS));
+    landed = readMode(snapshot(d)) || landed;
+    if (landed === want) break;
+  }
+  if (landed) d.mode = landed;
+  tgLog(`  режим вкладки ${id}: ${was || '?'} → ${landed || '?'} (просили ${want})`);
+  return { ok: landed === want, was, landed };
+}
+
 // Нажали быструю кнопку под шапкой темы. Все действия — из тех, что и так доступны
 // командами; кнопка лишь избавляет от набора текста с телефона.
 async function tgOnAction(qa, u, ack) {
@@ -1721,23 +1750,18 @@ async function tgOnAction(qa, u, ack) {
   // Режимы: то же, что /mode, но одним касанием. Ответ во всплывашке говорит, чем это
   // кончилось — включая цену «правки без спроса», чтобы нажатие не выглядело безобидным.
   const want = qa.action === 'auto' ? 'accept-edits' : 'manual';
-  const was = readMode(snapshot(d));
-  if (was === want) { await ack(`${name}: уже «${modeTitle(want)}».`); return; }
-  let landed = was;
-  for (let i = 0; i < TG_MODE_MAX_STEPS; i++) {
-    const p = sessions.get(qa.tab);
-    if (!p) break;
-    p.write(telegram.BACK_TAB);
-    await new Promise((r) => setTimeout(r, TG_MODE_SETTLE_MS));
-    landed = readMode(snapshot(d));
-    if (landed === want) break;
+  const r = await tgSwitchMode(qa.tab, d, want);
+  if (r.blocked === 'permission') {
+    await ack('Сейчас открыт запрос разрешения. Ответь на него кнопкой — вариант'
+      + ' «Yes, and always allow…» и есть «без спроса» для таких же дальше.');
+    return;
   }
-  tgLog(`  режим вкладки ${qa.tab}: ${was || '?'} → ${landed || '?'} (кнопка ${qa.action})`);
-  await ack(landed === want
+  if (r.already) { await ack(`${name}: уже «${modeTitle(want)}».`); return; }
+  await ack(r.ok
     ? (want === 'accept-edits'
       ? `${name}: правки без спроса. Разрешения по ним больше не придут.`
       : `${name}: снова спрашивает разрешение.`)
-    : `Не смог переключить — сейчас ${landed ? modeTitle(landed) : 'режим не разобрал'}.`);
+    : `Не смог переключить — сейчас ${r.landed ? modeTitle(r.landed) : 'режим не разобрал'}.`);
 }
 
 // A tapped button. Everything is re-checked here, because a lot can happen between the
@@ -2027,30 +2051,28 @@ async function tgMode(u) {
         + ' manual (спрашивает разрешение).' });
     return;
   }
-  if (now === want) {
+  const r = await tgSwitchMode(id, d, want);
+  if (r.blocked === 'permission') {
+    await tgSend({ threadId: u.threadId, replyTo: u.messageId,
+      text: `${tgTabName(id)} сейчас держит запрос разрешения, и пока он на экране режим не`
+        + ' переключается: Shift+Tab уходит в сам диалог.\n\nОтветь на запрос кнопкой —'
+        + ' вариант «Yes, and always allow…» и есть «без спроса» для таких же дальше. А после'
+        + ' ответа /mode auto сработает.' });
+    return;
+  }
+  if (r.already) {
     await tgSend({ threadId: u.threadId, replyTo: u.messageId,
       text: `${tgTabName(id)} уже в режиме «${modeTitle(want)}».` });
     return;
   }
-  // Жмём Shift+Tab и каждый раз смотрим, куда попали.
-  let landed = now;
-  for (let i = 0; i < TG_MODE_MAX_STEPS; i++) {
-    const p = sessions.get(id);
-    if (!p) break;
-    p.write(telegram.BACK_TAB);
-    await new Promise((r) => setTimeout(r, TG_MODE_SETTLE_MS));
-    landed = tgModeNow(d);
-    if (landed === want) break;
-  }
-  tgLog(`  режим вкладки ${id}: ${now || '?'} → ${landed || '?'} (просили ${want})`);
-  const ok = landed === want;
   await tgSend({ threadId: u.threadId, replyTo: u.messageId,
-    text: ok
+    text: r.ok
       ? `${tgTabName(id)}: режим «${modeTitle(want)}».`
         + (want === 'accept-edits' ? ' Правки агент теперь делает без спроса — разрешения'
           + ' по ним больше не придут.' : '')
-      : `Не смог переключить: сейчас ${landed ? '«' + modeTitle(landed) + '»' : 'не разобрал режим'}.`
-        + ' Похоже, на экране не строка режима — переключи за компьютером (Shift+Tab).' });
+      : `Не смог переключить: сейчас ${r.landed ? '«' + modeTitle(r.landed) + '»' : 'режим не видно'}.`
+        + ' Возможно, агент занят и строки режима на экране нет — попробуй, когда он ответит,'
+        + ' или переключи за компьютером (Shift+Tab).' });
 }
 
 // /sync — make the group match the machine. Normally topics keep themselves in step
