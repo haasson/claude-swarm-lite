@@ -60,7 +60,23 @@ const CHROME_RE = new RegExp([
 // user's Claude statusline ("model │ dir │ ███░ 65%"), not at a question.
 const STATUSLINE_RE = /[│┃█░]/;
 const HAS_TEXT_RE = /[\p{L}\p{N}]/u;
+// Строка, которую можно ПОКАЗАТЬ человеку как вопрос, обязана содержать букву — и это
+// строже, чем «в ней есть текст». Линейка с числом внутри («──── 3 ────», «════ 45% ════»)
+// цифрой проходит проверку на текст и уезжает в уведомление целиком. Причём выглядит это
+// не как линейка с числом, а как полоска: в уведомление влезает 140 символов, и на широком
+// терминале число стоит правее обрезки. Поэтому — буква, иначе это мебель.
+const HAS_LETTER_RE = /\p{L}/u;
+// Линейки по краям: заголовок в рамке приходит как «─ Plan ───────», и в кнопку/уведомление
+// такое писать нельзя. Снимаем только рисованные линейки: ASCII `-` и `_` в прозе обычны,
+// а тире «—» (U+2014) — это знак препинания, не линейка.
+const RULE_EDGE_RE = /^[\s─━═╌╍┄┅┈┉]+|[\s─━═╌╍┄┅┈┉]+$/g;
 const MAX = 80;
+
+// Строка без обрамляющих линеек. Отдельно от clean(), потому что clean общий: parsePrompt
+// ловит сплошную линейку как границу запроса, и снять её там значило бы потерять границу.
+function unrule(t) {
+  return String(t).replace(RULE_EDGE_RE, '').trim();
+}
 
 // Strip the box drawing that frames a prompt, then normalise spacing. Edges
 // only: an inner │ is the statusline tell, so it must survive this.
@@ -125,15 +141,15 @@ const AGENT_BULLET_RE = /^[⏺]\s*/;
 function lastAgentLine(snapshot) {
   const lines = String(snapshot == null ? '' : snapshot).split('\n');
   for (let i = lines.length - 1; i >= 0; i--) {
-    const t = clean(lines[i]);
-    if (!t || !HAS_TEXT_RE.test(t)) continue;   // рамки, линейки, пустое поле ввода
+    const t = unrule(clean(lines[i]));
+    if (!t || !HAS_LETTER_RE.test(t)) continue; // рамки, линейки (в т.ч. с числом), пустое поле
     if (STATUSLINE_RE.test(t)) continue;        // статуслайн пользователя
     if (OPTION_RE.test(t)) continue;            // «❯ 1. Yes»
     if (HINT_RE.test(t)) continue;              // «Esc to cancel»
     if (CHROME_RE.test(t)) continue;            // «⏸ manual mode on», «✻ Churned for 7s»
     if (USER_LINE_RE.test(t)) continue;         // поле ввода и реплики человека
     const s = t.replace(AGENT_BULLET_RE, '');
-    if (!s || !HAS_TEXT_RE.test(s)) continue;
+    if (!s || !HAS_LETTER_RE.test(s)) continue;
     return s.length > MAX ? s.slice(0, MAX - 1).trimEnd() + '…' : s;
   }
   return null;
@@ -145,9 +161,9 @@ function lastAgentLine(snapshot) {
 function extractQuestion(snapshot) {
   const lines = String(snapshot == null ? '' : snapshot).split('\n');
   for (let i = lines.length - 1; i >= 0; i--) {
-    const t = clean(lines[i]);
+    const t = unrule(clean(lines[i]));
     if (!t) continue;
-    if (!HAS_TEXT_RE.test(t)) continue;   // frames, rules, the empty "> " box
+    if (!HAS_LETTER_RE.test(t)) continue; // frames, rules (even with a number in them), "> "
     if (STATUSLINE_RE.test(t)) continue;  // the user's statusline
     if (OPTION_RE.test(t)) continue;      // "❯ 1. Yes"
     if (HINT_RE.test(t)) continue;        // "Esc to cancel"
@@ -305,6 +321,10 @@ function parsePrompt(snapshot) {
     // «Do you want to proceed?», без самой команды. Одной проверки хватает на оба случая:
     // в пунктире (╌╌╌ ┄┄┄ ---) нет ни букв, ни цифр, поэтому он отсеивается здесь же.
     if (!t || !HAS_TEXT_RE.test(t)) continue;
+    // Линейка с числом внутри («──── 3 ────») цифрой проходит проверку выше, а границей
+    // запроса не считается — то есть попала бы в заголовок кнопки как полоска. Заголовок без
+    // единой буквы человеку ничего не говорит, поэтому такую строку просто перешагиваем.
+    if (!HAS_LETTER_RE.test(t)) continue;
     if (DIFF_LINE_RE.test(t)) continue;         // содержимое файла — не заголовок запроса
     if (STATUSLINE_RE.test(t) || CHROME_RE.test(t) || HINT_RE.test(t)) continue;
     head.unshift(t);

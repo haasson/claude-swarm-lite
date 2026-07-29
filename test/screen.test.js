@@ -226,6 +226,36 @@ test('extractQuestion returns null rather than chrome when there is no prose', (
   assert.strictEqual(S.extractQuestion('> \n  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents'), null);
 });
 
+// --- линейка с числом внутри — не вопрос -------------------------------------
+// Из живого случая: в уведомлении вместо вопроса пришли «полоски». Пустую линейку
+// отсеивала проверка «есть ли текст», но цифра внутри линейки её проходит, и строка
+// уезжала целиком. Полосками это выглядит потому, что в уведомление влезает 140
+// символов: на широком терминале число стоит правее обрезки, и человек видит только
+// дефисы. Поэтому вопросом считается только строка С БУКВОЙ.
+test('a rule with a number in it is furniture, not a question', () => {
+  for (const rule of [
+    '──────────── 3 ────────────',
+    '════════════ 45% ════════════',
+    '╌╌╌╌╌╌╌╌ 12 ╌╌╌╌╌╌╌╌',
+    '─'.repeat(200) + ' 7',        // именно этот вид и приходил обрезанным в полоски
+  ]) {
+    assert.strictEqual(S.extractQuestion(rule + '\n\n> \n'), null, rule.slice(0, 24));
+    assert.strictEqual(S.lastAgentLine(rule + '\n\n> \n'), null, rule.slice(0, 24));
+  }
+});
+
+test('a title framed by rules keeps the title and drops the rules', () => {
+  assert.strictEqual(S.extractQuestion('──── Bash command ────\n\n> \n'), 'Bash command');
+  assert.strictEqual(S.extractQuestion('╭─ Plan ─────────────╮\n\n> \n'), 'Plan');
+});
+
+test('a real question is still a question after the rule guard', () => {
+  // Страховка от переусердствования: вопрос с числами, процентами и тире остаётся собой.
+  const q = 'Ставить лимит 45% или 3 попытки — как решим?';
+  assert.strictEqual(S.extractQuestion(q + '\n\n> \n'), q);
+  assert.strictEqual(S.lastAgentLine('⏺ ' + q + '\n\n> \n'), q);
+});
+
 // --- parsePrompt: the prompt box as something answerable from a phone ---------
 
 const PERM = [
