@@ -85,12 +85,16 @@ const MODE_RULES = [
   [/\b(?:manual|normal|default)\s+mode/i, 'manual'],
   [/\bauto\s+mode/i, 'auto'],
 ];
+// Живой круг Shift+Tab в Claude Code 2.1.220 (снят с TUI, см. тесты):
+//   manual → accept edits → plan → auto → manual …
+// Четыре режима, и «auto» — НЕ синоним «accept edits»: правки без спроса разрешают только
+// правки, а auto не спрашивает вообще ни о чём. Путать их нельзя: это разная цена.
 const MODE_TITLES = {
-  bypass: 'без спроса (bypass permissions)',
-  'accept-edits': 'правки без спроса (accept edits)',
-  plan: 'планирование (plan mode)',
-  manual: 'обычный (спрашивает разрешение)',
-  auto: 'автоматический',
+  manual: 'обычный — спрашивает разрешение',
+  'accept-edits': 'правки без спроса — остальное спрашивает',
+  plan: 'планирование — сначала план, без изменений',
+  auto: 'авто — делает всё без вопросов',
+  bypass: 'без спроса совсем (bypass permissions)',
 };
 
 function readMode(snapshot) {

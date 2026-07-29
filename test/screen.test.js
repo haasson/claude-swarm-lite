@@ -244,11 +244,32 @@ const PERM = [
 // Строка режима — из живого Claude Code 2.1.220. Жать вслепую нельзя: /mode из телеги
 // переключает по кругу и должен ВИДЕТЬ, куда попал, иначе это стрельба в темноте.
 
-test('readMode узнаёт режимы по строке под полем ввода', () => {
-  assert.strictEqual(S.readMode('  ⏸ manual mode on · ? for shortcuts · ← for agents'), 'manual');
-  assert.strictEqual(S.readMode('  ⏵⏵ accept edits on (shift+tab to cycle)'), 'accept-edits');
-  assert.strictEqual(S.readMode('  ⏸ plan mode on (shift+tab to cycle)'), 'plan');
+// Строки сняты с живого Claude Code 2.1.220 нажатиями Shift+Tab по кругу. Порядок круга:
+// manual → accept edits → plan → auto → manual. Четыре режима, и «auto» — САМОСТОЯТЕЛЬНЫЙ,
+// а не синоним «accept edits»: из-за этой путаницы «/mode auto» останавливался на правках.
+const MODE_LINES = [
+  ['⏸ manual mode on · ? for shortcuts · ← for agents', 'manual'],
+  ['⏵⏵ accept edits on (shift+tab to cycle) · ← for agents', 'accept-edits'],
+  ['⏸ plan mode on (shift+tab to cycle) · ← for agents', 'plan'],
+  ['⏵⏵ auto mode on (shift+tab to cycle) · ← for agents', 'auto'],
+];
+
+test('readMode узнаёт все четыре режима живого Claude Code', () => {
+  for (const [line, id] of MODE_LINES) {
+    assert.strictEqual(S.readMode('  ' + line), id, line);
+  }
   assert.strictEqual(S.readMode('  ⏵⏵ bypassing permissions'), 'bypass');
+});
+
+// Цена у режимов разная, и подписи не должны её смазывать: accept edits разрешает ТОЛЬКО
+// правки, auto — вообще всё. Обещать одно, делая другое, здесь недопустимо.
+test('modeTitle различает «правки без спроса» и «без вопросов вообще»', () => {
+  assert.match(S.modeTitle('accept-edits'), /правки без спроса/);
+  assert.match(S.modeTitle('accept-edits'), /остальное спрашивает/);
+  assert.match(S.modeTitle('auto'), /без вопросов/);
+  assert.notStrictEqual(S.modeTitle('auto'), S.modeTitle('accept-edits'));
+  assert.match(S.modeTitle('manual'), /спрашивает разрешение/);
+  assert.match(S.modeTitle('plan'), /план/);
 });
 
 // Иначе фраза агента «давай обсудим plan mode» переключала бы режим по кругу вслепую.

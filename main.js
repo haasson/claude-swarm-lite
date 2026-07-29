@@ -1760,7 +1760,7 @@ async function tgOnAction(qa, u, ack) {
   }
   // Режимы: то же, что /mode, но одним касанием. Ответ во всплывашке говорит, чем это
   // кончилось — включая цену «правки без спроса», чтобы нажатие не выглядело безобидным.
-  const want = qa.action === 'auto' ? 'accept-edits' : 'manual';
+  const want = qa.action === 'auto' ? 'auto' : qa.action === 'edits' ? 'accept-edits' : 'manual';
   const r = await tgSwitchMode(qa.tab, d, want);
   if (r.blocked === 'permission') {
     await ack('Сейчас открыт запрос разрешения. Ответь на него кнопкой — вариант'
@@ -1769,8 +1769,8 @@ async function tgOnAction(qa, u, ack) {
   }
   if (r.already) { await ack(`${name}: уже «${modeTitle(want)}».`); return; }
   await ack(r.ok
-    ? (want === 'accept-edits'
-      ? `${name}: правки без спроса. Разрешения по ним больше не придут.`
+    ? (want === 'auto'
+      ? `${name}: авто — делает всё без вопросов. Разрешения больше не придут.`
       : `${name}: снова спрашивает разрешение.`)
     : `Не смог переключить — сейчас ${r.landed ? modeTitle(r.landed) : 'режим не разобрал'}.`);
 }
@@ -2031,9 +2031,13 @@ async function tgNewTab(u) {
 // Циклом, а не «установить режим»: Claude Code переключает режимы по кругу и не принимает
 // «сделай accept edits» — поэтому жмём по одному разу и СМОТРИМ на экран, пока не попадём в
 // нужный. Без чтения экрана это была бы стрельба в темноте.
+// Четыре режима живого Claude Code, и auto — САМОСТОЯТЕЛЬНЫЙ, а не синоним accept edits:
+// правки без спроса разрешают только правки, а auto не спрашивает вообще ни о чём. Раньше
+// здесь стояло auto → accept-edits, и «/mode auto» честно останавливался на «правках»,
+// потому что просил не то.
 const TG_MODE_ALIASES = {
-  auto: 'accept-edits', авто: 'accept-edits', автомод: 'accept-edits',
-  'accept-edits': 'accept-edits', edits: 'accept-edits', правки: 'accept-edits',
+  auto: 'auto', авто: 'auto', автомод: 'auto', 'без-вопросов': 'auto',
+  edits: 'accept-edits', 'accept-edits': 'accept-edits', правки: 'accept-edits',
   plan: 'plan', план: 'plan', планирование: 'plan',
   manual: 'manual', обычный: 'manual', normal: 'manual', ручной: 'manual',
 };
@@ -2055,8 +2059,11 @@ async function tgMode(u) {
   if (!arg) {
     await tgSend({ threadId: u.threadId, replyTo: u.messageId,
       text: `${tgTabName(id)}: режим ${now ? modeTitle(now) : 'не разобрал'}.`
-        + '\n\n/mode auto — правки без спроса\n/mode plan — планирование'
-        + '\n/mode manual — обычный, спрашивает разрешение' });
+        + '\n\nЧетыре режима, по кругу Shift+Tab:'
+        + '\n/mode manual — спрашивает разрешение на всё'
+        + '\n/mode edits — правки без спроса, остальное спрашивает'
+        + '\n/mode plan — сначала план, без изменений'
+        + '\n/mode auto — делает всё без вопросов' });
     return;
   }
   const want = TG_MODE_ALIASES[arg];
@@ -2083,8 +2090,8 @@ async function tgMode(u) {
   await tgSend({ threadId: u.threadId, replyTo: u.messageId,
     text: r.ok
       ? `${tgTabName(id)}: режим «${modeTitle(want)}».`
-        + (want === 'accept-edits' ? ' Правки агент теперь делает без спроса — разрешения'
-          + ' по ним больше не придут.' : '')
+        + (want === 'auto' ? ' Агент больше ни о чём не спрашивает.'
+          : want === 'accept-edits' ? ' Правки идут без спроса, остальное спрашивает.' : '')
       : `Не смог переключить: сейчас ${r.landed ? '«' + modeTitle(r.landed) + '»' : 'режим не видно'}.`
         + ' Возможно, агент занят и строки режима на экране нет — попробуй, когда он ответит,'
         + ' или переключи за компьютером (Shift+Tab).' });
