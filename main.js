@@ -394,15 +394,20 @@ const TR_BIND_EVERY_MS = 2000;     // don't rescan a folder on every tick while 
 // session — /clear starts a NEW one. Long enough that a slow tool (which writes nothing
 // until it returns) can't trip it.
 const TR_STALE_MS = 90_000;
-// Diagnostics for the first live runs: SWARM_TRANSCRIPT_LOG=1 npm start writes every
-// binding and every verdict change to <userData>/transcript.log.
-const TR_DEBUG = process.env.SWARM_TRANSCRIPT_LOG === '1';
+// Журнал канала стенограммы: привязки и смены вердикта в <userData>/transcript.log. Как и
+// журнал моста, пишется ВСЕГДА и ограничен по размеру. Он был за переменной окружения
+// SWARM_TRANSCRIPT_LOG — и когда понадобился (в телегу уезжало «✅ готов» без текста
+// ответа, потому что вкладка не привязана), его не оказалось, а включить у запущенного
+// приложения нельзя. Дважды одна и та же ошибка — уже привычка, поэтому здесь тоже всегда.
+const TR_LOG_MAX = 512 * 1024;
 
 function trLog(line) {
-  if (!TR_DEBUG) return;
   try {
-    fs.appendFileSync(path.join(app.getPath('userData'), 'transcript.log'),
-      new Date().toISOString().slice(11, 23) + ' ' + line + '\n');
+    const file = path.join(app.getPath('userData'), 'transcript.log');
+    try {
+      if (fs.statSync(file).size > TR_LOG_MAX) fs.renameSync(file, file + '.1');
+    } catch (_) { /* файла ещё нет */ }
+    fs.appendFileSync(file, new Date().toISOString().slice(11, 23) + ' ' + line + '\n');
   } catch (_) { /* diagnostics must never break the app */ }
 }
 
@@ -435,12 +440,24 @@ function projectDir(cwd) {
 //     falling back to the screen scraper.
 //
 // Returns null until claude actually starts writing.
+// Сколько ждём файл с ПРИКРЕПЛЁННЫМ id, прежде чем признать, что разговор идёт под другим
+// именем. Секунды: Claude пишет первую запись сразу, как только ему что-то сказали.
+const TR_PIN_GRACE_MS = 15_000;
+
 function bindTranscript(d, taken) {
   const dir = projectDir(d.cwd);
   if (d.claudeSessionId) {
     const file = path.join(dir, d.claudeSessionId + '.jsonl');
-    if (taken.has(file)) return null;
-    return fs.existsSync(file) ? file : null;
+    if (!taken.has(file) && fs.existsSync(file)) return file;
+    // Файла с этим именем нет — и раньше здесь стоял return null, то есть вкладка
+    // оставалась без стенограммы НАВСЕГДА. А id — подсказка, не контракт: `--resume`
+    // форкает разговор в новый файл, `/clear` начинает новый, `claude` из терминала
+    // берёт свой. Наружу это выглядело так: в телегу уезжает «✅ готов» без единого
+    // слова ответа, потому что текст итога берётся только из стенограммы.
+    //
+    // Поэтому даём прикреплённому id небольшую отсрочку (файл появляется не мгновенно),
+    // а потом ищем сканом папки — с теми же защитами, что и для вкладки без id.
+    if (Date.now() - (d.startedAt || 0) < TR_PIN_GRACE_MS) return null;
   }
   let names;
   try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')); } catch (_) { return null; }
@@ -513,7 +530,18 @@ setInterval(() => {
         if (!file) continue;
         d.trFile = file;
         taken.add(file);
-        trLog(`tab=${id} → ${path.basename(file)}${d.claudeSessionId ? ' (по session id)' : ' (сканом папки)'}`);
+        const stem = path.basename(file, '.jsonl');
+        const byPin = stem === d.claudeSessionId;
+        trLog(`tab=${id} → ${path.basename(file)}${byPin ? ' (по session id)' : ' (сканом папки)'}`);
+        // Привязались сканом, хотя id был прикреплён — значит разговор идёт под ДРУГИМ
+        // именем (форк от --resume, /clear). Прикреплённый id с этого момента врёт: по нему
+        // хук не узнает сессию в списке «отвечаем с телефона», а следующее восстановление
+        // вкладки попробует возобновить мёртвый разговор. Берём настоящий.
+        if (d.claudeSessionId && !byPin) {
+          d.claudeSessionId = stem;
+          safeSend('session:claude', { id, claudeSessionId: stem });
+          if (d.tgMode) tgWriteModes();
+        }
         // Bound without knowing the id (hooks off, `claude` typed by hand, a tab restored
         // by its old swarm-* name): the FILE NAME is that id. Hand it to the renderer so
         // the tab is saved with an exact handle and the next restore stops relying on a
@@ -1383,8 +1411,13 @@ function tgCancelWaiting(d) {
 // for tabs in Telegram mode — otherwise every turn you run at your own desk would land
 // in the chat and the bridge would become a log nobody reads.
 async function tgNotifyDone(id, d) {
-  const text = String(d.trReply || '').trim();
-  tgLog(`  → итог вкладки ${id}: ${text ? text.length + ' симв.' : 'текста нет (стенограмма не привязана)'}`);
+  // Текст итога — дословный из стенограммы, а если её нет, ПОСЛЕДНЯЯ строка с экрана.
+  // Пустой отчёт «✅ вкладка — готов.» бесполезен: человек в дороге узнаёт, что ход
+  // закончился, но не узнаёт чем. Экран короче и без переносов, зато он есть всегда.
+  const fromTr = String(d.trReply || '').trim();
+  const text = fromTr || String(extractQuestion(snapshot(d)) || '').trim();
+  tgLog(`  → итог вкладки ${id}: ${text ? text.length + ' симв.' : 'текста нет'}`
+    + ` (${fromTr ? 'стенограмма' : text ? 'экран, стенограмма не привязана' : 'ни стенограммы, ни экрана'})`);
   const msgId = await tgSend({
     threadId: await tgTopicFor(id),
     text: `✅ ${tgTabName(id)}${text ? '\n\n' + text : ' — готов.'}`,
