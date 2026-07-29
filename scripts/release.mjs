@@ -70,10 +70,34 @@ pkg.version = version;
 writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
 
 // 4. changelog ---------------------------------------------------------------
+// CHANGELOG читает ПОЛЬЗОВАТЕЛЬ, а не тот, кто ведёт репозиторий. Поэтому внутренние типы
+// коммитов сюда не попадают: «chore(release): красная сюита останавливает выпуск» — правка
+// инструмента выпуска, и в списке изменений приложения она выглядит как обещание, которого
+// никто не давал.
+//
+// В списке НЕТ refactor, хотя по названию он внутренний: в этом дереве им помечают как раз
+// видимые вещи («действия в нижний бар», «убрать дубль 🔔 из сайдбара»). Отбрасывать его
+// значило бы терять настоящие изменения — так что судим по тому, как тип используется здесь,
+// а не по тому, что он значит вообще.
+//
+// И принцип для незнакомого: если тип не в этом списке — строка ОСТАЁТСЯ. Потерять из
+// changelog настоящую правку хуже, чем оставить в нём лишнюю строку: лишнюю видно и её можно
+// убрать руками, а пропавшую не видно вообще.
+const INTERNAL_TYPES = ['chore', 'test', 'docs', 'build', 'ci', 'style', 'release'];
+const INTERNAL_RE = new RegExp(`^- (?:${INTERNAL_TYPES.join('|')})(?:\\([^)]*\\))?!?:`, 'i');
+
 let lastTag = '';
 try { lastTag = git(['describe', '--tags', '--abbrev=0']); } catch { /* first release */ }
 const range = lastTag ? `${lastTag}..HEAD` : 'HEAD';
-const commits = git(['log', range, '--no-merges', '--pretty=- %s']) || '- начальный релиз';
+const allLines = (git(['log', range, '--no-merges', '--pretty=- %s']) || '').split('\n').filter(Boolean);
+const shown = allLines.filter((l) => !INTERNAL_RE.test(l));
+// Релиз, в котором ВСЁ внутреннее, — это не пустой раздел: пустой выглядел бы как сломанный
+// скрипт, да ещё и ушёл бы в сообщение тега (оно и есть этот текст). Тогда показываем всё как
+// было — честнее сказать «менялись только внутренности» этими же строками, чем ничего.
+const commits = (shown.length ? shown : allLines).join('\n') || '- начальный релиз';
+if (shown.length && shown.length !== allLines.length) {
+  step(`changelog: ${allLines.length - shown.length} внутренних коммитов не показаны`);
+}
 const today = new Date().toISOString().slice(0, 10);
 const entry = `## ${version} — ${today}\n\n${commits}\n`;
 const clHeader = '# Changelog\n\n';
