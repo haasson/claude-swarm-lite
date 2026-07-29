@@ -518,6 +518,48 @@ function newerTranscriptExists(d, taken) {
   return false;
 }
 
+// Отобрать свой файл у вкладки, которая держит его по устаревшему праву.
+//
+// Живой случай: вкладка 3 запустилась с `--resume a7c534c7`, Клод форкнул разговор в новый
+// файл, а прикреплённый id остался у вкладки 3 — и она заняла собой ЧУЖОЙ файл. Настоящий
+// хозяин, вкладка 4, привязаться уже не мог (занято) и присылал в телегу строку с экрана
+// вместо ответа; а вкладка 3 показывала статус чужого агента — её вердикты менялись в такт
+// ходам вкладки 4. Это худшее, что этот канал умеет делать.
+//
+// Право сильнее прикреплённого id ровно одно: текст, который мост НАПЕЧАТАЛ сам. Метку
+// [тлг] с этой формулировкой никто в другой сессии не набирал, поэтому файл, где она лежит,
+// принадлежит этой вкладке — даже если его кто-то занял.
+function stealByInjected(id, d, taken) {
+  if (!d.tgLastSent || d.trFile) return null;
+  const dir = projectDir(d.cwd);
+  let names;
+  try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')); } catch (_) { return null; }
+  const cands = [];
+  for (const n of names) {
+    const file = path.join(dir, n);
+    let userText = '';
+    try {
+      const entries = transcript.parseEntries(tailText(file, TR_TAIL_BYTES));
+      if (transcript.cwdOf(entries) !== d.cwd) continue;
+      userText = entries.filter((e) => e.type === 'user').map((e) => transcript.entryText(e)).join('\n');
+    } catch (_) { continue; }
+    cands.push({ file, userText });
+  }
+  const mine = transcript.pickByInjected(cands, d.tgLastSent);
+  if (!mine) return null;
+  // Освобождаем прежнего держателя: он остался без стенограммы и найдёт свою сканом.
+  for (const [otherId, o] of det) {
+    if (o !== d && o.trFile === mine) {
+      trLog(`tab=${id} забирает ${path.basename(mine)} у tab=${otherId} (там его текст из телеги)`);
+      o.trFile = null; o.trMtime = 0; o.trEntries = null; o.trWhy = '';
+      o.claudeSessionId = null;
+      applyTranscript(o, null);
+      taken.delete(mine);
+    }
+  }
+  return mine;
+}
+
 setInterval(() => {
   const now = Date.now();
   const taken = new Set();
@@ -525,6 +567,18 @@ setInterval(() => {
   for (const [id, d] of det) {
     if (d.dead || !d.cwd) continue;
     try {
+      // Прежде всего — не держит ли кто-то файл ЭТОЙ вкладки (см. stealByInjected).
+      if (!d.trFile && d.tgLastSent) {
+        const mine = stealByInjected(id, d, taken);
+        if (mine) {
+          d.trFile = mine;
+          taken.add(mine);
+          d.claudeSessionId = path.basename(mine, '.jsonl');
+          safeSend('session:claude', { id, claudeSessionId: d.claudeSessionId });
+          if (d.tgMode) tgWriteModes();
+          trLog(`tab=${id} → ${path.basename(mine)} (по тексту из телеги)`);
+        }
+      }
       // Bound to a session that's over? Drop it — including the id we pinned at
       // launch, which /clear has just made void — and let the scan (or the next hook
       // marker) find the new file. A frozen status is the worst thing this can do.
