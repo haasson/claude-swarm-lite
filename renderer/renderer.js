@@ -1307,6 +1307,7 @@ function showSettingsModal(tab) {
           </div>
           <div class="tg-row tg-row-wrap">
             <button type="button" class="set-check-btn" id="set-tg-pair-btn">Привязать группу</button>
+            <button type="button" class="set-check-btn" id="set-tg-reconnect" hidden>Подключить заново</button>
             <button type="button" class="set-check-btn" id="set-tg-check" hidden>Проверить права</button>
             <button type="button" class="set-check-btn" id="set-tg-unpair" hidden>Отвязать</button>
             <button type="button" class="set-check-btn danger" id="set-tg-forget">Удалить токен</button>
@@ -1443,6 +1444,7 @@ function showSettingsModal(tab) {
   const tgTtlEl = overlay.querySelector('#set-tg-ttl');
   const tgUnpairB = overlay.querySelector('#set-tg-unpair');
   const tgPairBtn = overlay.querySelector('#set-tg-pair-btn');
+  const tgReconnectB = overlay.querySelector('#set-tg-reconnect');
   const tgCheckB = overlay.querySelector('#set-tg-check');
   const tgCheckNote = overlay.querySelector('#set-tg-check-note');
   const tgExtra = overlay.querySelector('#set-tg-extra');
@@ -1545,6 +1547,9 @@ function showSettingsModal(tab) {
     tgTokenI.placeholder = st.configured ? st.masked : '1234567890:AA…';
     tgChatField.hidden = !st.configured;
     tgUnpairB.hidden = st.chatId == null;
+    // Опрос лежит, хотя бот подключён: единственный выход из фатальной ошибки (не тот токен,
+    // «токен уже читает кто-то другой») раньше был перезапуск приложения.
+    tgReconnectB.hidden = !st.configured || !!st.live;
     tgCheckB.hidden = st.chatId == null;
     tgExtra.hidden = st.chatId == null;
     // Привязались — код мёртв, и висящий QR только вводит в заблуждение («битый»).
@@ -1623,6 +1628,11 @@ function showSettingsModal(tab) {
   tgCheckB.addEventListener('click', async () => {
     tgCheckNote.textContent = 'Проверяю…';
     renderTg(await window.swarm.telegram.check());
+  });
+
+  tgReconnectB.addEventListener('click', async () => {
+    tgStateEl.textContent = 'Подключаюсь заново…';
+    renderTg(await window.swarm.telegram.reconnect());
   });
 
   overlay.querySelector('#set-tg-bf').addEventListener('click', (e) => {

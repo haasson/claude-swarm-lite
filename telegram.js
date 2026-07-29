@@ -305,6 +305,28 @@ function callbackData(tab, fingerprint, n) {
   return data.length <= CB_MAX ? data : null;
 }
 
+// --- кого адресует нажатие ----------------------------------------------------
+// Номер вкладки в callback_data живёт только до перезапуска приложения: id раздаются заново с
+// единицы. А сообщение с кнопками остаётся в теме навсегда — шапка темы не перерисовывается.
+// Тему же держит ключ вкладки, который перезапуск переживает. Значит В ТЕМЕ адресата знает
+// ТЕМА, а payload — это всего лишь то, что было верно когда-то.
+//
+// Без этого «⚡ вообще без вопросов» в шапке одной темы после перезапуска снимало вопросы у
+// агента в ДРУГОМ репозитории, и заметить подмену было нечем.
+//
+// Вне тем (общая тема — запасной путь, когда тему создать не удалось) сверять не с чем, там
+// остаётся payload. Что делать при расхождении, решает вызывающий: быстрой кнопке достаточно
+// темы, а сообщение с запросом разрешения несёт ТЕКСТ и отпечаток конкретной вкладки, поэтому
+// расхождение там значит «это сообщение не про неё» — и нажатие отклоняется.
+function callbackTab(opts) {
+  const o = opts || {};
+  const payload = o.payloadTab == null ? null : String(o.payloadTab);
+  const routed = o.routed == null ? null : String(o.routed);
+  if (o.threadId == null) return { tab: payload, source: payload == null ? null : 'payload', mismatch: false };
+  if (routed == null) return { tab: null, source: null, mismatch: false };
+  return { tab: routed, source: 'topic', mismatch: payload != null && payload !== routed };
+}
+
 function parseCallbackData(raw) {
   const parts = String(raw == null ? '' : raw).split('|');
   if (parts.length !== 4 || parts[0] !== CB_PREFIX) return null;
@@ -450,7 +472,7 @@ module.exports = {
   API_HOST, MAX_TEXT, POLL_TIMEOUT_S, BACKOFF_MAX_MS, CODE_LEN, TG_TAG, tagInput,
   apiUrl, looksLikeToken, maskToken,
   pairCode, deepLink, pairingMatch,
-  readUpdate, routeMessage, chunkText, inlineKeyboard, callbackData, parseCallbackData, CB_MAX, backoffMs, retryAfterMs, classifyError,
+  readUpdate, routeMessage, chunkText, inlineKeyboard, callbackData, parseCallbackData, callbackTab, CB_MAX, backoffMs, retryAfterMs, classifyError,
   inputWrites, PASTE_ON, PASTE_OFF, ENTER, BACK_TAB, routeFailure,
   COMMANDS, QA_ACTIONS, actionData, parseAction, actionKeyboard,
   createPoller,

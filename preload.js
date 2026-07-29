@@ -103,6 +103,9 @@ contextBridge.exposeInMainWorld('swarm', {
     unpair:    ()      => ipcRenderer.invoke('telegram:unpair'),
     pair:      ()      => ipcRenderer.invoke('telegram:pair'),
     check:     ()      => ipcRenderer.invoke('telegram:check'),
+    // Поднять опрос после фатальной ошибки (не тот токен, «токен уже читает кто-то другой»):
+    // раньше из этого состояния выходили только перезапуском приложения.
+    reconnect: ()      => ipcRenderer.invoke('telegram:reconnect'),
     setPrompt: (text)  => ipcRenderer.invoke('telegram:setPrompt', text),
     keepAwake: (on)    => ipcRenderer.invoke('telegram:setKeepAwake', on),
     mirrorAll: (on)    => ipcRenderer.invoke('telegram:setMirrorAll', on),

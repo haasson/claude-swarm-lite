@@ -223,6 +223,39 @@ test('actionData отказывается от неизвестного дейс
   assert.strictEqual(T.parseAction(null), null);
 });
 
+// Кого адресует нажатие. Живая беда, которую это закрывает: номер вкладки в callback_data
+// живёт только до перезапуска (id раздаются заново с единицы), а кнопки в шапке темы остаются
+// навсегда. После перезапуска «q|1|auto» из темы одного репозитория указывал на вкладку с
+// другим — и «вообще без вопросов» снималось у чужого агента.
+
+test('в теме адресата называет тема, а не payload кнопки', () => {
+  const at = T.callbackTab({ threadId: 12, routed: '4', payloadTab: '1' });
+  assert.strictEqual(at.tab, '4', 'решает тема');
+  assert.strictEqual(at.source, 'topic');
+  assert.strictEqual(at.mismatch, true, 'расхождение видно вызывающему');
+});
+
+test('совпало — расхождения нет, адресат тот же', () => {
+  const at = T.callbackTab({ threadId: 12, routed: '4', payloadTab: '4' });
+  assert.deepStrictEqual(at, { tab: '4', source: 'topic', mismatch: false });
+});
+
+test('номера сравниваются как строки, а не по типу', () => {
+  const at = T.callbackTab({ threadId: 12, routed: 4, payloadTab: '4' });
+  assert.strictEqual(at.mismatch, false, 'число 4 и строка «4» — одна и та же вкладка');
+});
+
+test('тема нам неизвестна — адресата нет, и это не повод верить payload', () => {
+  const at = T.callbackTab({ threadId: 99, routed: null, payloadTab: '1' });
+  assert.strictEqual(at.tab, null);
+  assert.strictEqual(at.source, null);
+});
+
+test('вне тем сверять не с чем — остаётся payload', () => {
+  const at = T.callbackTab({ threadId: null, routed: null, payloadTab: '1' });
+  assert.deepStrictEqual(at, { tab: '1', source: 'payload', mismatch: false });
+});
+
 test('actionKeyboard даёт кнопки с подписями и рабочими данными', () => {
   const kb = T.actionKeyboard('3');
   const flat = kb.inline_keyboard.flat();

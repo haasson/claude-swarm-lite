@@ -121,6 +121,21 @@ function classify(entries, now, asks) {
   return { status: 'ready', kind: null, why: 'text (quiet)', at, text };
 }
 
+// Текст, взятый из стенограммы, — про ЭТОТ ход или про прошлый?
+//
+// Вопрос не праздный: статус «готов» и текст хода приходят по разным каналам и с разной
+// задержкой. Хук Stop прилетает сразу по окончании хода, а classify держит «работает» ещё
+// READY_DEBOUNCE_MS и до конца отстоя текст не обновляет. То есть в момент, когда мост решает
+// докладывать, свежего текста ещё нет — а несвежий есть, и он выглядит совершенно нормально.
+// Отправить его в чат значит ответить не на ту задачу, и заметить это невозможно ничем.
+//
+// Поэтому сравнение по времени: запись, из которой взят текст, должна быть НЕ РАНЬШЕ начала
+// хода. Направление сравнения здесь и есть вся суть, поэтому оно живёт отдельной функцией
+// с тестом, а не строчкой внутри моста.
+function belongsToTurn(textAt, turnStartedAt) {
+  return (Number(textAt) || 0) >= (Number(turnStartedAt) || 0);
+}
+
 // The cwd a transcript belongs to, from the newest entry that records one. Used to
 // bind a file to the right tab instead of trusting the folder-name slug.
 function cwdOf(entries) {
@@ -162,9 +177,13 @@ function pickBinding(cands, opts) {
 // Понадобилось после живого случая: три вкладки на одной папке, все разговоры свежие, ни
 // один не выиграл по однозначности — и вкладка осталась без стенограммы, а в телегу уехало
 // «✅ готов» без текста ответа.
+// Короче этого совпадение ничего не доказывает. Наружу — чтобы мост не запоминал в качестве
+// ключа то, что заведомо не сработает (номер варианта из кнопки разрешения).
+const INJECTED_MIN = 12;
+
 function pickByInjected(cands, needle) {
   const key = String(needle == null ? '' : needle).trim();
-  if (key.length < 12) return null;          // короткое совпадение ничего не доказывает
+  if (key.length < INJECTED_MIN) return null;
   const hits = [];
   for (const c of Array.isArray(cands) ? cands : []) {
     if (c && String(c.userText || '').includes(key)) hits.push(c.file);
@@ -209,7 +228,8 @@ function pickByScreen(cands, snapshot) {
 }
 
 module.exports = {
-  READY_DEBOUNCE_MS, BIND_MTIME_SLACK_MS, SCREEN_KEY_LEN, screenKey, pickByScreen,
+  READY_DEBOUNCE_MS, BIND_MTIME_SLACK_MS, SCREEN_KEY_LEN, INJECTED_MIN, screenKey, pickByScreen,
   projectSlug, parseEntries, blockTypes, entryText, lastMain, classify, cwdOf, pickBinding,
+  belongsToTurn,
   pickByInjected,
 };

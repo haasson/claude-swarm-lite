@@ -254,6 +254,13 @@ function makeDetector(cols, rows) {
     tabKey: '', name: '', tgTimer: null, tgMode: false, tgPrimed: false, trReply: '',
     tgNotifiedAt: 0, tgAck: null, tgLastSent: '', trFinal: '', mode: null,
     tgTopicLive: false, tgTopicName: '',
+    // Отказы отправки уведомления: сколько подряд и когда пробовать снова. Без откола такт
+    // (300 мс) долбил Telegram каждые полторы секунды всё время, пока вкладка ждёт.
+    tgFails: 0, tgRetryAt: 0,
+    // Итог хода: когда ход начался и на какой момент у нас есть его текст из стенограммы.
+    // Второе сравнивается с первым — иначе в чат уезжает ответ на ПРОШЛУЮ задачу (см.
+    // tgOnDone: с хуками статус «готов» приходит раньше, чем стенограмма догоняет).
+    turnStartedAt: 0, trReplyAt: 0, tgDoneTimer: null,
     cwd: '', startedAt: Date.now(), claudeSessionId: null,
     trFile: null, trMtime: 0, trEntries: null, trState: null, trText: '', trWhy: '', trTryAt: 0,
   };
@@ -362,6 +369,9 @@ setInterval(() => {
         // a delay (see tgOnWaiting) and cancelled if you answer at the keyboard first.
         if (next.status === 'waiting') tgOnWaiting(id);
         else tgCancelWaiting(d);
+        // Ход НАЧАЛСЯ. Запоминаем момент, чтобы потом отличить свежий текст хода от текста
+        // прошлого — см. tgOnDone, это и есть защита от «ответил не на то, что просили».
+        if (next.status === 'running' && prev !== 'running') d.turnStartedAt = now;
         // Turn finished on a task that came from the phone → report back there.
         const relay = next.status === 'ready' && prev === 'running' && TG.chatId != null
           && (d.tgMode || TG.mirrorAll || tgAway());
@@ -375,12 +385,15 @@ setInterval(() => {
             + (relay ? '' : ` (нужен переход работает→готов; режим тлг=${d.tgMode ? 'да' : 'нет'}`
               + `, зеркало=${TG.mirrorAll ? 'да' : 'нет'}, отошёл=${tgAway() ? 'да' : 'нет'})`));
         }
-        if (relay) tgNotifyDone(id, d).catch(reportMainError);
+        if (relay) tgOnDone(id, d);
       }
       // Уведомление могло не уйти — сеть рвётся ровно тогда, когда мак уснул или сменил
       // вайфай. Пока вкладка ждёт, а отправка не удалась, пробуем снова: потерянный запрос
-      // разрешения это тишина в телеге, а человек ждёт именно его. Дребезг гасит tgOnWaiting.
-      if (d.status === 'waiting' && !d.tgNotifiedAt && TG.chatId != null && !d.tgTimer) {
+      // разрешения это тишина в телеге, а человек ждёт именно его. Дребезг гасит tgOnWaiting,
+      // а частоту — откол (tgRetryAt): без него это был поток отказов раз в полторы секунды,
+      // который к тому же перелистывал журнал моста и стирал собственную диагностику.
+      if (d.status === 'waiting' && !d.tgNotifiedAt && TG.chatId != null && !d.tgTimer
+          && now >= (d.tgRetryAt || 0)) {
         tgOnWaiting(id);
       }
     } catch (_) {
@@ -424,6 +437,16 @@ function trLog(line) {
     } catch (_) { /* файла ещё нет */ }
     fs.appendFileSync(file, new Date().toISOString().slice(11, 23) + ' ' + line + '\n');
   } catch (_) { /* diagnostics must never break the app */ }
+}
+
+// Отвязаться от файла — ОДНОЙ функцией, вместе с текстами, которые из него взяты. Раньше
+// сброс перечислялся в трёх местах и везде забывал trReply/trFinal: вкладка теряла свой файл
+// (/clear, ротация, форк от --resume), а тексты прошлого хода оставались жить — и уезжали в
+// чат как итог нового. Худший вид ошибки: правдоподобный ответ не на ту задачу, да ещё с
+// пометкой «стенограмма» в журнале, то есть с уверенно неверной причиной.
+function trForget(d) {
+  d.trFile = null; d.trMtime = 0; d.trEntries = null; d.trWhy = '';
+  d.trReply = ''; d.trFinal = ''; d.trText = ''; d.trReplyAt = 0;
 }
 
 // Last `bytes` of a file as text, dropping the first (likely partial) line.
@@ -566,7 +589,7 @@ function stealByInjected(id, d, taken) {
   for (const [otherId, o] of det) {
     if (o !== d && o.trFile === mine) {
       trLog(`tab=${id} забирает ${path.basename(mine)} у tab=${otherId} (там его текст из телеги)`);
-      o.trFile = null; o.trMtime = 0; o.trEntries = null; o.trWhy = '';
+      trForget(o);
       o.claudeSessionId = null;
       applyTranscript(o, null);
       taken.delete(mine);
@@ -601,7 +624,7 @@ setInterval(() => {
           && newerTranscriptExists(d, taken)) {
         trLog(`tab=${id} стенограмма ${path.basename(d.trFile)} умолкла — перепривязка`);
         taken.delete(d.trFile);
-        d.trFile = null; d.trMtime = 0; d.trEntries = null; d.trWhy = '';
+        trForget(d);
         d.claudeSessionId = null;
         applyTranscript(d, null);
       }
@@ -656,13 +679,19 @@ setInterval(() => {
       if (v) d.trFinal = String(v.text || '').trim().slice(0, TR_REPLY_MAX);
       // The finished turn's closing message — what the Telegram bridge sends back as
       // «вот что получилось». Kept whole-ish: it's a report, not a chip label.
-      if (v && v.status === 'ready') d.trReply = String(v.text || '').trim().slice(0, TR_REPLY_MAX);
+      // Вместе с ним — ВРЕМЯ той записи, из которой он взят. Только по нему видно, этого хода
+      // текст или прошлого: статус «готов» приходит от хука на секунду раньше, чем classify
+      // отпустит свой отстой и обновит текст (см. tgOnDone).
+      if (v && v.status === 'ready') {
+        d.trReply = String(v.text || '').trim().slice(0, TR_REPLY_MAX);
+        d.trReplyAt = v.at || now;
+      }
       const why = v ? v.status + (v.kind ? ':' + v.kind : '') + ' (' + v.why + ')' : 'no entries';
       if (why !== d.trWhy) { d.trWhy = why; trLog(`tab=${id} ${why}`); }
     } catch (_) {
       // File rotated, deleted, or unreadable: drop the binding and fall back to the
       // screen until we can bind again.
-      d.trFile = null; d.trMtime = 0; d.trEntries = null; d.trWhy = '';
+      trForget(d);
       applyTranscript(d, null);
     }
   }
@@ -690,6 +719,9 @@ const qrcode = require('qrcode-generator');   // one file, no deps: the pairing 
 // that dies mid-fix looked exactly like a broken bridge, because an unknown code hits the
 // «this chat isn't ours» branch and is dropped in silence.
 const TG_PAIR_TTL_MS = 900_000;   // 15 minutes
+// Сколько раз отказ проверки продлевает окно (см. tgBindChat). Не безграничное: иначе код
+// можно держать живым сколько угодно, присылая его раз в четверть часа.
+const TG_PAIR_RENEW_MAX = 2;
 // «Ты не за столом» — не по фокусу окна (окно часто так и остаётся впереди, когда человек
 // ушёл), а по отсутствию любого ввода на маке. Тогда в группу идут итоги ВСЕХ ходов: это и
 // есть зеркало, которого ждёшь из дороги. Вернулся за клавиатуру — снова только вопросы,
@@ -1436,6 +1468,8 @@ function tgOnTabGone(d) {
   if (!d || d.dead) return;
   d.dead = true;
   tgCancelWaiting(d);
+  // Отложенный итог тоже отменяем: докладывать за вкладку, которой уже нет, некому и незачем.
+  if (d.tgDoneTimer) { clearTimeout(d.tgDoneTimer); d.tgDoneTimer = null; }
   tgClearMode(d);
   tgCloseTopic(d);             // the topic list mirrors the open tabs
 }
@@ -1529,8 +1563,13 @@ function tgAnswer(id, text) {
   p.write(body);
   // Запоминаем ДОСЛОВНО напечатанное: по этому тексту стенограмма находит файл вкладки,
   // когда в папке несколько живых разговоров и догадки не срабатывают.
+  //
+  // Только если текст достаточно длинный, чтобы что-то доказывать (та же граница, что у
+  // transcript.pickByInjected). Иначе номер варианта, напечатанный кнопкой разрешения, затирал
+  // ключ — вкладка отвечала из телеги, а найти свой файл ей было уже нечем.
   const dd = det.get(id);
-  if (dd) dd.tgLastSent = String(text).replace(/\r\n?/g, '\n').slice(0, 200);
+  const typed = String(text).replace(/\r\n?/g, '\n');
+  if (dd && typed.trim().length >= transcript.INJECTED_MIN) dd.tgLastSent = typed.slice(0, 200);
   setTimeout(() => {
     // Вкладка могла умереть за эти миллисекунды — тогда Enter уже некому.
     const live = sessions.get(id);
@@ -1595,14 +1634,32 @@ function tgOnWaiting(id) {
     if (d.dead || d.status !== 'waiting') return;   // resolved at the keyboard already
     // Помечаем ДО отправки, иначе такт (каждые 400 мс) успеет начать вторую.
     d.tgNotifiedAt = Date.now();
-    tgNotifyWaiting(id, d).catch((e) => { d.tgNotifiedAt = 0; reportMainError(e); });
+    tgNotifyWaiting(id, d).catch((e) => { tgNotifyFailed(d); reportMainError(e); });
   }, TG_NOTIFY_DELAY_MS);
 }
 
 function tgCancelWaiting(d) {
-  if (d && d.tgTimer) { clearTimeout(d.tgTimer); d.tgTimer = null; }
-  // Вкладка больше не ждёт: следующее ожидание — новый повод уведомить.
-  if (d) d.tgNotifiedAt = 0;
+  if (!d) return;
+  if (d.tgTimer) { clearTimeout(d.tgTimer); d.tgTimer = null; }
+  // Вкладка больше не ждёт: следующее ожидание — новый повод уведомить, и повод свежий, так
+  // что счётчик отказов начинается заново.
+  d.tgNotifiedAt = 0;
+  d.tgFails = 0;
+  d.tgRetryAt = 0;
+}
+
+// Отправка уведомления не удалась. Отметку «уже написали» снимаем (такт попробует снова), но
+// НЕ сразу: пока здесь не было откола, недоступный Telegram означал поток из трёх запросов
+// раз в полторы секунды всё время, пока вкладка ждёт, — и три строки в журнал на каждую
+// попытку, то есть журнал моста перелистывался и стирал ровно ту историю, ради которой он
+// включён всегда. Шаг тот же, что у опроса (telegram.backoffMs): до минуты и не больше.
+function tgNotifyFailed(d) {
+  if (!d) return;
+  d.tgNotifiedAt = 0;
+  d.tgFails = (d.tgFails || 0) + 1;
+  const wait = telegram.backoffMs(d.tgFails);
+  d.tgRetryAt = Date.now() + wait;
+  tgLog(`  ✗ уведомление не ушло (попытка ${d.tgFails}) — следующая через ${Math.round(wait / 1000)} с`);
 }
 
 // The agent finished a turn it was given from the phone: send back what it said. Only
@@ -1618,6 +1675,16 @@ function tgCancelWaiting(d) {
 const TG_THINKING = '⏳ получил, думаю…';
 
 async function tgAckSend(id, d, u) {
+  // Прислали два сообщения подряд, не дожидаясь ответа: заготовка одна на ход, поэтому старую
+  // надо ЗАКРЫТЬ. Иначе она остаётся в ленте с вечным «думаю…» — и человек ждёт ответа на
+  // первое сообщение, которого уже никогда не будет.
+  if (d && d.tgAck) {
+    const old = d.tgAck;
+    d.tgAck = null;
+    await tgFetchJson(telegram.apiUrl(TG.token, 'editMessageText'),
+      { chat_id: old.chatId, message_id: old.messageId, text: '⏳ принято — отвечу ниже' })
+      .catch(reportMainError);
+  }
   const msgId = await tgSend({ threadId: u.threadId, replyTo: u.messageId, text: TG_THINKING, silent: true });
   tgRemember(msgId, id);          // ответом на него тоже можно продолжать разговор
   if (d && msgId) d.tgAck = { messageId: msgId, chatId: TG.chatId };
@@ -1655,17 +1722,52 @@ async function tgAckResolve(id, d, text) {
   tgRemember(msgId, id);
 }
 
-async function tgNotifyDone(id, d) {
+// Итог хода отправляется НЕ в тот же миг, когда статус стал «готов».
+//
+// С включёнными хуками Stop прилетает раньше, чем стенограмма догоняет: у classify свой
+// отстой (transcript.READY_DEBOUNCE_MS), и до его истечения d.trReply — это текст ПРОШЛОГО
+// хода. Отправить его — худшее, что тут можно сделать: в чат уходит правдоподобный ответ не
+// на ту задачу, и заметить подмену нельзя ничем. Поэтому ждём, пока текст хода станет свежим
+// (его запись позже начала хода), и только потом докладываем. Не дождались — честно берём
+// экран, а не выдаём чужой текст за этот ход.
+const TG_DONE_STEP_MS = 300;      // как часто переспрашивать стенограмму
+const TG_DONE_WAIT_MS = 3000;     // сколько всего ждать; дальше отчёт по экрану
+
+function tgOnDone(id, d) {
+  if (d.tgDoneTimer) return;      // этот ход уже ждёт своей очереди
+  const endedAt = Date.now();
+  const step = () => {
+    d.tgDoneTimer = null;
+    if (d.dead) return;
+    // Вкладка успела снова заработать: этот ход уже не итог, а следующий доложит о себе сам.
+    if (d.status !== 'ready') return;
+    const fresh = transcript.belongsToTurn(d.trReplyAt, d.turnStartedAt);
+    if (!fresh && Date.now() - endedAt < TG_DONE_WAIT_MS) {
+      d.tgDoneTimer = setTimeout(step, TG_DONE_STEP_MS);
+      return;
+    }
+    tgNotifyDone(id, d, fresh).catch(reportMainError);
+  };
+  d.tgDoneTimer = setTimeout(step, TG_DONE_STEP_MS);
+}
+
+async function tgNotifyDone(id, d, fresh) {
   // Текст итога — дословный из стенограммы, а если её нет, ПОСЛЕДНЯЯ строка с экрана.
   // Пустой отчёт «✅ вкладка — готов.» бесполезен: человек в дороге узнаёт, что ход
   // закончился, но не узнаёт чем. Экран короче и без переносов, зато он есть всегда.
-  const fromTr = String(d.trReply || '').trim();
+  // `fresh` — принадлежит ли текст стенограммы ЭТОМУ ходу (см. tgOnDone). Не принадлежит —
+  // значит его нет, и никакой «почти подходящий» текст его не заменяет.
+  const fromTr = fresh ? String(d.trReply || '').trim() : '';
   // lastAgentLine, а НЕ extractQuestion: вторая берёт нижнюю значимую строку, а внизу стоит
   // поле ввода — из-за этого в чат уезжала то линейка рамки, то собственный вопрос
   // пользователя, отражённый ему же как «ответ агента».
   const text = fromTr || String(lastAgentLine(snapshot(d)) || '').trim();
-  tgLog(`  → итог вкладки ${id}: ${text ? text.length + ' симв.' : 'текста нет'}`
-    + ` (${fromTr ? 'стенограмма' : text ? 'экран, стенограмма не привязана' : 'ни стенограммы, ни экрана'})`);
+  // Источник называем ЧЕСТНО, включая «текст стенограммы не от этого хода»: пометка
+  // «стенограмма» на чужом тексте однажды уже отправила искать не ту проблему.
+  const why = fromTr ? 'стенограмма'
+    : !d.trFile ? (text ? 'экран, стенограмма не привязана' : 'ни стенограммы, ни экрана')
+      : text ? 'экран, стенограмма не догнала этот ход' : 'стенограмма не догнала, экран пуст';
+  tgLog(`  → итог вкладки ${id}: ${text ? text.length + ' симв.' : 'текста нет'} (${why})`);
   // Если ход начался сообщением из телеги, ответ вписывается в ЕГО же сообщение («получил,
   // думаю…» → ответ). Иначе (зеркало итогов, когда человека нет за маком) — обычная запись.
   await tgAckResolve(id, d, `✅ ${tgTabName(id)}${text ? '\n\n' + text : ' — готов.'}`);
@@ -1696,9 +1798,9 @@ async function tgNotifyWaiting(id, d) {
         replyMarkup: kb,
       });
       tgRemember(msgId, id);
-      // Не приняли (сеть) — снимаем отметку, и такт попробует снова. Ставится она ДО
-      // отправки, в tgOnWaiting: иначе между попыткой и успехом влезает второе уведомление.
-      if (!msgId) d.tgNotifiedAt = 0;
+      // Не приняли (сеть) — снимаем отметку с отколом, и такт попробует снова. Ставится она
+      // ДО отправки, в tgOnWaiting: иначе между попыткой и успехом влезает второе уведомление.
+      if (!msgId) tgNotifyFailed(d); else { d.tgFails = 0; d.tgRetryAt = 0; }
       return;
     }
   }
@@ -1716,7 +1818,7 @@ async function tgNotifyWaiting(id, d) {
   if (d.tgAck) { await tgAckResolve(id, d, full); return; }
   const msgId = await tgSend({ threadId, text: full });
   if (!permission) tgRemember(msgId, id);
-  if (!msgId) d.tgNotifiedAt = 0;
+  if (!msgId) tgNotifyFailed(d); else { d.tgFails = 0; d.tgRetryAt = 0; }
 }
 
 // Переключение режима разрешений жмёт Shift+Tab по кругу и каждый раз СМОТРИТ на экран:
@@ -1751,11 +1853,23 @@ async function tgSwitchMode(id, d, want) {
 
 // Нажали быструю кнопку под шапкой темы. Все действия — из тех, что и так доступны
 // командами; кнопка лишь избавляет от набора текста с телефона.
-async function tgOnAction(qa, u, ack) {
-  const d = det.get(qa.tab);
-  if (!d || d.dead || !sessions.has(qa.tab)) { await ack('Эта вкладка уже закрыта.'); return; }
-  const name = tgTabName(qa.tab);
-  tgLog(`  быстрая кнопка: вкладка ${qa.tab} → ${qa.action}`);
+// Адресат — из telegram.callbackTab: в теме его называет ТЕМА, а не payload кнопки (почему —
+// написано там). Быстрой кнопке этого достаточно: она ничего не печатает в диалог и не несёт
+// текста конкретного запроса, поэтому расхождение с payload — не повод отказывать, а повод
+// сделать то, что написано на кнопке, с тем агентом, чью тему человек открыл.
+async function tgOnAction(qa, u, ack, routed) {
+  const at = telegram.callbackTab({ threadId: u.threadId, routed, payloadTab: qa.tab });
+  const tab = at.tab;
+  if (tab == null) {
+    await ack('Эта тема ни с одной вкладкой не связана — кнопки в ней уже ничего не адресуют.'
+      + ' Скажи /sync.');
+    return;
+  }
+  if (at.mismatch) tgLog(`  кнопка из прошлого запуска: payload ${qa.tab}, тема даёт ${tab}`);
+  const d = det.get(tab);
+  if (!d || d.dead || !sessions.has(tab)) { await ack('Эта вкладка уже закрыта.'); return; }
+  const name = tgTabName(tab);
+  tgLog(`  быстрая кнопка: вкладка ${tab} → ${qa.action}`);
   if (qa.action === 'status') {
     const marks = { running: '🟠 работает', waiting: '🟡 ждёт', ready: '🟢 готов' };
     const kind = d.status === 'waiting' && d.waitingKind
@@ -1772,7 +1886,7 @@ async function tgOnAction(qa, u, ack) {
   // Режимы: то же, что /mode, но одним касанием. Ответ во всплывашке говорит, чем это
   // кончилось — включая цену «правки без спроса», чтобы нажатие не выглядело безобидным.
   const want = qa.action === 'auto' ? 'auto' : qa.action === 'edits' ? 'accept-edits' : 'manual';
-  const r = await tgSwitchMode(qa.tab, d, want);
+  const r = await tgSwitchMode(tab, d, want);
   if (r.blocked === 'permission') {
     await ack('Сейчас открыт запрос разрешения. Ответь на него кнопкой — вариант'
       + ' «Yes, and always allow…» и есть «без спроса» для таких же дальше.');
@@ -1794,17 +1908,32 @@ async function tgOnAction(qa, u, ack) {
 async function tgOnCallback(u) {
   const ack = (text) => tgFetchJson(telegram.apiUrl(TG.token, 'answerCallbackQuery'),
     { callback_query_id: u.callbackId, text, show_alert: false }).catch(reportMainError);
+  // Кого адресует нажатие, решает ТЕМА, в которой висит кнопка: тема привязана к вкладке
+  // ключом, переживающим перезапуск, а номер вкладки в payload — нет (см. telegram.callbackTab).
+  const routed = tgRoute(u);
   // Быстрые действия разбираются ПЕРВЫМИ и совершенно отдельно от разрешений: у них свой
   // префикс, свой обработчик и никакого отпечатка — потому что они ничего не печатают в
   // диалог. Спутать «⚡ правки без спроса» с выбором варианта в запросе разрешения было бы
   // худшим, что этот мост умеет, поэтому пути не пересекаются даже случайно.
   const qa = telegram.parseAction(u.data);
-  if (qa) { await tgOnAction(qa, u, ack); return; }
+  if (qa) { await tgOnAction(qa, u, ack, routed); return; }
   const cb = telegram.parseCallbackData(u.data);
   if (!cb) { await ack('Не понял эту кнопку.'); return; }
-  const routed = tgRoute(u);
-  const d = det.get(cb.tab);
-  if (!d || d.dead || !sessions.has(cb.tab) || (routed != null && String(routed) !== cb.tab)) {
+  // Здесь расхождение с темой — ОТКАЗ, в отличие от быстрых кнопок: это сообщение несёт текст
+  // запроса и отпечаток конкретной вкладки, значит при расхождении оно просто не про ту вкладку,
+  // и печатать в неё номер варианта нельзя. «Тема нам неизвестна» — тоже отказ, иначе решал бы
+  // один payload из прошлого запуска.
+  const at = telegram.callbackTab({ threadId: u.threadId, routed, payloadTab: cb.tab });
+  if (at.tab == null || at.mismatch) {
+    tgLog(`  нажатие мимо: кнопка адресует вкладку ${cb.tab}, а тема ${u.threadId} —`
+      + ` ${routed == null ? 'ничью' : 'вкладку ' + routed}`);
+    await ack('Эта кнопка от прошлого запуска — ничего по ней не делаю.'
+      + ' Скажи /sync, и запрос придёт заново.');
+    return;
+  }
+  const tab = at.tab;
+  const d = det.get(tab);
+  if (!d || d.dead || !sessions.has(tab)) {
     await ack('Эта вкладка уже закрыта.');
     return;
   }
@@ -1816,8 +1945,8 @@ async function tgOnCallback(u) {
   }
   const chosen = now.options.find((o) => o.n === cb.n);
   if (!chosen) { await ack('Такого варианта здесь нет.'); return; }
-  tgAnswer(cb.tab, String(cb.n));
-  tgLog(`  нажатие: вкладка ${cb.tab} → вариант ${cb.n}`);
+  tgAnswer(tab, String(cb.n));
+  tgLog(`  нажатие: вкладка ${tab} → вариант ${cb.n}`);
   await ack(`Выбрано: ${cb.n}. ${chosen.text}`);
   // Freeze the message: the choice is made, the buttons must not invite a second tap.
   await tgFetchJson(telegram.apiUrl(TG.token, 'editMessageText'), {
@@ -1857,7 +1986,12 @@ async function tgBindChat(chatId, threadId) {
     tgLog(`  привязка отклонена: ${(check && check.note) || 'проверка не прошла'}`);
     // Keep the window open: the user is about to go fix exactly what we just named, and a
     // code that dies while they're in the group settings is how this looked broken.
-    if (tgPair) tgPair.at = Date.now();
+    // Но не бесконечно: код — единственное, что стоит между чужим человеком, нашедшим бота, и
+    // привязкой к этой машине, поэтому продлеваем дважды, а дальше пусть жмут «Привязать» снова.
+    if (tgPair && (tgPair.renewed || 0) < TG_PAIR_RENEW_MAX) {
+      tgPair.at = Date.now();
+      tgPair.renewed = (tgPair.renewed || 0) + 1;
+    }
     const note = (check && check.note) || 'Не удалось проверить чат.';
     const tail = tgPair ? ` Поправь и пришли этот же код снова — он действует ещё ${tgPairLeftMin()} мин.` : '';
     await tgSend({ chatId, threadId, text: note + tail });
@@ -2178,6 +2312,20 @@ ipcMain.handle('telegram:forget', async () => {
 ipcMain.handle('telegram:check', async () => {
   tgCheck = await tgCheckChat();
   try { tgSave(); } catch (e) { reportMainError(e); }   // isForum may have changed
+  // Заодно поднимаем опрос, если он лежит: человек, который жмёт «проверить», хочет, чтобы
+  // мост заработал, а не отчёта о том, что он всё ещё стоит.
+  if (TG.token && !(tgPoller && tgPoller.alive)) await tgConnect();
+  return tgState();
+});
+
+// Поднять опрос заново. Фатальная ошибка (401 «не тот токен», 409 «этот токен уже читает
+// кто-то другой») гасит цикл НАСОВСЕМ — так и надо, повторы её не лечат. Но выйти из этого
+// состояния было можно только перезапуском приложения: tgConnect вызывался лишь на старте и
+// при сохранении токена. А 409 получить легко — запустить второй экземпляр или тот же бот на
+// втором компьютере, — и мост оставался мёртвым, хотя причина уже устранена.
+ipcMain.handle('telegram:reconnect', async () => {
+  if (!TG.token) return tgState();
+  await tgConnect();
   return tgState();
 });
 
@@ -2502,41 +2650,74 @@ ipcMain.handle('session:canResume', (_e, cwd, sessionId) => {
   const file = id + '.jsonl';
   try {
     if (cwd && fs.existsSync(path.join(projectDir(cwd), file))) return true;
+    // Промах по слагу — ищем шире, но найденное ПРОВЕРЯЕМ по записанной внутри папке.
+    // `--resume` разрешает разговор в пределах текущей папки, поэтому файл из чужого проекта
+    // — это ложное «да»: вкладка снова упирается в «сессия не найдена», то есть ровно в тот
+    // тупик, от которого эта проверка и поставлена.
     const root = path.join(os.homedir(), '.claude', 'projects');
     for (const dir of fs.readdirSync(root)) {
-      if (fs.existsSync(path.join(root, dir, file))) return true;
+      const full = path.join(root, dir, file);
+      if (fs.existsSync(full) && sessionCwdIs(full, cwd)) return true;
     }
   } catch (_) {}
   return false;
 });
 
-// Тот же вопрос, но про имя swarm-*, которым мы помечаем вкладку через `-n`. Нужен для
-// вкладок, сохранённых до того, как приложение стало запоминать id разговора: у них есть
-// только имя. Клод пишет его в первую строку стенограммы как customTitle, поэтому проверка
-// такая же честная, как по id, — а без проверки `--resume swarm-…` на несуществующем имени
-// упирал вкладку в «сессия с таким номером не найдена», откуда не выйти ни Enter, ни Esc.
+// Начало файла стенограммы: и имя разговора, и папка лежат в его первых записях, поэтому
+// больше читать незачем.
+function sessionHead(file) {
+  let fd = null;
+  try {
+    fd = fs.openSync(file, 'r');
+    const buf = Buffer.alloc(4096);
+    const read = fs.readSync(fd, buf, 0, 4096, 0);
+    return buf.slice(0, read).toString('utf8');
+  } catch (_) { return ''; }
+  finally { if (fd != null) { try { fs.closeSync(fd); } catch (_) {} } }
+}
+
+// Этот разговор действительно про эту папку? Сравниваем с записанным внутри cwd, а не с именем
+// папки-слага: слаг мы угадываем (см. transcript.projectSlug), а запись внутри точна.
+//
+// Первая строка не обязана быть той, где есть cwd (в начале файла бывают служебные записи —
+// сводка, снимок истории файлов), поэтому идём по строкам до первой, которая его называет. Не
+// нашли ни одной — отвечаем «нет»: это проверка, а не догадка.
+function sessionCwdIs(file, cwd) {
+  const want = String(cwd || '');
+  if (!want) return false;
+  for (const line of sessionHead(file).split('\n')) {
+    const t = line.trim();
+    if (!t || t[0] !== '{') continue;
+    let d;
+    try { d = JSON.parse(t); } catch (_) { continue; }   // хвост обрезан по 4 КБ — обычное дело
+    if (d && typeof d.cwd === 'string') return d.cwd === want;
+  }
+  return false;
+}
+
+// ТОЛЬКО папка этой вкладки — и это принципиально, по двум причинам.
+//
+// Правильность: `--resume` разрешает разговор в пределах текущей папки, поэтому имя, найденное
+// в другом проекте, — ложное «да», и вкладка снова упирается в «сессия не найдена».
+//
+// Цена: раньше здесь перебирались ВСЕ папки из ~/.claude/projects и читалось по 4 КБ из каждого
+// файла — синхронно, в main-процессе, на каждую восстанавливаемую вкладку. У кого сорок
+// проектов по двести разговоров, у того это тысячи чтений на вкладку, то есть ступор
+// приложения при старте. И происходило это ровно у всех сразу — на первом запуске после
+// обновления, когда у сохранённых вкладок ещё нет id разговора.
+//
+// Не нашли — вкладка просто стартует свежей. Это то же поведение, что и при ненайденном имени
+// раньше, и оно строго лучше, чем возобновление в тупик.
 ipcMain.handle('session:canResumeName', (_e, cwd, name) => {
   const want = String(name || '').trim();
   if (!/^swarm-[0-9a-z]{4,16}$/i.test(want)) return false;
-  const dirs = [];
-  try { if (cwd) dirs.push(projectDir(cwd)); } catch (_) {}
-  try {
-    const root = path.join(os.homedir(), '.claude', 'projects');
-    for (const d of fs.readdirSync(root)) dirs.push(path.join(root, d));
-  } catch (_) {}
-  for (const dir of dirs) {
-    let names;
-    try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')); } catch (_) { continue; }
-    for (const n of names) {
-      // Имя лежит в первой записи файла, поэтому читаем только её начало.
-      try {
-        const fd = fs.openSync(path.join(dir, n), 'r');
-        const buf = Buffer.alloc(4096);
-        const read = fs.readSync(fd, buf, 0, 4096, 0);
-        fs.closeSync(fd);
-        if (buf.slice(0, read).toString('utf8').includes(`"customTitle":"${want}"`)) return true;
-      } catch (_) { /* файл исчез или не читается — не наш случай */ }
-    }
+  if (!cwd) return false;
+  let dir;
+  try { dir = projectDir(cwd); } catch (_) { return false; }
+  let names;
+  try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')); } catch (_) { return false; }
+  for (const n of names) {
+    if (sessionHead(path.join(dir, n)).includes(`"customTitle":"${want}"`)) return true;
   }
   return false;
 });

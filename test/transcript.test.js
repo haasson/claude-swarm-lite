@@ -214,6 +214,42 @@ test('pickByInjected отказывается при двух совпадени
   assert.strictEqual(T.pickByInjected(cands, injected), null);
 });
 
+// --- текст этого хода или прошлого -------------------------------------------
+// Живая беда: статус «готов» приходит от хука Stop сразу, а classify до конца своего отстоя
+// (READY_DEBOUNCE_MS) держит «работает» и текст НЕ обновляет. Значит в момент, когда мост
+// решает докладывать, свежего текста ещё нет — а прошлый есть и выглядит нормально. В чат
+// уезжал ответ не на ту задачу.
+
+test('belongsToTurn: текст, записанный после начала хода, принадлежит ходу', () => {
+  const turnStarted = 1000;
+  assert.strictEqual(T.belongsToTurn(1200, turnStarted), true);
+  assert.strictEqual(T.belongsToTurn(1000, turnStarted), true, 'ровно в начало — уже этот ход');
+});
+
+test('belongsToTurn: текст прошлого хода не сойдёт за итог нового', () => {
+  assert.strictEqual(T.belongsToTurn(900, 1000), false);
+});
+
+test('belongsToTurn: пустые значения не притворяются свежим текстом', () => {
+  assert.strictEqual(T.belongsToTurn(0, 1000), false, 'текста ещё не было');
+  assert.strictEqual(T.belongsToTurn(null, 1000), false);
+  assert.strictEqual(T.belongsToTurn(undefined, 1000), false);
+});
+
+// Ход ещё не начинался (вкладка только что открыта, приложение только что запущено): тогда
+// сравнивать не с чем, и текст стенограммы — единственное, что есть. Отказываться от него
+// незачем: он про то, что в этой вкладке и происходило.
+test('belongsToTurn: без известного начала хода текст годится', () => {
+  assert.strictEqual(T.belongsToTurn(1200, 0), true);
+  assert.strictEqual(T.belongsToTurn(1200, null), true);
+});
+
+// Отстой classify — это НЕ таймер моста, а причина, по которой мост обязан подождать. Пусть
+// связь между ними будет видна: если отстой станет нулём, ждать было бы нечего.
+test('READY_DEBOUNCE_MS — не ноль, иначе и ждать текст незачем', () => {
+  assert.ok(T.READY_DEBOUNCE_MS > 0);
+});
+
 for (const [name, fn] of tests) {
   try { fn(); passed++; }
   catch (e) { console.error('FAIL: ' + name + '\n  ' + e.message); process.exitCode = 1; }
