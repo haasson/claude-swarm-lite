@@ -635,6 +635,10 @@ setInterval(() => {
       // The question, word for word — only for a turn that ended asking. Anything else
       // would be quoting streamed prose back at the user.
       d.trText = v && v.status === 'waiting' ? askExcerpt(ASK_MATCHER, v.text, TR_TEXT_MAX) : '';
+      // А это — ВЕСЬ финальный текст хода, для телеги. d.trText намеренно обрезан от
+      // фразы-триггера («Сейчас от тебя: …») и годится только в подпись на плашке вкладки:
+      // в чат так уезжал огрызок, хотя всё полезное агент сказал ДО этой фразы.
+      if (v) d.trFinal = String(v.text || '').trim().slice(0, TR_REPLY_MAX);
       // The finished turn's closing message — what the Telegram bridge sends back as
       // «вот что получилось». Kept whole-ish: it's a report, not a chip label.
       if (v && v.status === 'ready') d.trReply = String(v.text || '').trim().slice(0, TR_REPLY_MAX);
@@ -1591,7 +1595,10 @@ async function tgNotifyWaiting(id, d) {
     }
   }
   const head = permission ? '🔐 просит разрешение' : '❓ вопрос';
-  const body = d.question ? '\n\n' + d.question : '';
+  // Целиком, а не огрызок с «Сейчас от тебя»: человек в дороге читает ход один раз, и
+  // выводы агента ему нужны не меньше самого вопроса. d.question остаётся запасным.
+  const said = String(d.trFinal || '').trim() || d.question;
+  const body = said ? '\n\n' + said : '';
   const tail = permission
     ? '\n\nВариантов не разобрал — ответь за компьютером.'
     : '\n\nОтветь реплаем на это сообщение.';
