@@ -24,6 +24,32 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');   // randomUUID for the pinned Claude session id
 
+// --- ОДНА КОПИЯ НА МАШИНУ -----------------------------------------------------
+// Второй сворм — это не «ещё один пульт», а тихая порча первого, потому что профиль у них
+// один, и на двух писателей он не рассчитан:
+//
+//   • у бота Telegram может быть ТОЛЬКО ОДИН читатель. Две копии зовут getUpdates, Telegram
+//     отвечает одной из них 409, и её мост гаснет насовсем (так и надо — повторы 409 не
+//     лечат, см. telegram.js);
+//   • список «эта вкладка отвечает в телегу» (swarm-tgmode.json) каждая копия пишет ЦЕЛИКОМ
+//     из своих вкладок, то есть затирает чужой. Его читает хук, чтобы отказывать агенту в
+//     интерактивном выборе «1/2/3» — затёрли, и агент снова рисует выбор в терминале, куда
+//     никто не смотрит, а в телегу уходит вопрос, на который нельзя ответить;
+//   • правило «один разговор Клода — одна вкладка» держится множеством внутри процесса. У
+//     второй копии оно своё, поэтому две вкладки могут сесть на один файл и показывать статус
+//     чужого агента;
+//   • журнал моста дописывают и переливают обе копии, каждая по своему счёту размера.
+//
+// Плюс сохранённый список вкладок один: вторая копия поднимет тех же агентов в тех же папках.
+//
+// `return` в CommonJS-модуле законен (модуль обёрнут в функцию) и здесь важен: без него ниже
+// продолжила бы исполняться регистрация обработчиков и создание окна, пока app.quit() ещё
+// только собирается закрываться.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+  return;
+}
+
 // Windows taskbar/Start Menu group by AppUserModelID. Must match package.json
 // `appId` (NSIS shortcuts use it); without this the shell often shows a generic
 // white-document icon even when the .exe has a real icon embedded.
@@ -2844,14 +2870,40 @@ ipcMain.on('ui:repaint', () => {
   for (const d of det.values()) d.graceUntil = until;
 });
 
-// --- IPC: bring the app forward (clicked a notification) ---------------------
-ipcMain.on('app:focus', () => {
+// --- bring the app forward ----------------------------------------------------
+// Общая для двух поводов: клик по уведомлению и попытка запустить второй сворм.
+function raiseWindow() {
   if (win && !win.isDestroyed()) {
     if (win.isMinimized()) win.restore();
     win.show();
     win.focus();
   }
   app.focus({ steal: true });
+}
+
+ipcMain.on('app:focus', () => raiseWindow());
+
+// Годится ли рабочая папка второго запуска под новую вкладку.
+//
+// Смысл проверки в том, что папка есть НЕ ВСЕГДА: запуск из Finder или через `open` даёт
+// корень файловой системы — это не проект, и открывать там агента бессмысленно. А вот запуск
+// `swarm` из терминала внутри репозитория даёт именно то, что человек имел в виду.
+function launchCwd(dir) {
+  const p = String(dir || '');
+  if (!p) return null;
+  if (p === path.parse(p).root) return null;      // «/» на маке, «C:\» на винде — не проект
+  try { if (!fs.statSync(p).isDirectory()) return null; } catch (_) { return null; }
+  return p;
+}
+
+// Вторую копию запустить нельзя (замок выше), но САМА ПОПЫТКА — это осмысленный жест: человек
+// пришёл к сворму, и чаще всего из папки, с которой хочет работать. Поэтому не молча
+// поднимаем окно, а ещё и открываем в этой папке агента — тем же путём, которым это делает
+// /new из телеги (вкладки умеет только рендерер, там xterm и DOM).
+app.on('second-instance', (_e, _argv, workingDirectory) => {
+  raiseWindow();
+  const cwd = launchCwd(workingDirectory);
+  if (cwd) safeSend('app:createTab', { cwd });
 });
 
 // --- IPC: copy text to the clipboard -----------------------------------------
