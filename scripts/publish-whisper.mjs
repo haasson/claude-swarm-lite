@@ -37,7 +37,10 @@ import os from 'node:os';
 import path from 'node:path';
 
 const VERSION = process.argv[2] || '1.9.1';
-const REPO = 'haasson/claude-swarm-lite';
+// Одно место на всё приложение — поле repository в package.json (см. updater-core.ghSlug).
+const { ghSlug } = await import('../updater-core.js').then((m) => m.default || m);
+const REPO = ghSlug(JSON.parse(fs.readFileSync('package.json', 'utf8')).repository);
+if (!REPO) fail('в package.json нет repository — некуда публиковать');
 const ZIP = `https://github.com/ggml-org/whisper.cpp/releases/download/v${VERSION}/whisper-bin-x64.zip`;
 const WIN_KEEP = ['whisper-cli.exe', 'whisper.dll', 'ggml.dll', 'ggml-base.dll'];
 

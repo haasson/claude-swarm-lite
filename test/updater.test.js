@@ -60,9 +60,32 @@ test('decideUpdate: installer when newer but runtimeId differs', () => {
   assert.ok(d.installers.dmg);
 });
 
+// owner/repo из package.json — одно место на всё приложение. Тест на все три формы записи
+// сразу: переименование аккаунта должно править одну строку, а не четыре файла.
+test('ghSlug понимает все формы поля repository', () => {
+  assert.strictEqual(core.ghSlug('github:owner/repo'), 'owner/repo');
+  assert.strictEqual(core.ghSlug('https://github.com/owner/repo.git'), 'owner/repo');
+  assert.strictEqual(core.ghSlug('https://github.com/owner/repo'), 'owner/repo');
+  assert.strictEqual(core.ghSlug('git@github.com:owner/repo.git'), 'owner/repo');
+  assert.strictEqual(core.ghSlug({ type: 'git', url: 'https://github.com/owner/repo.git' }), 'owner/repo');
+});
+
+test('ghSlug возвращает null, а не мусор, когда взять неоткуда', () => {
+  assert.strictEqual(core.ghSlug(undefined), null);
+  assert.strictEqual(core.ghSlug(''), null);
+  assert.strictEqual(core.ghSlug('https://gitlab.example/owner/repo.git'), null);
+});
+
+// Живое package.json: без repository обновления просто не найдут, куда идти, поэтому
+// проверяем не форму, а что оно на месте и разбирается.
+test('repository в package.json разбирается в owner/repo', () => {
+  const pkg = require('../package.json');
+  assert.ok(core.ghSlug(pkg.repository), 'repository в package.json не разбирается: ' + pkg.repository);
+});
+
 // Редиректы. Ассеты гитхаба лежат за 302, и без прохода по Location обновление не
 // работает вообще — поэтому решение вынесено в чистую функцию и покрыто здесь.
-const GH = 'https://github.com/haasson/claude-swarm-lite/releases/latest/download/manifest.json';
+const GH = 'https://github.com/owner/repo/releases/latest/download/manifest.json';
 
 test('nextHop: 200 — приехали', () => {
   assert.strictEqual(core.nextHop(200, undefined, GH, 0).kind, 'ok');
@@ -77,12 +100,9 @@ test('nextHop: идёт за Location на всех редиректных ст�
 });
 
 test('nextHop: относительный Location разрешается от текущего адреса', () => {
-  const h = core.nextHop(302, '/haasson/claude-swarm-lite/releases/download/v0.22.0/app.asar', GH, 0);
+  const h = core.nextHop(302, '/owner/repo/releases/download/v0.22.0/app.asar', GH, 0);
   assert.strictEqual(h.kind, 'follow');
-  assert.strictEqual(
-    h.url,
-    'https://github.com/haasson/claude-swarm-lite/releases/download/v0.22.0/app.asar',
-  );
+  assert.strictEqual(h.url, 'https://github.com/owner/repo/releases/download/v0.22.0/app.asar');
 });
 
 test('nextHop: петля обрывается на лимите', () => {

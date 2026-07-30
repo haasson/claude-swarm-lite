@@ -17,8 +17,13 @@ const core = require('./updater-core');
 // Из выбора «latest» исключены черновики и prerelease — на этом держатся сразу два
 // решения: релиз публикуется черновиком, пока CI не доложит в него .exe, а релизы
 // whisper помечаются prerelease, чтобы не перебивать собой релизы приложения.
-const MANIFEST_URL =
-  'https://github.com/haasson/claude-swarm-lite/releases/latest/download/manifest.json';
+//
+// Адрес собирается из package.json, а не вписан здесь: см. core.ghSlug.
+function manifestUrl() {
+  const slug = core.ghSlug(require('./package.json').repository);
+  if (!slug) throw new Error('в package.json нет repository — неизвестно, откуда брать обновления');
+  return `https://github.com/${slug}/releases/latest/download/manifest.json`;
+}
 
 // After a deferred asar-swap (Windows / macOS), relaunch must NOT call
 // app.relaunch() — a helper script starts the app once this process has fully
@@ -108,7 +113,7 @@ async function download(url, destPath, expectedSha, onProgress) {
 async function checkForUpdate() {
   if (!enabled()) return { kind: 'none' };
   const info = readBuildInfo();
-  const buf = await httpGet(MANIFEST_URL);
+  const buf = await httpGet(manifestUrl());
   const manifest = JSON.parse(buf.toString('utf8'));
   return core.decideUpdate(app.getVersion(), info.runtimeId, manifest);
 }

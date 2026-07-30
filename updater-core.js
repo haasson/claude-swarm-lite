@@ -19,6 +19,19 @@ function computeRuntimeId(electronVersion, nodePtyVersion) {
   return crypto.createHash('sha256').update(`${electronVersion}|${nodePtyVersion}`).digest('hex');
 }
 
+// owner/repo из поля repository в package.json. Единственное место, где имя владельца и
+// репозитория живёт: раньше оно было вписано в updater.js, main.js и два скрипта, и
+// переименование аккаунта на гитхабе означало четыре правки плюс тесты — то есть шанс
+// забыть одну и узнать об этом, когда обновления перестанут приходить.
+//
+// Принимает все три формы, которыми repository бывает записан: 'github:owner/repo',
+// 'https://github.com/owner/repo.git' и 'git@github.com:owner/repo.git'.
+function ghSlug(repository) {
+  const url = typeof repository === 'string' ? repository : (repository && repository.url) || '';
+  const m = String(url).match(/github(?:\.com[/:]|:)([^/]+)\/([^/]+?)(?:\.git)?\/?$/);
+  return m ? `${m[1]}/${m[2]}` : null;
+}
+
 // Сколько раз согласны пойти за Location, прежде чем считать это петлёй.
 const MAX_REDIRECTS = 5;
 
@@ -74,4 +87,5 @@ function decideUpdate(installedVersion, installedRuntimeId, manifest) {
 
 module.exports = {
   compareVersions, computeRuntimeId, validateManifest, decideUpdate, nextHop, MAX_REDIRECTS,
+  ghSlug,
 };

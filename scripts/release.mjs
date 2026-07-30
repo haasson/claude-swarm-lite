@@ -34,7 +34,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const REPO = 'haasson/claude-swarm-lite';
+// Одно место на всё приложение — поле repository в package.json (см. updater-core.ghSlug).
+const { ghSlug } = await import('../updater-core.js').then((m) => m.default || m);
+const REPO = ghSlug(JSON.parse(readFileSync('package.json', 'utf8')).repository);
+if (!REPO) fail('в package.json нет repository — некуда публиковать');
 
 const bump = process.argv[2] || 'patch';
 if (!['patch', 'minor', 'major'].includes(bump)) fail('argument must be patch | minor | major');

@@ -1123,7 +1123,11 @@ function tgWhisperBin() {
 // prerelease. Иначе свежеопубликованный распознаватель станет «latest», и обновление
 // приложения начнёт получать 404 вместо манифеста. Ассеты у prerelease качаются как
 // обычно, из выбора «latest» такой релиз просто исключён.
-const GH_REPO = 'https://github.com/haasson/claude-swarm-lite';
+//
+// Владелец и репозиторий — из package.json, одним местом на всё приложение
+// (см. updaterCore.ghSlug): переименование аккаунта не должно означать правку в четырёх
+// файлах, из которых один забудут.
+const GH_REPO = `https://github.com/${require('./updater-core').ghSlug(require('./package.json').repository)}`;
 const VOICE_REG = `${GH_REPO}/releases/download`;
 const VOICE_MANIFEST_URL = `${VOICE_REG}/whisper/whisper.json`;
 const VOICE_PROGRESS_MS = 200;      // как часто обновлять полосу, а не на каждый пакет
