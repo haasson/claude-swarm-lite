@@ -244,6 +244,49 @@ test('a rule with a number in it is furniture, not a question', () => {
   }
 });
 
+// --- мой собственный ответ — не вопрос ---------------------------------------
+// Из живого случая: вкладка спросила, я ответил и переключился — и получил уведомление со
+// СВОИМ ЖЕ ответом в тексте. Отправленную реплику Claude Code оставляет в переписке как
+// «> текст», то есть она лежит НИЖЕ вопроса, а вопрос ищется снизу вверх.
+test('extractQuestion skips my own submitted reply', () => {
+  const snap = [
+    '⏺ Готово: миграция подготовлена.',
+    '',
+    '  Сейчас от тебя: решить, гоняем ли миграцию сейчас.',
+    '',
+    '> да, гоняй',
+    '',
+    '> ',
+    '  ⏸ manual mode on',
+  ].join('\n');
+  assert.strictEqual(S.extractQuestion(snap), 'Сейчас от тебя: решить, гоняем ли миграцию сейчас.');
+  for (const mine of ['> да, гоняй', '❯ поправь заголовок', '» ладно']) {
+    assert.strictEqual(S.extractQuestion('Какой вариант берём?\n' + mine), 'Какой вариант берём?', mine);
+  }
+});
+
+// --- отпечаток зова: тот же зов или новый ------------------------------------
+test('askFingerprint: тот же зов на экране — тот же отпечаток', () => {
+  const before = ['  Сейчас от тебя: решить, гоняем ли миграцию.', '', '> '].join('\n');
+  const after = ['  Сейчас от тебя: решить, гоняем ли миграцию.', '', '> да, гоняй', '', '> '].join('\n');
+  assert.ok(S.askFingerprint(before), 'зов на экране есть');
+  assert.strictEqual(S.askFingerprint(after), S.askFingerprint(before), 'мой ответ ниже зова его не меняет');
+});
+
+test('askFingerprint: новый зов и повтор слово в слово меняют отпечаток', () => {
+  const one = 'Сейчас от тебя: решить, гоняем ли миграцию.';
+  const two = 'Сейчас от тебя: путь к схеме.';
+  const fp = S.askFingerprint(one);
+  assert.notStrictEqual(S.askFingerprint(two), fp, 'другой зов');
+  assert.notStrictEqual(S.askFingerprint(one + '\n> да\n' + one), fp, 'тот же зов дважды — это второй зов');
+});
+
+test('askFingerprint: без зова отпечатка нет (в т.ч. «ничего, жди»)', () => {
+  assert.strictEqual(S.askFingerprint('обычный вывод\n> '), '');
+  assert.strictEqual(S.askFingerprint('Сейчас от тебя: ничего, жди результата'), '');
+  assert.strictEqual(S.askFingerprint(null), '');
+});
+
 test('a title framed by rules keeps the title and drops the rules', () => {
   assert.strictEqual(S.extractQuestion('──── Bash command ────\n\n> \n'), 'Bash command');
   assert.strictEqual(S.extractQuestion('╭─ Plan ─────────────╮\n\n> \n'), 'Plan');

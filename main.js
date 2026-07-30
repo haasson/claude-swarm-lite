@@ -328,7 +328,7 @@ process.on('unhandledRejection', (reason) => reportMainError(reason));
 // tell "waiting for a prompt" apart from "idle/done". We deliberately do NOT
 // surface Claude's token counter or activity words — just the four states.
 const { Terminal: HeadlessTerminal } = require('@xterm/headless');
-const { extractQuestion, lastAgentBlock, readMode, modeTitle, modeFlag, countSubagents, contentEnd, snapshotRows, snapshotWrapped, setAskPhrases, parsePrompt } = require('./screen');
+const { extractQuestion, lastAgentBlock, readMode, modeTitle, modeFlag, countSubagents, contentEnd, snapshotRows, snapshotWrapped, setAskPhrases, askFingerprint, parsePrompt } = require('./screen');
 // The status state machine + «ждёт» latch + hook arbitration live in a pure,
 // unit-tested module; osc.js sniffs hook markers out of the raw pty stream.
 const { tickStatus, applyHook, applyTranscript, keyboardEvent } = require('./detector');
@@ -356,6 +356,10 @@ function makeDetector(cols, rows) {
     // noise, release only when the agent genuinely resumed. See detector.js.
     waitLatched: false, waitKind: null, waitingKind: null, chromeGoneSince: 0,
     answeredAt: 0,             // when you last pressed Enter here (see session:input)
+    // Отпечаток зова прозой, на который ты ответил этим Enter. Строка «Сейчас от тебя: …»
+    // остаётся на экране и после ответа, и без этой отметки вкладка снова поднимала «ждёт» —
+    // см. detector.asksNow.
+    askAnswered: '',
     // Hooks channel: once a marker arrives, hooksActive drives status; oscCarry
     // reassembles a marker split across pty chunks. See osc.js / detector.js.
     hooksActive: false, hookState: null, oscCarry: '',
@@ -394,6 +398,19 @@ function makeDetector(cols, rows) {
 // (a shrinking TUI frame leaves blank rows the buffer never gives back).
 function snapshot(d) {
   return snapshotRows(d.term.buffer.active, SNAP_ROWS);
+}
+
+// Ты ответил в эту вкладку (за клавиатурой или с телефона — путь один, см. tgAnswer).
+//
+// Кроме времени запоминаем ОТПЕЧАТОК зова прозой, который сейчас на экране: диалог разрешения
+// Claude Code стирает сам, а строка «Сейчас от тебя: …» остаётся висеть, и без этой отметки
+// вкладка через пару секунд снова читала её как просьбу — со всеми последствиями вплоть до
+// уведомления о зове, на который ты только что ответил. См. detector.asksNow.
+function markAnswered(d, now) {
+  d.graceUntil = 0;
+  d.lastDataAt = now;
+  d.answeredAt = now;
+  try { d.askAnswered = askFingerprint(snapshot(d)); } catch (_) { d.askAnswered = ''; }
 }
 
 // То же, но настолько высоко, насколько помнит эмулятор, и с СКЛЕЕННЫМИ переносами: из
@@ -1826,7 +1843,7 @@ function tgAnswer(id, text) {
   }, TG_ENTER_DELAY_MS);
   const d = det.get(id);
   if (d) {
-    d.graceUntil = 0; d.lastDataAt = Date.now(); d.answeredAt = Date.now();
+    markAnswered(d, Date.now());
     // From now on this tab is being driven from a phone: the agent gets told to answer
     // accordingly, and its finished turn is relayed back. Cleared the moment you touch
     // the keyboard here (see the session:input handler) — the mode tracks where YOU are.
@@ -3091,9 +3108,7 @@ ipcMain.on('session:input', (_event, { id, data }) => {
     // lastDataAt stale so the agent's first output didn't read as «работает».
     // This is a hint, not a verdict: a quiz answers one question and paints the
     // next, and detector.js keeps «ждёт» whenever a prompt box is still on screen.
-    d.graceUntil = 0;
-    d.lastDataAt = now;
-    d.answeredAt = now;
+    markAnswered(d, now);
   } else {
     d.graceUntil = now + INPUT_GRACE_MS;
   }

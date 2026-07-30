@@ -350,6 +350,13 @@ const RUN_BUFFER_MS = 2500; // delay painting "работает" so sub-buffer b
 // debounces the real release. It used to be RUN_BUFFER_MS and then STACKED with it,
 // so answering a prompt left the tab «ждёт» for up to five seconds.
 const LEAVE_WAIT_MS = 1200;
+// …и держать нечего, когда из «ждёт» вывел ТЫ САМ: ты только что нажал Enter в этой вкладке,
+// значит уход из ожидания настоящий, а не блик перекраса. Без этого вкладка ещё секунду с
+// лишним висела «ждёт ответа» после твоего же ответа — ровно то, что видно глазами.
+const SELF_ANSWER_MS = 3000;
+function answeredHere(s) {
+  return !!(s && s.answeredAt) && Date.now() - s.answeredAt < SELF_ANSWER_MS;
+}
 
 // Диагностика перекраса вкладок: включить в devtools-консоли `swarmStatusDebug(true)`
 // (сохраняется в localStorage). Логирует и входящий поток статусов из main, и
@@ -413,6 +420,10 @@ function effectiveStatus(s) {
 // only on real IPC transitions (opts.notify), never on a settings re-apply.
 function applyStatus(s, opts) {
   const eff = effectiveStatus(s);
+  // Уход из «ждёт» уже подтверждён: либо мы отстояли LEAVE_WAIT_MS, либо ты сам ответил в
+  // этой вкладке. И то и другое означает «буферизовать больше нечего» — ни здесь, ни ниже
+  // на пути в «работает».
+  const leaveWait = !!(opts && opts.leaveWait) || answeredHere(s);
 
   // Уход из waiting дебаунсим: короткий блик в ready/running, пока читаешь вопрос,
   // не должен выкидывать сессию из очереди Пульта и перематывать выбор. Возврат в
@@ -420,7 +431,7 @@ function applyStatus(s, opts) {
   // (Это НЕ лечит долгий перекрас из main — только стабилизирует очередь.)
   if (eff.status === 'waiting') {
     if (s.leaveWaitTimer) { clearTimeout(s.leaveWaitTimer); s.leaveWaitTimer = null; }
-  } else if (s.status === 'waiting' && !(opts && opts.leaveWait)) {
+  } else if (s.status === 'waiting' && !leaveWait) {
     if (!s.leaveWaitTimer) {
       s.leaveWaitTimer = setTimeout(() => {
         s.leaveWaitTimer = null;
@@ -433,7 +444,7 @@ function applyStatus(s, opts) {
   if (eff.status === 'running') {
     if (s.runningSince == null) s.runningSince = Date.now(); // real start of this run
     if (s.status === 'running') return;
-    if (opts && opts.leaveWait) {
+    if (leaveWait && s.status === 'waiting') {
       // Coming out of «ждёт»: we already held the tab for LEAVE_WAIT_MS, which IS
       // the anti-blip buffer. Stacking RUN_BUFFER_MS on top of it was the lag
       // between answering a prompt and the tab finally turning «работает».
@@ -868,7 +879,13 @@ async function createSession(opts = {}) {
     for (const ch of clean) {
       if (inEsc) { if (/[a-zA-Z~]/.test(ch)) inEsc = false; continue; }
       if (ch === '\x1b') { inEsc = true; cmdBuf = ''; }
-      else if (ch === '\r' || ch === '\n') { rememberStartCommand(cmdBuf, id); cmdBuf = ''; }
+      else if (ch === '\r' || ch === '\n') {
+        rememberStartCommand(cmdBuf, id);
+        cmdBuf = '';
+        // Ты ответил САМ: с этого момента уход вкладки из «ждёт» не буферизуем (answeredHere).
+        const sess = sessions.get(id);
+        if (sess) sess.answeredAt = Date.now();
+      }
       else if (ch === '\x7f' || ch === '\b') cmdBuf = cmdBuf.slice(0, -1);
       else if (ch >= ' ') cmdBuf += ch;
     }
@@ -931,6 +948,7 @@ async function createSession(opts = {}) {
   sessions.set(id, {
     term, fit, holder, tab, alive: true, status: null, cwd: resolvedCwd, id, sumDot: null,
     cmd, flags, blank, sessionKey: sessionKey || null, tabKey, sub: 0, rawStatus: null, rawDetail: null,
+    answeredAt: 0,   // когда ты последний раз нажал Enter в этой вкладке (см. answeredHere)
     // The conversation this tab is in. Saved with the tab; the next launch resumes it.
     claudeSessionId: claudeSessionId || null,
   });

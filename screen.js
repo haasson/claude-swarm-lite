@@ -191,6 +191,11 @@ function modeTitle(id) {
 // Claude Code стоит ПОЛЕ ВВОДА с текстом человека. Из-за этого в чат уезжало то линейка
 // рамки, то собственный вопрос пользователя, отражённый ему же как «ответ агента». Поэтому
 // строки поля ввода и прозы человека (начинаются с ❯) пропускаются наравне с мебелью.
+//
+// Реплики человека Claude Code оставляет в переписке как «> текст» — то есть отправленный
+// ответ никуда с экрана не девается и лежит НИЖЕ вопроса, на который отвечал. Поэтому этот
+// же образец обязателен и там, где строку показывают человеку как вопрос (extractQuestion):
+// иначе уведомление приходит с его собственным ответом.
 const USER_LINE_RE = /^[❯>»]\s*\S/;
 const AGENT_BULLET_RE = /^[⏺]\s*/;
 
@@ -275,6 +280,7 @@ function extractQuestion(snapshot) {
     if (OPTION_RE.test(t)) continue;      // "❯ 1. Yes"
     if (HINT_RE.test(t)) continue;        // "Esc to cancel"
     if (CHROME_RE.test(t)) continue;      // "⏵⏵ auto mode on (shift+tab to cycle)"
+    if (USER_LINE_RE.test(t)) continue;   // «> да, гоняй» — это МОЙ ответ, а не вопрос
     return t.length > MAX ? t.slice(0, MAX - 1).trimEnd() + '…' : t;
   }
   return null;
@@ -306,6 +312,24 @@ function setAskPhrases(list) {
 // «Сейчас от тебя: ничего, жди …»).
 function asksForInput(snapshot) {
   return asksWith(askMatcher, snapshot);
+}
+
+// Отпечаток ЗОВА, как он сейчас нарисован на экране: строки с настоящей просьбой, слитые в
+// один короткий хеш.
+//
+// Нужен потому, что зов прозой — это не диалог, а текст переписки: диалог разрешения Claude
+// Code стирает в тот же миг, когда ты ответил, а строка «Сейчас от тебя: …» остаётся висеть
+// и после ответа. Отличить «меня зовут» от «я это уже закрыл» по одному факту наличия строки
+// нельзя — нужен признак, что зов ИЗМЕНИЛСЯ с момента моего ответа. Считаем по всем строкам
+// сразу, а не по первой: повторный точно такой же зов даёт вторую строку, и отпечаток от этого
+// меняется — иначе повтор слова в слово выглядел бы как уже отвеченный.
+function askFingerprint(snapshot) {
+  const hits = [];
+  for (const line of String(snapshot == null ? '' : snapshot).split('\n')) {
+    const t = clean(line);
+    if (t && asksWith(askMatcher, t)) hits.push(t);
+  }
+  return hits.length ? fingerprintOf(hits.join('|')) : '';
 }
 
 // --- the prompt box as data ---------------------------------------------------
@@ -490,7 +514,7 @@ function countSubagents(snapshot) {
 
 module.exports = {
   extractQuestion, lastAgentLine, lastAgentBlock, readMode, modeTitle, modeFlag, MODE_TITLES, MODE_FLAGS,
-  inferWaitingKind, asksForInput, setAskPhrases, countSubagents,
+  inferWaitingKind, asksForInput, askFingerprint, setAskPhrases, countSubagents,
   parsePrompt, fingerprintOf,
   contentEnd, snapshotRows, snapshotWrapped,
 };

@@ -175,6 +175,53 @@ test('latch: a stale answeredAt does not shortcut the debounce', () => {
   assert.strictEqual(d.waitLatched, true);
 });
 
+// --- зов прозой, на который уже ответили --------------------------------------
+// Живой случай: вкладка спросила прозой, я ответил и переключился на другую. Строка «Сейчас
+// от тебя: …» осталась в переписке, вкладка через пару секунд снова прочитала её как просьбу
+// — и, будучи уже фоновой, выкинула уведомление о зове, на который я только что ответил.
+// Признак «этот зов закрыт» — отпечаток строк зова, снятый в момент Enter (main.markAnswered).
+const S = require('../screen');
+const ASK_ANSWERED = [ASK, '', '> да, гоняй', '', '> '].join('\n');
+const answered = (snap, over) => mkD(Object.assign({ askAnswered: S.askFingerprint(snap) }, over));
+
+test('asksNow: тот же зов после ответа не зовёт, а новый — зовёт', () => {
+  const d = answered(ASK);
+  assert.strictEqual(D.asksNow(d, ASK_ANSWERED), false, 'на этот зов я ответил');
+  assert.strictEqual(D.asksNow(d, 'Сейчас от тебя: а теперь путь к схеме'), true, 'зов другой');
+});
+
+test('asksNow: без отметки об ответе зов считается (обычный случай)', () => {
+  assert.strictEqual(D.asksNow(mkD(), ASK), true);
+});
+
+test('asksNow: ушедший с экрана зов стирает память об ответе', () => {
+  const d = answered(ASK);
+  assert.strictEqual(D.asksNow(d, QUIET), false);
+  assert.strictEqual(d.askAnswered, '', 'зова на экране нет — забыли, что отвечали');
+  assert.strictEqual(D.asksNow(d, ASK), true, 'тот же текст, но это уже новый зов');
+});
+
+test('decide: отвеченный зов не поднимает «ждёт» заново (тишина → готов)', () => {
+  const d = answered(ASK);
+  assert.strictEqual(D.decide(d, NOW, ASK_ANSWERED).status, 'ready');
+  assert.strictEqual(D.decide(mkD(), NOW, ASK_ANSWERED).status, 'waiting', 'без отметки — по-прежнему зов');
+});
+
+test('latch: отвеченный зов больше не пиннит «ждёт» без спиннера', () => {
+  // Раньше строка в переписке держала вкладку в «ждёт» до тех пор, пока не завертится
+  // спиннер, — то есть после ответа она секунды висела «ждёт ответа».
+  const d = answered(ASK, { waitLatched: true, waitKind: 'question', answeredAt: NOW, lastDataAt: NOW });
+  const eff = D.applyLatch(d, NOW, ASK_ANSWERED, D.decide(d, NOW, ASK_ANSWERED));
+  assert.strictEqual(eff.status, 'running');
+  assert.strictEqual(d.waitLatched, false);
+});
+
+test('arbitrate: хук «готов» + отвеченный зов на экране = готов, а не «ждёт»', () => {
+  const d = answered(ASK);
+  D.applyHook(d, 'idle', NOW);
+  assert.strictEqual(D.tickStatus(d, NOW, ASK_ANSWERED).status, 'ready');
+});
+
 test('latch: kind sharpens question → permission', () => {
   const d = mkD();
   D.applyLatch(d, NOW, QUESTION, D.decide(d, NOW, QUESTION));     // latch as question

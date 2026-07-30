@@ -6,7 +6,7 @@
 // reads `d.lastDataAt`, `applyLatch` reads/mutates the latch fields on `d`, and
 // both take the current screen `snap` as a string.
 
-const { inferWaitingKind, asksForInput } = require('./screen');
+const { inferWaitingKind, asksForInput, askFingerprint } = require('./screen');
 
 // --- что человек сделал на клавиатуре -----------------------------------------
 // Байты из рендерера — это НЕ только печать. Там же приходят стрелки, отчёты мыши и прочие
@@ -102,6 +102,27 @@ const RE_RUNNING = /(?:…|\.\.\.)\s*\(\d+\s*[smh]\b|\besc to interrupt\b/i;
 // (and excludes the «ничего, жди» non-requests). Checked LAST, only on the path
 // that would otherwise return «готов»: a stale marker must never outvote the spinner.
 
+// Зовут ли меня прозой ПО-НОВОМУ — то есть зовом, который я ещё не закрывал.
+//
+// Строка «Сейчас от тебя: …» — это переписка, а не живой диалог: ответив, ты уходишь дальше,
+// а строка остаётся на экране и продолжает читаться как просьба. Из-за этого вкладка через
+// пару секунд после ответа снова поднимала «ждёт ответа» — а если ты успел переключиться,
+// то это уже фоновая вкладка, и она честно выкидывала уведомление о зове, на который ты
+// только что ответил (с твоим же ответом в тексте — см. USER_LINE_RE в screen.js).
+//
+// Признак «закрыл» — отпечаток зова, снятый в момент твоего Enter (main ставит d.askAnswered
+// там же, где answeredAt). Пока на экране ровно тот же зов, он не считается; изменился или
+// добавился новый — считается снова. Когда зов уходит с экрана совсем, память об ответе
+// стирается: следующий зов может оказаться слово в слово таким же, и молчать про него нельзя.
+function asksNow(d, snap) {
+  if (!asksForInput(snap)) {
+    if (d) d.askAnswered = '';
+    return false;
+  }
+  if (!d || !d.askAnswered) return true;
+  return askFingerprint(snap) !== d.askAnswered;
+}
+
 function mkWaiting(snap) {
   return { status: 'waiting', detail: 'ждёт ответа', kind: inferWaitingKind(snap) };
 }
@@ -131,8 +152,9 @@ function decide(d, now, snap) {
     return { status: 'running', detail: 'работает' };
   }
   // Quiet, no spinner, no prompt box — but the agent signed off asking for input.
-  // asksForInput excludes «Сейчас от тебя: ничего, жди …» (not a real request).
-  if (asksForInput(snap)) {
+  // asksNow excludes «Сейчас от тебя: ничего, жди …» (not a real request) and the call
+  // you already answered (its line just stays on screen).
+  if (asksNow(d, snap)) {
     return mkWaiting(snap);
   }
 
@@ -219,7 +241,9 @@ function applyLatch(d, now, snap, raw) {
     // A prose question with no sign of work: nothing has happened yet, keep «ждёт».
     // Skipped when a transcript drives this session — the file already told us whether
     // the turn ended with a question, and a line left on screen is not evidence.
-    if (raw.from !== 'transcript' && asksForInput(snap)) {
+    // asksNow, not asksForInput: the line you just answered pinned the tab to «ждёт»
+    // until the agent's spinner finally showed up.
+    if (raw.from !== 'transcript' && asksNow(d, snap)) {
       d.chromeGoneSince = 0;
       return { status: 'waiting', detail: 'ждёт ответа', kind: d.waitKind };
     }
@@ -281,7 +305,7 @@ function arbitrate(d, snap) {
     return { status: 'waiting', detail: 'ждёт ответа', kind: hs.kind || null };
   }
   if (trNewer) return fromTranscript(tr);
-  if (!tr && hs.status === 'ready' && asksForInput(snap)) {
+  if (!tr && hs.status === 'ready' && asksNow(d, snap)) {
     return { status: 'waiting', detail: 'ждёт ответа', kind: 'question' };
   }
   return { status: hs.status, detail: detailFor(hs.status), kind: hs.status === 'waiting' ? hs.kind : null };
@@ -300,6 +324,6 @@ function tickStatus(d, now, snap) {
 module.exports = {
   ACTIVE_MS, LATCH_RELEASE_MS, ANSWER_HINT_MS,
   RE_WAIT, RE_WAIT_NOW, RE_RUNNING,
-  decide, hasWaitChrome, hasPromptBox, applyLatch, keyboardEvent,
+  decide, hasWaitChrome, hasPromptBox, asksNow, applyLatch, keyboardEvent,
   applyHook, applyTranscript, fromTranscript, decideFromTranscript, arbitrate, tickStatus,
 };
