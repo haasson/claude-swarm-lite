@@ -136,7 +136,10 @@ function defaultWorkdir() {
 let STATUSLINE_SETTINGS = null;
 const { hookSettings } = require('./hook-config');
 const { DEFAULT_ASK_PHRASES, normalizePhrases, phraseSources, buildAskMatcher, asksWith, askExcerpt } = require('./ask-phrases');
-const { appendSystemPromptFlag } = require('./agent-rules');
+const { systemPromptRule } = require('./agent-rules');
+// Keeps our own flags from filling a fresh tab's screen: long values go through the
+// shell's environment, and a `clear` wipes the typed line. See launch-line.js.
+const { envPassing, clearPrefix } = require('./launch-line');
 const statusline = require('./swarm-statusline');   // числа расхода + текст для /usage
 let STATUSLINE_COMMAND = null; // the provisioned statusline launcher command
 let HOOK_COMMAND = null;       // the provisioned hook launcher command
@@ -259,11 +262,11 @@ function launcherOf(cmd) {
 // Append `--settings <ours>` so a launched Claude prints the context statusline.
 // Only for Claude launchers (never for aider/codex/… which don't take the flag),
 // and never when the command already carries an explicit --settings of its own.
-function injectStatusline(cmd) {
+function injectStatusline(cmd, pass) {
   if (!STATUSLINE_SETTINGS || !cmd) return cmd;
   if (/(^|\s)--settings(\s|=)/.test(cmd)) return cmd;
   if (!resume.supports(launcherOf(cmd))) return cmd;
-  return `${cmd} --settings "${STATUSLINE_SETTINGS}"`;
+  return `${cmd} --settings ${pass.ref('SWARM_SETTINGS', STATUSLINE_SETTINGS)}`;
 }
 
 // Append `--append-system-prompt "<rule>"` so the agent knows how to call the user
@@ -272,12 +275,13 @@ function injectStatusline(cmd) {
 // silently overriding it would be worse than losing the status hint. The flag is
 // spelled inline rather than via --append-system-prompt-file because it has been in
 // Claude Code far longer, and an unknown flag doesn't degrade — claude refuses to
-// start and the tab is dead.
-function injectAgentRules(cmd) {
+// start and the tab is dead. The text itself travels in the environment (envPassing),
+// which is what keeps this flag from filling the screen.
+function injectAgentRules(cmd, pass) {
   if (!AGENT_RULES || !cmd) return cmd;
   if (/(^|\s)--(append-)?system-prompt(-file)?(\s|=)/.test(cmd)) return cmd;
   if (!resume.supports(launcherOf(cmd))) return cmd;
-  return `${cmd} ${appendSystemPromptFlag(ASK_PHRASES)}`;
+  return `${cmd} --append-system-prompt ${pass.ref('SWARM_ASK_RULE', systemPromptRule(ASK_PHRASES))}`;
 }
 
 // Append `--permission-mode <mode>` so a new tab starts in the mode the user picked
@@ -2968,12 +2972,22 @@ ipcMain.handle('session:create', (_event, opts = {}) => {
   // Restored tabs may point at a folder that no longer exists — fall back safely.
   const cwd = opts.cwd && fs.existsSync(opts.cwd) ? opts.cwd : defaultWorkdir();
 
+  // Build the launch line BEFORE the shell exists: our long flag values are handed
+  // over in this shell's environment (see envPassing), so they have to be collected
+  // while we can still set it.
+  const pass = envPassing(shell);
+  const pinned = injectSessionId(injectPermissionMode(
+    injectAgentRules(injectStatusline(opts.command != null ? opts.command : START_COMMAND, pass), pass)));
+  const cmd = pinned.cmd;
+
   const child = pty.spawn(shell, isWin ? [] : ['-l'], {
     name: 'xterm-256color',
     cols: opts.cols || 80,
     rows: opts.rows || 24,
     cwd,
-    env: process.env,             // <-- inherits your Claude Code auth. Do not strip.
+    // <-- inherits your Claude Code auth. Do not strip. Our own SWARM_* additions carry
+    // the flag values that would otherwise be echoed across half the screen.
+    env: { ...process.env, ...pass.env },
   });
 
   sessions.set(id, child);
@@ -2994,19 +3008,18 @@ ipcMain.handle('session:create', (_event, opts = {}) => {
     safeSend('session:exit', { id, code: exitCode });
   });
 
-  // Give the login shell a moment to finish sourcing the profile, then run claude.
-  const pinned = injectSessionId(injectPermissionMode(
-    injectAgentRules(injectStatusline(opts.command != null ? opts.command : START_COMMAND))));
-  const cmd = pinned.cmd;
   // Known id => exact transcript binding. Either we pinned it just now (a fresh tab),
   // or the renderer is restoring a conversation and told us the id it is resuming —
   // `--resume <id>` keeps that id, so the tab binds precisely from the first tick
   // instead of guessing by folder + mtime.
   d0.claudeSessionId = pinned.sessionId || String(opts.resumeId || '') || null;
+  // Give the login shell a moment to finish sourcing the profile, then run claude —
+  // preceded by a `clear`, so what the user sees first is the agent and not the line we
+  // typed for them.
   if (cmd) {
     setTimeout(() => {
       const p = sessions.get(id);
-      if (p) p.write(cmd + '\r');
+      if (p) p.write(clearPrefix(shell) + cmd + '\r');
     }, 350);
   }
 

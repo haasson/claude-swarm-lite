@@ -37,13 +37,14 @@ test('the «ничего, жди» escape hatch we document is really not a call
 });
 
 test('the system-prompt rule is one line and safe inside a shell "…"', () => {
-  // It is appended to a command line that main WRITES INTO AN INTERACTIVE SHELL, so a
-  // newline would end the command and a quote/$/`/! would swallow the rest of it.
+  // Main normally passes it through the environment, but for a shell whose syntax it
+  // doesn't know it spells the value inline on a command line it WRITES INTO AN
+  // INTERACTIVE SHELL — there a newline would end the command and a quote/$/`/! would
+  // swallow the rest of it.
   for (const phrases of [[], ['ой "кавычки" и $HOME'], ["it's `date`"], ['!!'], ['a\nb']]) {
-    const flag = AR.appendSystemPromptFlag(phrases);
-    assert.ok(!/\n/.test(flag), 'single line: ' + JSON.stringify(phrases));
-    const body = flag.replace(/^--append-system-prompt "/, '').replace(/"$/, '');
-    assert.ok(!/["'`$\\!]/.test(body), 'no shell metacharacters: ' + JSON.stringify(phrases));
+    const rule = AR.systemPromptRule(phrases);
+    assert.ok(!/\n/.test(rule), 'single line: ' + JSON.stringify(phrases));
+    assert.ok(!/["'`$\\!]/.test(rule), 'no shell metacharacters: ' + JSON.stringify(phrases));
   }
 });
 

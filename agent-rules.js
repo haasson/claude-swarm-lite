@@ -49,6 +49,10 @@ const MD_END = '<!-- claude-swarm-lite:end -->';
 // `$`, backtick or `!` in a user-typed phrase would not just break the flag — it
 // could swallow the rest of the line. Phrases are markers like «Сейчас от тебя»;
 // none of these characters belong in one, so dropping them loses nothing.
+//
+// Main normally hands this text to claude through the environment, where none of that
+// would matter — but for a shell whose syntax it doesn't recognise it falls back to
+// spelling the value inline (launch-line.js envPassing), and that path has to stay safe.
 function markerOf(phrases) {
   const list = Array.isArray(phrases) ? phrases : [];
   for (const raw of list) {
@@ -62,9 +66,8 @@ function markerOf(phrases) {
   return DEFAULT_MARKER;
 }
 
-// ONE LINE, on purpose: it goes inside double quotes on a shell command line, where
-// a newline would end the command. Wording stays short for the same reason — this
-// text is visible for a moment in the terminal when the tab starts.
+// ONE LINE, on purpose: on the fallback path it goes inside double quotes on a shell
+// command line, where a newline would end the command.
 function systemPromptRule(phrases) {
   const m = markerOf(phrases);
   return [
@@ -99,16 +102,9 @@ function claudeMdRule(phrases) {
   ].join('\n');
 }
 
-// Ready-to-append flag for the launch command line. Double quotes on both platforms:
-// cmd.exe has no single-quote syntax, and the rule text is generated here, so we know
-// it carries nothing that needs escaping inside them.
-function appendSystemPromptFlag(phrases) {
-  return `--append-system-prompt "${systemPromptRule(phrases)}"`;
-}
-
 return {
   DEFAULT_MARKER, MD_BEGIN, MD_END,
-  markerOf, systemPromptRule, claudeMdRule, appendSystemPromptFlag,
+  markerOf, systemPromptRule, claudeMdRule,
 };
 
 });
