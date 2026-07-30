@@ -121,6 +121,48 @@ function classify(entries, now, asks) {
   return { status: 'ready', kind: null, why: 'text (quiet)', at, text };
 }
 
+// ВЕСЬ текст хода, а не только последнее сообщение агента.
+//
+// Ход у Клода почти всегда разорван инструментами: «Сейчас посмотрю, что в сборке» →
+// Bash → Read → «Нашёл: тесты падали из-за …, починил». В стенограмме это ОТДЕЛЬНЫЕ записи,
+// и `classify` возвращает текст лишь последней из них. В телегу поэтому уезжал огрызок —
+// финальная фраза без того, что агент рассказал по дороге, — а человек с телефона читает
+// ход один раз и другого источника у него нет.
+//
+// Границей хода служит реплика человека. Результат инструмента приходит записью того же
+// типа `user`, и принять его за границу — значит снова обрезать ход по первому же
+// инструменту, то есть вернуть ровно ту ошибку, из-за которой эта функция появилась.
+//
+// `max` — сколько символов имеет смысл отправлять. Набираем С КОНЦА: если ход не влезает,
+// выпадает раннее повествование, а вывод — то, ради чего всё и читают, — остаётся целиком.
+// Что-то выпало — говорим об этом многоточием, а не молча.
+function turnText(entries, max) {
+  const list = Array.isArray(entries) ? entries : [];
+  const limit = Number(max) > 0 ? Number(max) : Infinity;
+  const parts = [];
+  let len = 0;
+  let cut = false;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const e = list[i];
+    if (!e || e.isSidechain) continue;
+    if (e.type === 'user') {
+      if (blockTypes(e).includes('tool_result')) continue;   // не реплика, а ответ инструмента
+      break;                                                 // выше — прошлые ходы, они не наши
+    }
+    const t = entryText(e).trim();
+    if (!t) continue;
+    // Первое (то есть последнее по времени) сообщение длиннее лимита — режем его с начала:
+    // читают сверху вниз, и голову терять хуже, чем хвост.
+    if (!parts.length && t.length > limit) return t.slice(0, limit - 1).trimEnd() + '…';
+    const add = len ? t.length + 2 : t.length;
+    if (len + add > limit) { cut = true; break; }
+    parts.push(t);
+    len += add;
+  }
+  const body = parts.reverse().join('\n\n');
+  return cut && body ? '…\n\n' + body : body;
+}
+
 // Текст, взятый из стенограммы, — про ЭТОТ ход или про прошлый?
 //
 // Вопрос не праздный: статус «готов» и текст хода приходят по разным каналам и с разной
@@ -230,6 +272,6 @@ function pickByScreen(cands, snapshot) {
 module.exports = {
   READY_DEBOUNCE_MS, BIND_MTIME_SLACK_MS, SCREEN_KEY_LEN, INJECTED_MIN, screenKey, pickByScreen,
   projectSlug, parseEntries, blockTypes, entryText, lastMain, classify, cwdOf, pickBinding,
-  belongsToTurn,
+  belongsToTurn, turnText,
   pickByInjected,
 };

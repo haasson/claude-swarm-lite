@@ -50,11 +50,16 @@ const HINT_RE = /Esc to cancel|Enter to confirm|Tab to amend/i;
 // the context meter. It sits BELOW the agent's prose, so a bottom-up scan hits it first
 // and would happily quote «⏵⏵ auto mode on (shift+tab to cycle) · ← for agents» to the
 // user as if that were the question. It's chrome, never a sentence anyone wrote.
+// Подсказки, которые Claude Code рисует ПОД ответом, добавлены по живым случаям: в чат
+// уезжало «Jump to bottom (click) ↓» и «new task? /clear to save 141.5k tokens» — это
+// мебель, а человек с телефона читал её как ответ агента. Кружок ◯ — строка ростера
+// подагентов («◯ review-synth Checking …»), туда же.
 const CHROME_RE = new RegExp([
   'shift\\+tab', 'ctrl\\+[a-z]', 'esc to ', ' for shortcuts', ' for agents',
   '(?:auto|plan|accept edits|bypass permissions|bypassing permissions) mode on',
   'auto-compact', 'context left until', 'tokens? (?:used|remaining)',
-  '^[⏵⏸⧉⎿✻✽✶✳·]',
+  'jump to bottom', '/clear to save', '^new task\\?',
+  '^[⏵⏸⧉⎿✻✽✶✳·◯○◌]',
 ].join('|'), 'i');
 // After edge trimming, a leftover │ or a progress bar means we're looking at the
 // user's Claude statusline ("model │ dir │ ███░ 65%"), not at a question.
@@ -177,6 +182,57 @@ function lastAgentLine(snapshot) {
     return s.length > MAX ? s.slice(0, MAX - 1).trimEnd() + '…' : s;
   }
   return null;
+}
+
+// Весь последний ответ агента с экрана — для отчёта в телегу, когда стенограммы нет.
+//
+// lastAgentLine отдаёт ОДНУ строку и не длиннее 80 символов: этого хватает подписи на
+// плашке, но в чат уезжал огрызок — последняя строка абзаца, а то и подсказка из мебели.
+// Здесь собирается сообщение целиком: снизу вверх, начиная с первой строки прозы под
+// мебелью и до начала сообщения.
+//
+// Границы сверху — то, что сообщением быть не может: собственный маркер ⏺ (это и есть
+// начало ответа, его забираем и останавливаемся), реплика человека, блок инструмента,
+// рамка, статуслайн, мебель. Пустые строки внутри сохраняем: у Клода это абзацы, а
+// оборвать сбор на первой пустой строке значило бы прислать один последний абзац.
+const BLOCK_LINES = 200;      // предохранитель: не собирать пол-переписки, если границы нет
+const BLOCK_GAP = 2;          // столько пустых строк подряд ещё считаем абзацем, дальше — граница
+
+// Строка, которую можно показать человеку как речь агента (а не как мебель Claude Code).
+function isProse(t) {
+  if (!t || !HAS_LETTER_RE.test(t)) return false;
+  return !STATUSLINE_RE.test(t) && !OPTION_RE.test(t) && !HINT_RE.test(t)
+    && !CHROME_RE.test(t) && !USER_LINE_RE.test(t);
+}
+
+function lastAgentBlock(snapshot, max) {
+  const lines = String(snapshot == null ? '' : snapshot).split('\n');
+  const limit = Number(max) > 0 ? Number(max) : Infinity;
+  const out = [];
+  let started = false;
+  let blanks = 0;
+  for (let i = lines.length - 1; i >= 0 && out.length < BLOCK_LINES; i--) {
+    const t = unrule(clean(lines[i]));
+    if (!started) {
+      if (!isProse(t)) continue;                 // ещё мебель под ответом
+      started = true;
+    } else if (!t) {
+      if (++blanks > BLOCK_GAP) break;           // большой разрыв — это уже не наш абзац
+      out.push('');
+      continue;
+    } else if (!isProse(t)) {
+      break;                                     // ⎿, ❯, рамка, статуслайн — начало чужого
+    } else {
+      blanks = 0;
+    }
+    const bullet = AGENT_BULLET_RE.test(t);
+    const s = t.replace(AGENT_BULLET_RE, '').trim();
+    if (s) out.push(s);
+    if (bullet) break;                           // ⏺ — начало этого сообщения
+  }
+  const body = out.reverse().join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  if (!body) return null;
+  return body.length > limit ? body.slice(0, limit - 1).trimEnd() + '…' : body;
 }
 
 // The one-line gist of what an agent is asking, for the pult chip. Scans bottom
@@ -406,7 +462,7 @@ function countSubagents(snapshot) {
 }
 
 module.exports = {
-  extractQuestion, lastAgentLine, readMode, modeTitle, modeFlag, MODE_TITLES, MODE_FLAGS,
+  extractQuestion, lastAgentLine, lastAgentBlock, readMode, modeTitle, modeFlag, MODE_TITLES, MODE_FLAGS,
   inferWaitingKind, asksForInput, setAskPhrases, countSubagents,
   parsePrompt, fingerprintOf,
   contentEnd, snapshotRows,

@@ -244,6 +244,59 @@ test('belongsToTurn: без известного начала хода текс�
   assert.strictEqual(T.belongsToTurn(1200, null), true);
 });
 
+// --- весь ход, а не последняя фраза ------------------------------------------
+// Ход у Клода разорван инструментами, и в стенограмме это отдельные записи. В телегу
+// уезжала лишь последняя — то есть огрызок ответа.
+const TURN = T.parseEntries([
+  assistant([{ type: 'text', text: 'Старый ход, он остался позади.' }], 9000),
+  user('почини сборку', 8000),
+  assistant([{ type: 'text', text: 'Сейчас посмотрю, что в сборке.' }], 7000),
+  assistant([{ type: 'tool_use', name: 'Bash', input: {} }], 6000),
+  user([{ type: 'tool_result', content: 'ошибка' }], 5000),
+  assistant([{ type: 'text', text: 'Подагент сходил за своим' }], 4000, { isSidechain: true }),
+  assistant([{ type: 'thinking', thinking: 'вслух не говорю' }], 3000),
+  assistant([{ type: 'text', text: 'Нашёл: падал тест. Починил.' }], 2000),
+].join('\n'));
+
+test('turnText собирает всё, что агент сказал за ход', () => {
+  assert.strictEqual(T.turnText(TURN),
+    'Сейчас посмотрю, что в сборке.\n\nНашёл: падал тест. Починил.');
+});
+
+test('turnText не выходит за реплику человека и не берёт подагентов и мысли', () => {
+  const got = T.turnText(TURN);
+  assert.ok(!/Старый ход/.test(got), 'прошлый ход — не этот');
+  assert.ok(!/почини сборку/.test(got), 'слова человека — не ответ агента');
+  assert.ok(!/Подагент/.test(got), 'подагент говорит не за вкладку');
+  assert.ok(!/вслух не говорю/.test(got), 'мысли человек не видит');
+});
+
+// Ответ инструмента приходит записью того же типа, что и реплика человека. Принять его за
+// границу — значит обрезать ход по первому же инструменту, то есть вернуть тот же огрызок.
+test('turnText: результат инструмента ход не заканчивает', () => {
+  assert.ok(/Сейчас посмотрю/.test(T.turnText(TURN)));
+});
+
+// Не влезло — выпадает раннее повествование, а вывод остаётся целиком: его и читают.
+test('turnText: предел режет начало, а не итог', () => {
+  const got = T.turnText(TURN, 40);
+  assert.ok(got.length <= 44, got);
+  assert.ok(got.startsWith('…'), got);
+  assert.ok(/Нашёл: падал тест\. Починил\./.test(got), got);
+});
+
+test('turnText: одно длинное сообщение читают сверху, поэтому режется хвост', () => {
+  const one = T.parseEntries(assistant([{ type: 'text', text: 'а'.repeat(50) }], 1000));
+  const got = T.turnText(one, 20);
+  assert.strictEqual(got.length, 20);
+  assert.ok(got.endsWith('…'));
+});
+
+test('turnText: без записей — пустая строка, а не «undefined»', () => {
+  assert.strictEqual(T.turnText([]), '');
+  assert.strictEqual(T.turnText(null), '');
+});
+
 // Отстой classify — это НЕ таймер моста, а причина, по которой мост обязан подождать. Пусть
 // связь между ними будет видна: если отстой станет нулём, ждать было бы нечего.
 test('READY_DEBOUNCE_MS — не ноль, иначе и ждать текст незачем', () => {

@@ -328,7 +328,7 @@ process.on('unhandledRejection', (reason) => reportMainError(reason));
 // tell "waiting for a prompt" apart from "idle/done". We deliberately do NOT
 // surface Claude's token counter or activity words — just the four states.
 const { Terminal: HeadlessTerminal } = require('@xterm/headless');
-const { extractQuestion, lastAgentLine, readMode, modeTitle, modeFlag, countSubagents, contentEnd, snapshotRows, setAskPhrases, parsePrompt } = require('./screen');
+const { extractQuestion, lastAgentBlock, readMode, modeTitle, modeFlag, countSubagents, contentEnd, snapshotRows, setAskPhrases, parsePrompt } = require('./screen');
 // The status state machine + «ждёт» latch + hook arbitration live in a pure,
 // unit-tested module; osc.js sniffs hook markers out of the raw pty stream.
 const { tickStatus, applyHook, applyTranscript, keyboardEvent } = require('./detector');
@@ -336,6 +336,10 @@ const { extractHookSignals } = require('./osc');
 
 const TICK_MS = 300;
 const SNAP_ROWS = 16;        // how many bottom screen rows to inspect
+// Окно для ОТВЕТА, а не для статуса. Статусу хватает мебели под текстом, а ответ агента —
+// это абзацы, и в шестнадцать строк он не влезает: в телегу уезжал хвост сообщения. Больше
+// scrollback эмулятора (200) брать всё равно нечего.
+const REPLY_ROWS = 200;
 const RESIZE_GRACE_MS = 700; // after a resize, ignore the repaint burst as "activity"
 const INPUT_GRACE_MS = 700;  // after a keystroke, ignore the echo/redraw as "activity"
 
@@ -374,6 +378,9 @@ function makeDetector(cols, rows) {
     // Второе сравнивается с первым — иначе в чат уезжает ответ на ПРОШЛУЮ задачу (см.
     // tgOnDone: с хуками статус «готов» приходит раньше, чем стенограмма догоняет).
     turnStartedAt: 0, trReplyAt: 0, tgDoneTimer: null,
+    // Что мост про эту вкладку уже доложил (запись стенограммы или сам текст). Тот же итог
+    // второй раз — шум: см. tgNotifyDone.
+    tgSentKey: '',
     // Печатал ли человек в эту вкладку с последнего Enter. «Вернулся за компьютер» — это
     // отправленное сообщение, а не любое шевеление: см. session:input.
     typedAtKeyboard: false,
@@ -387,6 +394,12 @@ function makeDetector(cols, rows) {
 // (a shrinking TUI frame leaves blank rows the buffer never gives back).
 function snapshot(d) {
   return snapshotRows(d.term.buffer.active, SNAP_ROWS);
+}
+
+// То же, но настолько высоко, насколько помнит эмулятор: из этого окна берётся ТЕКСТ
+// ответа, когда стенограммы нет (см. lastAgentBlock).
+function replySnapshot(d) {
+  return snapshotRows(d.term.buffer.active, REPLY_ROWS);
 }
 
 // The user's Claude statusline (model │ dir [bar] % │ task) renders on the very
@@ -502,7 +515,13 @@ setInterval(() => {
         // про итог. Без этого «в телегу ничего не пришло» неотличимо от «ход не считался
         // законченным»: журнал показывал входящее сообщение и обрывался, а дальше начинались
         // догадки. Пишем и причину отказа, а не только факт.
-        if (TG.chatId != null && (owed || d.tgMode || TG.mirrorAll)) {
+        //
+        // И `relay` в условии: пока его не было, отчёт «человека нет за маком» уходил вообще
+        // без строки о переходе — в журнале итог появлялся из ниоткуда. Именно на этом
+        // застрял разбор «молчащая вкладка присылает одно и то же раз в полчаса»: не видно
+        // было, СЧИТАЕТ ли приложение, что там был ход. Не через `|| tgAway()`, иначе стоит
+        // человеку отойти — и каждая перерисовка каждой вкладки пишет строку.
+        if (TG.chatId != null && (owed || d.tgMode || TG.mirrorAll || relay)) {
           tgLog(`  вкладка ${id}: ${prev} → ${next.status}${kind ? ':' + kind : ''}`
             + ` · итог ${relay ? 'отправляю' : 'нет'}`
             + (relay ? '' : ` (нужен переход работает→готов; долг=${owed ? 'да' : 'нет'}`
@@ -804,17 +823,17 @@ setInterval(() => {
       // The question, word for word — only for a turn that ended asking. Anything else
       // would be quoting streamed prose back at the user.
       d.trText = v && v.status === 'waiting' ? askExcerpt(ASK_MATCHER, v.text, TR_TEXT_MAX) : '';
-      // А это — ВЕСЬ финальный текст хода, для телеги. d.trText намеренно обрезан от
-      // фразы-триггера («Сейчас от тебя: …») и годится только в подпись на плашке вкладки:
-      // в чат так уезжал огрызок, хотя всё полезное агент сказал ДО этой фразы.
-      if (v) d.trFinal = String(v.text || '').trim().slice(0, trReplyMax());
-      // The finished turn's closing message — what the Telegram bridge sends back as
-      // «вот что получилось». Kept whole-ish: it's a report, not a chip label.
+      // А это — ВЕСЬ текст хода, для телеги: не только последнее сообщение, но и всё, что
+      // агент говорил между инструментами (см. transcript.turnText). d.trText намеренно
+      // обрезан от фразы-триггера («Сейчас от тебя: …») и годится только в подпись на плашке
+      // вкладки: в чат так уезжал огрызок, хотя всё полезное агент сказал ДО этой фразы.
+      if (v) d.trFinal = transcript.turnText(d.trEntries || [], trReplyMax());
+      // Итог хода — то, что мост отправляет как «вот что получилось».
       // Вместе с ним — ВРЕМЯ той записи, из которой он взят. Только по нему видно, этого хода
       // текст или прошлого: статус «готов» приходит от хука на секунду раньше, чем classify
       // отпустит свой отстой и обновит текст (см. tgOnDone).
       if (v && v.status === 'ready') {
-        d.trReply = String(v.text || '').trim().slice(0, trReplyMax());
+        d.trReply = d.trFinal;
         d.trReplyAt = v.at || now;
       }
       const why = v ? v.status + (v.kind ? ':' + v.kind : '') + ' (' + v.why + ')' : 'no entries';
@@ -884,6 +903,15 @@ function tgLog(line) {
     } catch (_) { /* файла ещё нет — обычное дело */ }
     fs.appendFileSync(file, new Date().toISOString().slice(11, 23) + ' ' + line + '\n');
   } catch (_) { /* diagnostics must never break the bridge */ }
+}
+
+// Момент времени в том же виде, что и метка строки журнала (UTC, чч:мм:сс). Нужен, чтобы
+// решение «текст этого хода или прошлого» можно было проверить по журналу, а не выводить из
+// кода: без этих двух отметок «прислал старый ответ» и «прислал новый» в журнале выглядели
+// одинаково, и разбор упирался в догадки.
+function tgStamp(ms) {
+  const t = Number(ms) || 0;
+  return t ? new Date(t).toISOString().slice(11, 19) : 'никогда';
 }
 
 // What we tell an agent when its input arrives from a phone. Two ready-made wordings
@@ -1970,22 +1998,41 @@ function tgOnDone(id, d) {
 }
 
 async function tgNotifyDone(id, d, fresh) {
-  // Текст итога — дословный из стенограммы, а если её нет, ПОСЛЕДНЯЯ строка с экрана.
+  // Текст итога — дословный из стенограммы, а если её нет, последнее сообщение с ЭКРАНА.
   // Пустой отчёт «✅ вкладка — готов.» бесполезен: человек в дороге узнаёт, что ход
-  // закончился, но не узнаёт чем. Экран короче и без переносов, зато он есть всегда.
+  // закончился, но не узнаёт чем. Экран беднее (шире окна эмулятора он не видит и переносы
+  // в нём терминальные), зато он есть всегда.
   // `fresh` — принадлежит ли текст стенограммы ЭТОМУ ходу (см. tgOnDone). Не принадлежит —
   // значит его нет, и никакой «почти подходящий» текст его не заменяет.
   const fromTr = fresh ? String(d.trReply || '').trim() : '';
-  // lastAgentLine, а НЕ extractQuestion: вторая берёт нижнюю значимую строку, а внизу стоит
+  // lastAgentBlock, а НЕ extractQuestion: вторая берёт нижнюю значимую строку, а внизу стоит
   // поле ввода — из-за этого в чат уезжала то линейка рамки, то собственный вопрос
-  // пользователя, отражённый ему же как «ответ агента».
-  const text = fromTr || String(lastAgentLine(snapshot(d)) || '').trim();
+  // пользователя, отражённый ему же как «ответ агента». И не lastAgentLine: одна строка —
+  // это огрызок ответа, а человеку нужен ответ.
+  const text = fromTr || String(lastAgentBlock(replySnapshot(d), trReplyMax()) || '').trim();
   // Источник называем ЧЕСТНО, включая «текст стенограммы не от этого хода»: пометка
   // «стенограмма» на чужом тексте однажды уже отправила искать не ту проблему.
   const why = fromTr ? 'стенограмма'
     : !d.trFile ? (text ? 'экран, стенограмма не привязана' : 'ни стенограммы, ни экрана')
       : text ? 'экран, стенограмма не догнала этот ход' : 'стенограмма не догнала, экран пуст';
-  tgLog(`  → итог вкладки ${id}: ${text ? text.length + ' симв.' : 'текста нет'} (${why})`);
+  // Тот же итог второй раз — это не итог, а шум, и человек в чате отличить его от нового
+  // ответа не может. Живой случай: вкладка, в которой ничего не происходит, раз в полчаса
+  // присылала один и тот же ответ — Claude Code перерисовывает экран (и дёргает хуки) на
+  // своих таймерах, приложение видит короткое «работает → готов», и мост честно докладывает
+  // ход, которого не было. Никакая проверка свежести это не лечит: текст-то настоящий, он
+  // просто уже отправлен. Поэтому ключ отчёта — запись стенограммы (её время), а без
+  // стенограммы сам текст; совпал с прошлым — молчим.
+  //
+  // Долг (в чате висит «получил, думаю…») сильнее: там человек ЖДЁТ ответа именно на своё
+  // сообщение, и оставить его с часиками навсегда — хуже, чем повторить текст.
+  const key = fresh ? `tr:${d.trReplyAt}` : `screen:${text}`;
+  if (!d.tgAck && key === d.tgSentKey) {
+    tgLog(`  → итог вкладки ${id} не изменился (${why}) — не повторяю`);
+    return;
+  }
+  d.tgSentKey = key;
+  tgLog(`  → итог вкладки ${id}: ${text ? text.length + ' симв.' : 'текста нет'} (${why};`
+    + ` ход с ${tgStamp(d.turnStartedAt)}, текст ${tgStamp(d.trReplyAt)})`);
   // Если ход начался сообщением из телеги, ответ вписывается в ЕГО же сообщение («получил,
   // думаю…» → ответ). Иначе (зеркало итогов, когда человека нет за маком) — обычная запись.
   await tgAckResolve(id, d, `✅ ${tgTabName(id)}${text ? '\n\n' + text : ' — готов.'}`);
@@ -2024,8 +2071,12 @@ async function tgNotifyWaiting(id, d) {
   }
   const head = permission ? '🔐 просит разрешение' : '❓ вопрос';
   // Целиком, а не огрызок с «Сейчас от тебя»: человек в дороге читает ход один раз, и
-  // выводы агента ему нужны не меньше самого вопроса. d.question остаётся запасным.
-  const said = String(d.trFinal || '').trim() || d.question;
+  // выводы агента ему нужны не меньше самого вопроса. Без стенограммы — сообщение с экрана
+  // целиком; d.question (одна строка для плашки вкладки) остаётся последним запасом, из-за
+  // него в чат уезжало «Jump to bottom (click) ↓» вместо вопроса.
+  const said = String(d.trFinal || '').trim()
+    || String(lastAgentBlock(replySnapshot(d), trReplyMax()) || '').trim()
+    || d.question;
   const body = said ? '\n\n' + said : '';
   const tail = permission
     ? '\n\nВариантов не разобрал — ответь за компьютером.'

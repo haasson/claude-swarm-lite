@@ -546,6 +546,62 @@ test('parsePrompt caps a long option label so it fits a button', () => {
   assert.ok(opt.text.endsWith('…'));
 });
 
+// --- весь ответ с экрана, а не одна строка -----------------------------------
+// Живой случай: в телегу уезжал огрызок — последняя строка ответа, иногда прямо с
+// подсказкой Claude Code («Jump to bottom (click) ↓») вместо слов агента.
+const SCREEN_REPLY = [
+  '⏺ Bash(npm test)',
+  '  ⎿ 42 tests passed',
+  '',
+  '⏺ Готово. Что сделано:',
+  '',
+  '  - починил сборку',
+  '  - обновил тесты',
+  '',
+  '  Сейчас от тебя: ничего, жди выпуска.',
+  '',
+  '  Jump to bottom (click) ↓',
+  '╭────────────────────────────────╮',
+  '│ >                              │',
+  '╰────────────────────────────────╯',
+  '  ⏵⏵ auto mode on · ? for shortcuts · ← for agents',
+].join('\n');
+
+test('lastAgentBlock отдаёт сообщение агента целиком, с абзацами', () => {
+  const got = S.lastAgentBlock(SCREEN_REPLY);
+  assert.strictEqual(got, [
+    'Готово. Что сделано:',
+    '',
+    '- починил сборку',
+    '- обновил тесты',
+    '',
+    'Сейчас от тебя: ничего, жди выпуска.',
+  ].join('\n'));
+});
+
+test('lastAgentBlock не берёт мебель, вывод инструмента и прошлые сообщения', () => {
+  const got = String(S.lastAgentBlock(SCREEN_REPLY));
+  assert.ok(!/Jump to bottom/.test(got), 'подсказка Claude Code — не ответ агента');
+  assert.ok(!/42 tests passed/.test(got), 'вывод инструмента ⎿ — не ответ агента');
+  assert.ok(!/npm test/.test(got), 'прошлое сообщение осталось за границей');
+  assert.ok(!/auto mode on/.test(got), 'строка режима — мебель');
+});
+
+test('lastAgentBlock не выдаёт за ответ текст человека', () => {
+  assert.strictEqual(S.lastAgentBlock(SCREEN_DONE), '0B . — рабочая директория пустая.');
+  const only = ['────────────', '❯ проверь, нажимается ли кнопка', '────────────',
+    '  ⏸ manual mode on'].join('\n');
+  assert.strictEqual(S.lastAgentBlock(only), null, 'слов агента на экране нет — значит null');
+  assert.strictEqual(S.lastAgentBlock(''), null);
+  assert.strictEqual(S.lastAgentBlock(null), null);
+});
+
+test('lastAgentBlock уважает предел длины', () => {
+  const got = S.lastAgentBlock(SCREEN_REPLY, 24);
+  assert.ok(got.length <= 24, got.length);
+  assert.ok(got.endsWith('…'), got);
+});
+
 // Runs LAST: it swaps the module-level matcher, and restores it at the end.
 test('setAskPhrases swaps the marker the scraper looks for', () => {
   try {
