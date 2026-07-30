@@ -68,6 +68,24 @@ function entryText(entry) {
     .map((b) => b.text).join('\n');
 }
 
+// Ты оборвал агента на полуслове (Esc). Claude Code дописывает в стенограмму запись
+// `user` с единственным текстовым блоком «[Request interrupted by user]» — а если рубили
+// на инструменте, то «…for tool use]». Больше в файл не приходит НИЧЕГО: ход кончился,
+// следующая запись появится только когда ты сам что-нибудь скажешь.
+//
+// По форме это реплика человека, и без этой проверки classify отвечает «работает
+// (prompt)» — «сейчас начнёт работать». Начинать нечего, поэтому вкладка залипала на
+// «работает» навсегда: ни отстоя, ни новых записей, чтобы её оттуда вывести. В телеге то
+// же самое — оборванная вкладка не докладывала «готов» и висела занятой.
+//
+// Хук Stop тут не спасает: на прерывании он не срабатывает вообще (это не конец хода, а
+// его отмена), так что канал стенограммы — единственный, кто про это знает.
+const RE_INTERRUPTED = /^\[Request interrupted by user(?: for tool use)?\]$/;
+
+function isInterrupt(entry) {
+  return !!entry && entry.type === 'user' && RE_INTERRUPTED.test(entryText(entry).trim());
+}
+
 function tsOf(entry) {
   const t = Date.parse((entry && entry.timestamp) || '');
   return Number.isFinite(t) ? t : 0;
@@ -107,6 +125,11 @@ function classify(entries, now, asks) {
     return { status: 'running', kind: null, why: 'tool_result', at, text: '' };
   }
   if (e.type === 'user') {
+    // Прерывание — конец хода, а не начало работы (см. isInterrupt). Без отстоя: ждать
+    // продолжения нечего, оно уже отменено.
+    if (isInterrupt(e)) {
+      return { status: 'ready', kind: null, why: 'interrupted', at, text: '' };
+    }
     // A real prompt from you (not a tool result) — the agent is about to work.
     return { status: 'running', kind: null, why: 'prompt', at, text: '' };
   }
@@ -147,6 +170,10 @@ function turnText(entries, max) {
     if (!e || e.isSidechain) continue;
     if (e.type === 'user') {
       if (blockTypes(e).includes('tool_result')) continue;   // не реплика, а ответ инструмента
+      // Прерывание тоже не реплика: человек ничего не сказал, он нажал Esc. Границей хода
+      // его считать нельзя — иначе у оборванного хода текста нет вообще, и мост докладывает
+      // «готов» ни с чем, хотя агент до Esc успел рассказать самое интересное.
+      if (isInterrupt(e)) continue;
       break;                                                 // выше — прошлые ходы, они не наши
     }
     const t = entryText(e).trim();
@@ -271,7 +298,7 @@ function pickByScreen(cands, snapshot) {
 
 module.exports = {
   READY_DEBOUNCE_MS, BIND_MTIME_SLACK_MS, SCREEN_KEY_LEN, INJECTED_MIN, screenKey, pickByScreen,
-  projectSlug, parseEntries, blockTypes, entryText, lastMain, classify, cwdOf, pickBinding,
+  projectSlug, parseEntries, blockTypes, entryText, lastMain, classify, cwdOf, pickBinding, isInterrupt,
   belongsToTurn, turnText,
   pickByInjected,
 };

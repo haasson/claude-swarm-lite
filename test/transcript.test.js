@@ -306,6 +306,67 @@ test('turnText: без записей — пустая строка, а не «u
   assert.strictEqual(T.turnText(null), '');
 });
 
+// --- Esc: ход оборван ---------------------------------------------------------
+// Живая беда: оборвёшь агента на полуслове — вкладка навсегда остаётся «работает». По форме
+// прерывание — реплика человека, и classify отвечал «работает (prompt)», то есть «сейчас
+// начнёт». Начинать нечего: следующая запись в файле появится только когда человек сам
+// заговорит, а до тех пор из «работает» вкладку не выводит ничто.
+const INTERRUPT = '[Request interrupted by user]';
+const INTERRUPT_TOOL = '[Request interrupted by user for tool use]';
+
+test('прерывание на полуслове → готов, а не вечное «работает»', () => {
+  const v = verdict([
+    assistant([{ type: 'text', text: 'Сейчас посмотрю' }], 3000),
+    user([{ type: 'text', text: INTERRUPT }], 2000),
+  ].join('\n'));
+  assert.strictEqual(v.status, 'ready');
+  assert.strictEqual(v.why, 'interrupted');
+});
+
+// Рубанули по живому инструменту — формулировка другая, смысл тот же.
+test('прерывание на инструменте → готов', () => {
+  const v = verdict([
+    assistant([{ type: 'tool_use', name: 'Bash', input: {} }], 3000),
+    user([{ type: 'text', text: INTERRUPT_TOOL }], 2000),
+  ].join('\n'));
+  assert.strictEqual(v.status, 'ready');
+  assert.strictEqual(v.why, 'interrupted');
+});
+
+// Отстоя тут быть не должно: ждут его ради продолжения хода, а продолжение уже отменено.
+test('прерывание не ждёт отстоя: готов сразу', () => {
+  const v = verdict(user([{ type: 'text', text: INTERRUPT }], 0));
+  assert.strictEqual(v.status, 'ready');
+});
+
+test('обычная реплика человека по-прежнему «работает»', () => {
+  assert.strictEqual(verdict(user('а теперь оборви и переделай', 2000)).status, 'running');
+  assert.strictEqual(verdict(user('почему тут [Request interrupted by user]?', 2000)).status,
+    'running', 'разговор ПРО прерывание — не прерывание');
+});
+
+// Ход оборван, но агент до Esc успел сказать главное. Считать прерывание границей хода
+// значит отправить в телегу «готов» вообще без текста — при том что текст есть.
+test('turnText: прерывание ход не заканчивает, сказанное до Esc остаётся', () => {
+  const e = T.parseEntries([
+    user('почини сборку', 8000),
+    assistant([{ type: 'text', text: 'Сейчас посмотрю, что в сборке.' }], 7000),
+    assistant([{ type: 'tool_use', name: 'Bash', input: {} }], 6000),
+    user([{ type: 'text', text: INTERRUPT_TOOL }], 5000),
+  ].join('\n'));
+  assert.strictEqual(T.turnText(e), 'Сейчас посмотрю, что в сборке.');
+});
+
+test('isInterrupt узнаёт только сам маркер', () => {
+  const mk = (c) => JSON.parse(user(c));
+  assert.strictEqual(T.isInterrupt(mk([{ type: 'text', text: INTERRUPT }])), true);
+  assert.strictEqual(T.isInterrupt(mk(INTERRUPT_TOOL)), true, 'строкой — тот же маркер');
+  assert.strictEqual(T.isInterrupt(mk('  ' + INTERRUPT + '\n')), true, 'пробелы вокруг не мешают');
+  assert.strictEqual(T.isInterrupt(mk('сначала ' + INTERRUPT + ', потом переделай')), false);
+  assert.strictEqual(T.isInterrupt(JSON.parse(assistant([{ type: 'text', text: INTERRUPT }]))), false);
+  assert.strictEqual(T.isInterrupt(null), false);
+});
+
 // Отстой classify — это НЕ таймер моста, а причина, по которой мост обязан подождать. Пусть
 // связь между ними будет видна: если отстой станет нулём, ждать было бы нечего.
 test('READY_DEBOUNCE_MS — не ноль, иначе и ждать текст незачем', () => {
