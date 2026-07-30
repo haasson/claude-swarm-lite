@@ -10,10 +10,10 @@ Electron + node-pty + xterm.js.
 ## Скачать
 
 <!--DL-->
-**Последняя версия: 0.21.4** · [все релизы](https://github.com/haasson/claude-swarm-lite/releases)
+**Последняя версия: 0.22.0** · [все релизы](https://github.com/haasson/claude-swarm-lite/releases)
 
-- **macOS** (Apple Silicon): [`claude-swarm-lite-0.21.4-arm64.dmg`](https://github.com/haasson/claude-swarm-lite/releases/download/v0.21.4/claude-swarm-lite-0.21.4-arm64.dmg)
-- **Windows**: [`claude-swarm-lite-0.21.4-x64.exe`](https://github.com/haasson/claude-swarm-lite/releases/download/v0.21.4/claude-swarm-lite-0.21.4-x64.exe) — собирается в CI после тега
+- **macOS** (Apple Silicon): [`claude-swarm-lite-0.22.0-arm64.dmg`](https://github.com/haasson/claude-swarm-lite/releases/download/v0.22.0/claude-swarm-lite-0.22.0-arm64.dmg)
+- **Windows**: [`claude-swarm-lite-0.22.0-x64.exe`](https://github.com/haasson/claude-swarm-lite/releases/download/v0.22.0/claude-swarm-lite-0.22.0-x64.exe) — собирается в CI после тега
 <!--/DL-->
 
 ## Запуск (из исходников)
