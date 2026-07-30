@@ -19,6 +19,32 @@ function computeRuntimeId(electronVersion, nodePtyVersion) {
   return crypto.createHash('sha256').update(`${electronVersion}|${nodePtyVersion}`).digest('hex');
 }
 
+// Сколько раз согласны пойти за Location, прежде чем считать это петлёй.
+const MAX_REDIRECTS = 5;
+
+// Куда идти дальше, глядя на ответ. Чистое решение — сама сеть в updater.js.
+//
+// Зачем вообще: гитхаб на скачивание ассета отвечает 302 — сначала
+// releases/latest/download/… → releases/download/<тег>/…, потом ещё раз на CDN, —
+// а `https.get` за Location сам не ходит. Реестр гитлаба отдавал 200 сразу, поэтому
+// пока жили на нём, этого кода не требовалось, и его отсутствие ничем не проявлялось.
+//
+// Location по стандарту может быть относительным, поэтому разрешаем его от текущего
+// адреса, а не подставляем как есть.
+function nextHop(statusCode, location, url, count, max) {
+  const limit = typeof max === 'number' ? max : MAX_REDIRECTS;
+  if (statusCode >= 300 && statusCode < 400) {
+    if (!location) return { kind: 'fail', message: `HTTP ${statusCode} без Location` };
+    if (count >= limit) return { kind: 'fail', message: `слишком много редиректов (>${limit})` };
+    let next;
+    try { next = new URL(location, url).toString(); }
+    catch (_) { return { kind: 'fail', message: 'битый Location: ' + location }; }
+    return { kind: 'follow', url: next };
+  }
+  if (statusCode !== 200) return { kind: 'fail', message: 'HTTP ' + statusCode };
+  return { kind: 'ok' };
+}
+
 function validateManifest(obj) {
   if (!obj || typeof obj !== 'object') throw new Error('manifest is not an object');
   if (typeof obj.version !== 'string' || !/^\d+\.\d+\.\d+$/.test(obj.version)) throw new Error('bad version');
@@ -46,4 +72,6 @@ function decideUpdate(installedVersion, installedRuntimeId, manifest) {
   return { kind, version: m.version, notes: m.notes, asar: m.asar, installers: m.installers };
 }
 
-module.exports = { compareVersions, computeRuntimeId, validateManifest, decideUpdate };
+module.exports = {
+  compareVersions, computeRuntimeId, validateManifest, decideUpdate, nextHop, MAX_REDIRECTS,
+};

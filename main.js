@@ -1111,8 +1111,21 @@ function tgWhisperBin() {
 // нашего же реестра (там, откуда ходят обновления) и модель с HuggingFace. В сборке нет ни
 // того, ни другого — кому голос не нужен, тот не платит за него ни размером приложения, ни
 // весом обновления. Ручные поля остаются для тех, у кого whisper.cpp уже стоит.
-const VOICE_REG = 'https://gitlab.internal/api/v4/projects/331/packages/generic/apps';
-const VOICE_MANIFEST_URL = `${VOICE_REG}/latest/whisper.json`;
+// Ассеты релизов гитхаба, публично — без токенов и учётных данных.
+//
+// Почему не `releases/latest/download/…`, как у обновлялки: «latest» у гитхаба — это
+// самый свежий релиз ВООБЩЕ, а он почти всегда релиз приложения, и whisper.json в нём
+// не лежит. Поэтому распознаватель живёт на фиксированном теге `whisper`, чей
+// whisper.json перезаписывается при каждой публикации — ровно та мутабельная точка
+// входа, которой раньше был путь `apps/latest/` в реестре гитлаба.
+//
+// И обратное требование, которое легко забыть: релизы whisper обязаны помечаться
+// prerelease. Иначе свежеопубликованный распознаватель станет «latest», и обновление
+// приложения начнёт получать 404 вместо манифеста. Ассеты у prerelease качаются как
+// обычно, из выбора «latest» такой релиз просто исключён.
+const GH_REPO = 'https://github.com/haasson/claude-swarm-lite';
+const VOICE_REG = `${GH_REPO}/releases/download`;
+const VOICE_MANIFEST_URL = `${VOICE_REG}/whisper/whisper.json`;
 const VOICE_PROGRESS_MS = 200;      // как часто обновлять полосу, а не на каждый пакет
 
 let voiceJob = null;                // идущая установка; одна за раз
@@ -1120,19 +1133,12 @@ let voiceError = null;
 
 function voiceDir() { return path.join(app.getPath('userData'), voice.RUNTIME_DIRNAME); }
 
-// Read-only токен реестра — тот же, которым обновлялка забирает app.asar.
-function voiceRegToken() {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(app.getAppPath(), 'build-info.json'), 'utf8')).updateToken || '';
-  } catch (_) { return ''; }
-}
-
-// Свой загрузчик, а не тот, что внутри updater.js: модель отдаётся редиректом на CDN
-// HuggingFace, а `https.get` редиректы не ходит — fetch ходит. Плюс здесь нужен прогресс
-// по байтам через несколько файлов и отмена.
+// Свой загрузчик, а не тот, что внутри updater.js: здесь нужен прогресс по байтам через
+// несколько файлов и отмена. Редиректы `fetch` проходит сам — и модели с CDN HuggingFace,
+// и ассеты гитхаба, которые тоже отдаются через 302.
 async function voiceFetchFile(url, dest, opts) {
   const o = opts || {};
-  const res = await fetch(url, { headers: o.token ? { 'PRIVATE-TOKEN': o.token } : {}, signal: o.signal });
+  const res = await fetch(url, { signal: o.signal });
   if (!res.ok || !res.body) throw new Error(`не ответил сервер (HTTP ${res.status})`);
   // Пишем в .part и переименовываем в конце: недокачанный файл никогда не должен
   // выглядеть готовым — иначе следующий запуск сочтёт его моделью и «ничего не разберёт».
@@ -1163,7 +1169,7 @@ async function voiceFetchFile(url, dest, opts) {
 // заново 148 МБ. Целость по размеру, а не по хешу: хешировать модель при каждом открытии
 // настроек — ощутимая пауза, а битое отсекается при скачивании.
 async function voicePlan(modelId) {
-  const res = await fetch(VOICE_MANIFEST_URL, { headers: { 'PRIVATE-TOKEN': voiceRegToken() } });
+  const res = await fetch(VOICE_MANIFEST_URL);
   if (!res.ok) throw new Error(`список сборок распознавателя недоступен (HTTP ${res.status})`);
   const manifest = await res.json();
   const args = {
@@ -1205,7 +1211,6 @@ async function voiceInstall(modelId) {
       voiceJob.what = it.kind === 'model' ? 'модель' : 'распознаватель';
       voicePush(true);
       await voiceFetchFile(it.url, it.target, {
-        token: it.kind === 'runtime' ? voiceRegToken() : '',
         sha256: it.sha256,
         signal: ctl.signal,
         onBytes: (n) => { voiceJob.done += n; voicePush(); },

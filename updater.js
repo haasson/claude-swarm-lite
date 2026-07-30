@@ -9,8 +9,16 @@ const crypto = require('crypto');
 const { execFileSync, spawn } = require('child_process');
 const core = require('./updater-core');
 
+// `releases/latest/download/…` сам разрешается в свежий релиз, поэтому отдельной
+// мутабельной точки входа (путь `apps/latest/` в реестре гитлаба) больше не нужно:
+// манифест — обычный ассет каждого релиза. Гитхаб отвечает на это 302, за которым
+// httpsGetFollowing ходит сам.
+//
+// Из выбора «latest» исключены черновики и prerelease — на этом держатся сразу два
+// решения: релиз публикуется черновиком, пока CI не доложит в него .exe, а релизы
+// whisper помечаются prerelease, чтобы не перебивать собой релизы приложения.
 const MANIFEST_URL =
-  'https://gitlab.internal/api/v4/projects/331/packages/generic/apps/latest/manifest.json';
+  'https://github.com/haasson/claude-swarm-lite/releases/latest/download/manifest.json';
 
 // After a deferred asar-swap (Windows / macOS), relaunch must NOT call
 // app.relaunch() — a helper script starts the app once this process has fully
@@ -23,62 +31,84 @@ function consumeDeferredRelaunch() {
 }
 
 // build-info.json is bundled at the app root (inside app.asar); holds this build's
-// runtimeId + the read-only registry token. Absent in dev → updater is off.
+// runtimeId. Absent in dev → updater is off. (Раньше здесь же лежал read-only токен
+// реестра — с публичными релизами качать можно без учётных данных вовсе.)
 function readBuildInfo() {
   try { return JSON.parse(fs.readFileSync(path.join(app.getAppPath(), 'build-info.json'), 'utf8')); }
   catch (_) { return null; }
 }
 function enabled() { return app.isPackaged && !!readBuildInfo(); }
 
-function httpGet(url, token) {
+// GET, идущий за редиректами: отдаёт готовый поток ответа со статусом 200.
+//
+// Ассеты гитхаба живут за 302 (`releases/latest/download/…` → тег → CDN), а `https.get`
+// за Location сам не ходит. Реестр гитлаба отдавал 200 сразу, поэтому пока жили на нём,
+// отсутствие этого кода ничем не проявлялось. Голосовая качалка в main.js на `fetch`
+// уперлась в то же самое раньше нас — там про это есть комментарий про HuggingFace.
+//
+// Заголовков не передаём вовсе: публичный репозиторий отдаёт файлы без учётных данных,
+// так что и утекать на CDN при переходе нечему.
+function httpsGetFollowing(url, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const req = https.get(url, { headers: token ? { 'PRIVATE-TOKEN': token } : {} }, (res) => {
-      if (res.statusCode !== 200) { res.resume(); reject(new Error('HTTP ' + res.statusCode)); return; }
-      const chunks = [];
-      res.on('data', (c) => chunks.push(c));
-      res.on('end', () => resolve(Buffer.concat(chunks)));
-    });
-    req.on('error', reject);
-    req.setTimeout(15000, () => req.destroy(new Error('timeout')));
+    let hops = 0;
+    const go = (target) => {
+      const req = https.get(target, (res) => {
+        const hop = core.nextHop(res.statusCode, res.headers.location, target, hops);
+        if (hop.kind === 'follow') { res.resume(); hops += 1; go(hop.url); return; }
+        if (hop.kind === 'fail') { res.resume(); reject(new Error(hop.message)); return; }
+        resolve(res);
+      });
+      req.on('error', reject);
+      // Таймаут остаётся взведённым и после того, как мы отдали поток наружу: если
+      // качание встанет, req.destroy уронит res, а его 'error' слушают ниже.
+      req.setTimeout(timeoutMs, () => req.destroy(new Error('timeout')));
+    };
+    go(url);
+  });
+}
+
+async function httpGet(url) {
+  const res = await httpsGetFollowing(url, 15000);
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    res.on('error', reject);
+    res.on('data', (c) => chunks.push(c));
+    res.on('end', () => resolve(Buffer.concat(chunks)));
   });
 }
 
 // Download url → destPath with optional sha256 verify + progress(percent). Deletes
 // the partial file on sha mismatch.
-function download(url, token, destPath, expectedSha, onProgress) {
+async function download(url, destPath, expectedSha, onProgress) {
+  const res = await httpsGetFollowing(url, 120000);
   return new Promise((resolve, reject) => {
-    const req = https.get(url, { headers: token ? { 'PRIVATE-TOKEN': token } : {} }, (res) => {
-      if (res.statusCode !== 200) { res.resume(); reject(new Error('HTTP ' + res.statusCode)); return; }
-      const total = parseInt(res.headers['content-length'] || '0', 10);
-      let got = 0;
-      const hash = crypto.createHash('sha256');
-      const out = fs.createWriteStream(destPath);
-      out.on('error', reject);
-      res.on('error', reject);
-      res.on('data', (c) => {
-        got += c.length; hash.update(c);
-        if (onProgress && total) onProgress(Math.round((got / total) * 100));
-      });
-      res.pipe(out);
-      out.on('finish', () => out.close(() => {
-        const sha = hash.digest('hex');
-        if (expectedSha && sha !== String(expectedSha).toLowerCase()) {
-          fs.unlink(destPath, () => {});
-          reject(new Error('sha256 mismatch'));
-          return;
-        }
-        resolve(destPath);
-      }));
+    const total = parseInt(res.headers['content-length'] || '0', 10);
+    let got = 0;
+    const hash = crypto.createHash('sha256');
+    const out = fs.createWriteStream(destPath);
+    out.on('error', reject);
+    res.on('error', reject);
+    res.on('data', (c) => {
+      got += c.length; hash.update(c);
+      if (onProgress && total) onProgress(Math.round((got / total) * 100));
     });
-    req.on('error', reject);
-    req.setTimeout(120000, () => req.destroy(new Error('timeout')));
+    res.pipe(out);
+    out.on('finish', () => out.close(() => {
+      const sha = hash.digest('hex');
+      if (expectedSha && sha !== String(expectedSha).toLowerCase()) {
+        fs.unlink(destPath, () => {});
+        reject(new Error('sha256 mismatch'));
+        return;
+      }
+      resolve(destPath);
+    }));
   });
 }
 
 async function checkForUpdate() {
   if (!enabled()) return { kind: 'none' };
   const info = readBuildInfo();
-  const buf = await httpGet(MANIFEST_URL, info.updateToken);
+  const buf = await httpGet(MANIFEST_URL);
   const manifest = JSON.parse(buf.toString('utf8'));
   return core.decideUpdate(app.getVersion(), info.runtimeId, manifest);
 }
@@ -249,13 +279,12 @@ function scheduleDarwinAsarSwap({ asarPath, tmpPath, bakPath }) {
 // caller must then exit without app.relaunch() so the helper can start us.
 async function applyAsar(asarUrl, sha256, onProgress) {
   if (!enabled()) throw new Error('updater disabled');
-  const info = readBuildInfo();
   const asarPath = resourcesAsarPath();
   const dir = path.dirname(asarPath);
   fs.accessSync(dir, fs.constants.W_OK); // throws if not writable
   const tmp = path.join(dir, 'app.asar.new');
   try { fs.rmSync(tmp, { force: true }); } catch (_) {}
-  await download(asarUrl, info.updateToken, tmp, sha256, onProgress);
+  await download(asarUrl, tmp, sha256, onProgress);
   const bak = path.join(dir, 'app.asar.bak');
 
   if (process.platform === 'win32') {
@@ -278,9 +307,8 @@ async function applyAsar(asarUrl, sha256, onProgress) {
 
 async function downloadInstaller(url, filename, onProgress) {
   if (!enabled()) throw new Error('updater disabled');
-  const info = readBuildInfo();
   const dest = path.join(app.getPath('downloads'), filename);
-  await download(url, info.updateToken, dest, null, onProgress || null);
+  await download(url, dest, null, onProgress || null);
   shell.showItemInFolder(dest);
   return { ok: true, path: dest };
 }

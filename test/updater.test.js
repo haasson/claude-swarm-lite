@@ -60,6 +60,49 @@ test('decideUpdate: installer when newer but runtimeId differs', () => {
   assert.ok(d.installers.dmg);
 });
 
+// Редиректы. Ассеты гитхаба лежат за 302, и без прохода по Location обновление не
+// работает вообще — поэтому решение вынесено в чистую функцию и покрыто здесь.
+const GH = 'https://github.com/haasson/claude-swarm-lite/releases/latest/download/manifest.json';
+
+test('nextHop: 200 — приехали', () => {
+  assert.strictEqual(core.nextHop(200, undefined, GH, 0).kind, 'ok');
+});
+
+test('nextHop: идёт за Location на всех редиректных статусах', () => {
+  for (const code of [301, 302, 303, 307, 308]) {
+    const h = core.nextHop(code, 'https://objects.githubusercontent.com/x', GH, 0);
+    assert.strictEqual(h.kind, 'follow', 'статус ' + code);
+    assert.strictEqual(h.url, 'https://objects.githubusercontent.com/x');
+  }
+});
+
+test('nextHop: относительный Location разрешается от текущего адреса', () => {
+  const h = core.nextHop(302, '/haasson/claude-swarm-lite/releases/download/v0.22.0/app.asar', GH, 0);
+  assert.strictEqual(h.kind, 'follow');
+  assert.strictEqual(
+    h.url,
+    'https://github.com/haasson/claude-swarm-lite/releases/download/v0.22.0/app.asar',
+  );
+});
+
+test('nextHop: петля обрывается на лимите', () => {
+  const at = (count) => core.nextHop(302, 'https://x/y', GH, count, 5);
+  assert.strictEqual(at(4).kind, 'follow');   // пятый переход ещё разрешён
+  assert.strictEqual(at(5).kind, 'fail');     // шестой — уже нет
+  assert.match(at(5).message, /редирект/);
+});
+
+test('nextHop: редирект без Location и битый Location — ошибка, не переход', () => {
+  assert.strictEqual(core.nextHop(302, '', GH, 0).kind, 'fail');
+  assert.strictEqual(core.nextHop(302, 'http://[', GH, 0).kind, 'fail');
+});
+
+test('nextHop: прочие статусы — ошибка с кодом в тексте', () => {
+  const h = core.nextHop(404, undefined, GH, 0);
+  assert.strictEqual(h.kind, 'fail');
+  assert.match(h.message, /404/);
+});
+
 (async () => {
   for (const [name, fn] of tests) {
     try { await fn(); passed++; console.log('  ok  ' + name); }
