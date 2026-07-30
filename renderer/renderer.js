@@ -3393,7 +3393,7 @@ function confirmModal(message, okLabel = 'Выполнить') {
 // the app runs whatever `claude` your environment resolves to, so account/model
 // selection lives in your shell, not here.
 const HELP_HTML = `
-  <h3>Claude Swarm Lite</h3>
+  <h3>Swarm</h3>
   <p>Пульт для нескольких сессий Claude Code разом. Каждая вкладка — <b>настоящий процесс <code>claude</code></b> в твоём login-шелле; аппа его только показывает и переключает. Токенов она не хранит.</p>
 
   <h4>Статусы вкладок</h4>

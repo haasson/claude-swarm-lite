@@ -1,5 +1,5 @@
 @echo off
-title Claude Swarm Lite
+title Swarm
 cd /d "%~dp0"
 
 REM Mirror for the Electron binary - GitHub often drops the connection.
@@ -24,7 +24,7 @@ call npm install
 if errorlevel 1 goto install_failed
 
 :run
-echo === Starting Claude Swarm Lite ===
+echo === Starting Swarm ===
 call npm start
 pause
 exit /b 0

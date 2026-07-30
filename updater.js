@@ -225,9 +225,13 @@ function scheduleWinAsarSwap({ asarPath, tmpPath, bakPath }) {
 // memory mapping and often SIGBUS's during quit — macOS then shows
 // "unexpectedly quit" even though relaunch succeeds. Defer the swap until
 // after a clean exit, same idea as Windows.
+// Имя бандла нигде не зашито, и это не случайность: у тех, кто установил приложение до
+// переименования в Swarm, оно так и осталось «Claude Swarm Lite.app» — подмена app.asar
+// меняет содержимое бандла, а не его имя. Поэтому путь всегда берётся от исполняемого
+// файла, а не собирается из имени продукта.
 function scheduleDarwinAsarSwap({ asarPath, tmpPath, bakPath }) {
   const exePath = process.execPath;
-  const bundle = exePath.split('/Contents/')[0]; // .../Claude Swarm Lite.app
+  const bundle = exePath.split('/Contents/')[0]; // .../Swarm.app
   const pid = process.pid;
   const scriptPath = path.join(os.tmpdir(), `swarm-update-${pid}.sh`);
   const script = [
@@ -325,7 +329,7 @@ function isWritable(p) { try { fs.accessSync(p, fs.constants.W_OK); return true;
 
 function maybeRelocate() {
   if (!app.isPackaged || process.platform !== 'darwin') return false;
-  const bundle = app.getPath('exe').split('/Contents/')[0]; // .../Claude Swarm Lite.app
+  const bundle = app.getPath('exe').split('/Contents/')[0]; // .../Swarm.app
   const fromDmg = bundle.startsWith('/Volumes/');
   if (!fromDmg && isWritable(process.resourcesPath)) return false; // already fine
   const declinedFlag = path.join(app.getPath('userData'), 'relocate-declined');

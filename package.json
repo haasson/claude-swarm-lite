@@ -3,7 +3,7 @@
   "version": "0.22.0",
   "private": true,
   "description": "Minimal Electron GUI for several Claude Code sessions in tabs.",
-  "repository": "github:haasson/claude-swarm-lite",
+  "repository": "github:haasson/claude-swarm",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -15,9 +15,9 @@
   "license": "MIT",
   "build": {
     "appId": "io.swarm.claude-swarm-lite",
-    "productName": "Claude Swarm Lite",
+    "productName": "Swarm",
     "npmRebuild": false,
-    "artifactName": "claude-swarm-lite-${version}-${arch}.${ext}",
+    "artifactName": "swarm-${version}-${arch}.${ext}",
     "files": [
       "main.js",
       "git.js",

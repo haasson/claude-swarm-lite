@@ -121,8 +121,8 @@ writeFileSync('CHANGELOG.md', clHeader + entry + '\n' + clBody.replace(/^\n+/, '
 step('CHANGELOG.md updated');
 
 // 5. README download links ---------------------------------------------------
-const dmgFile = `claude-swarm-lite-${version}-arm64.dmg`;
-const exeFile = `claude-swarm-lite-${version}-x64.exe`;
+const dmgFile = `swarm-${version}-arm64.dmg`;
+const exeFile = `swarm-${version}-x64.exe`;
 const base = `https://github.com/${REPO}/releases/download/v${version}`;
 const dl = [
   '<!--DL-->',
@@ -180,7 +180,7 @@ if (!dmg) fail('no .dmg found in dist/ after build');
 // 8. assets: app.asar + manifest.json ----------------------------------------
 // Кладём рядом с .dmg в dist/: `gh release upload` берёт имя ассета из имени файла, а
 // asar лежит глубоко внутри .app и назвался бы правильно только случайно.
-const asarSrc = path.join('dist', 'mac-arm64', 'Claude Swarm Lite.app', 'Contents', 'Resources', 'app.asar');
+const asarSrc = path.join('dist', 'mac-arm64', 'Swarm.app', 'Contents', 'Resources', 'app.asar');
 if (!existsSync(asarSrc)) fail('app.asar not found at ' + asarSrc);
 // Drop darwin natives packed into the asar — Windows must keep using its own
 // app.asar.unpacked/conpty.node after an asar-swap (see scripts/strip-asar-natives.mjs).

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate build/icon.png (1024) for Claude Swarm Lite — dark console squircle
+"""Generate build/icon.png (1024) for Swarm — dark console squircle
 with a teal terminal chevron and a row of status dots. Also writes build/icon.ico
 as classic BMP entries (not PNG-compressed) so Wine/rcedit on CI can embed it."""
 import os

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// Claude Code hook for Claude Swarm Lite. Normalises the current event to a status
+// Claude Code hook for Swarm. Normalises the current event to a status
 // token and emits it as an INVISIBLE OSC 777 marker in the session terminal; the
 // app parses it out of the pty (see osc.js) for a deterministic status, no screen
 // scraping. Opt-in — installed only when the user enables «Точный статус через

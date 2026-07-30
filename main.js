@@ -50,6 +50,22 @@ if (!app.requestSingleInstanceLock()) {
   return;
 }
 
+// Приложение зовётся Swarm, а внутренние идентификаторы остались от прежнего имени —
+// `name: claude-swarm-lite` в package.json и appId `io.swarm.claude-swarm-lite`. Это не
+// недоделанное переименование, а условие сохранности данных, и менять их нельзя:
+//
+//   • `name` задаёт и папку настроек (~/Library/Application Support/claude-swarm-lite),
+//     и — что важнее — имя ключа в связке ключей, которым safeStorage шифрует
+//     telegram.dat. Ключ ищется по имени приложения, поэтому под новым именем он просто
+//     не найдётся: файл с токеном останется, а расшифровать его будет нечем никогда.
+//     Папку перенести можно, ключ — нет.
+//   • appId — то, по чему установщик Windows узнаёт прежнюю установку. Новый appId даёт
+//     вторую запись в «Установленных программах» вместо обновления.
+//
+// Пользователь ни того, ни другого не видит, так что цена нулевая. Маркеры
+// `<!-- claude-swarm-lite:begin -->` в agent-rules.js оставлены по той же причине: они
+// очерчивают блок, уже вставленный в чужие CLAUDE.md.
+//
 // Windows taskbar/Start Menu group by AppUserModelID. Must match package.json
 // `appId` (NSIS shortcuts use it); without this the shell often shows a generic
 // white-document icon even when the .exe has a real icon embedded.
@@ -60,7 +76,7 @@ if (process.platform === 'win32') {
 // (installer shell). After an asar-swap that stays stale — pin About to the
 // version inside package.json (same source as Settings / updater).
 app.setAboutPanelOptions({
-  applicationName: 'Claude Swarm Lite',
+  applicationName: 'Swarm',
   applicationVersion: app.getVersion(),
   version: app.getVersion(),
 });

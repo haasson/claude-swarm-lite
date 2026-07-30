@@ -1,5 +1,5 @@
 @echo off
-title Claude Swarm Lite - build installer
+title Swarm - build installer
 cd /d "%~dp0"
 
 REM Mirrors for Electron and electron-builder tools - GitHub often drops the
