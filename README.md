@@ -112,6 +112,6 @@ Swarm сделан под Claude Code. В «Настройки → Запуск�
 - **Приложение не открывается после установки.** Снимите карантин: `xattr -dr com.apple.quarantine /Applications/Swarm.app`, см. «Скачать».
 - **macOS сыплет запросами доступа к файлам.** Заводите агентов в папках проектов, а не в домашней.
 
-Подробное руководство по всем настройкам — [`ИНСТРУКЦИЯ.md`](ИНСТРУКЦИЯ.md). Запуск на Windows — [`WINDOWS.md`](WINDOWS.md). История версий — [`CHANGELOG.md`](CHANGELOG.md). Устройство и сборка — [`РАЗРАБОТКА.md`](РАЗРАБОТКА.md).
+Подробное руководство по всем настройкам — [`MANUAL.md`](MANUAL.md). Запуск на Windows — [`WINDOWS.md`](WINDOWS.md). История версий — [`CHANGELOG.md`](CHANGELOG.md). Устройство и сборка — [`DEVELOPMENT.md`](DEVELOPMENT.md).
 
 MIT.
