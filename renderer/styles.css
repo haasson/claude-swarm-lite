@@ -1063,6 +1063,28 @@ body.pult-on #git-msg { display: none; }
 .modal.logs .logs-copy { border-color: var(--accent); color: var(--accent); }
 
 
+/* --- «меня нет за компьютером» pill -------------------------------------- */
+/* Выключенный режим — обычная кнопка бара (тихая, как «команды» и «настройки»), включённый
+   светится жёлтым: это не украшение, а единственный признак, что итоги всех вкладок сейчас
+   уезжают в телегу. Снимается только руками, поэтому и должен бросаться в глаза. */
+.away-pill {
+  -webkit-app-region: no-drag;
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid var(--border); color: var(--muted);
+  background: transparent;
+  border-radius: 6px; padding: 2px 8px; margin-right: 4px;
+  font-size: 11px; font-weight: 600; cursor: pointer;
+}
+.away-pill[hidden] { display: none; }
+.away-pill:hover { color: var(--text); background: var(--panel-2); }
+.away-pill.is-on {
+  border-color: var(--permission); color: var(--permission);
+  background: color-mix(in srgb, var(--permission) 14%, transparent);
+}
+.away-pill.is-on:hover { background: color-mix(in srgb, var(--permission) 26%, transparent); }
+.away-pill .ic { display: inline-flex; }
+.away-pill .ic svg { width: 12px; height: 12px; }
+
 /* --- update pill + modal ------------------------------------------------- */
 .update-pill {
   -webkit-app-region: no-drag;

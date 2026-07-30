@@ -59,6 +59,11 @@
       <!-- Появляется, когда доступно обновление; клик открывает модалку апдейта. -->
       <button id="update-pill" class="update-pill" hidden></button>
       <button id="log-indicator" class="log-indicator" hidden title="Ошибки — показать логи"></button>
+      <!-- «Меня нет за компьютером»: с этого момента итоги ВСЕХ ходов уезжают в Telegram.
+           Появляется только с привязанной группой — без неё зеркалить некуда. Текстом, а не
+           иконкой: включённый режим должен быть виден издалека, иначе вернёшься за стол и не
+           поймёшь, почему телефон жужжит. -->
+      <button id="away-pill" class="away-pill" hidden></button>
       <button id="cmd-menu-btn" title="Быстрые команды (⌘K)"><span class="ic">☰</span><span class="tx">команды</span></button>
       <button id="settings-btn" title="Настройки (⌘,)"><span class="ic">⚙</span><span class="tx">настройки</span></button>
     </div>

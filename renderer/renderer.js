@@ -262,6 +262,10 @@ const ICONS = {
   grip: SVG('<circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/>'),
   // Lucide "bot" — the sub-agent badge.
   agents: SVG('<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>'),
+  // Lucide "door-open" / "smartphone" — «отошёл» и «меня нет»: ушёл из-за стола, следить
+  // остаётся телефон.
+  door: SVG('<path d="M11 20H2"/><path d="M11 4.562v16.157a1 1 0 0 0 1.242.97L19 20V5.562a2 2 0 0 0-1.515-1.94l-4-1A2 2 0 0 0 11 4.561Z"/><path d="M14 12h.01"/><path d="M22 20h-3"/>'),
+  phone: SVG('<rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/>'),
 };
 
 // Put an icon + a folder name into an element (name via text node, never markup).
@@ -1459,13 +1463,13 @@ function showSettingsModal(tab) {
           <span class="set-label set-label-gap">Когда присылать итоги</span>
           <label class="set-check">
             <input type="checkbox" id="set-tg-mirror" />
-            <span class="set-check-tx">Присылать итоги всех ходов
-              <span class="set-check-sub">по умолчанию — только те, что начаты из телеги, и все, если вас нет за компьютером дольше пяти минут</span></span>
+            <span class="set-check-tx">Присылать итоги всех ходов всегда
+              <span class="set-check-sub">по умолчанию — только те, что начаты из телеги; уходя, нажмите «отошёл» в строке состояния, и в телегу пойдут все</span></span>
           </label>
           <label class="set-check">
             <input type="checkbox" id="set-tg-awake" />
-            <span class="set-check-tx">Не давать компьютеру засыпать, пока группа привязана
-              <span class="set-check-sub">со спящей машиной отвечать некому: агенты живут здесь, а не на сервере</span></span>
+            <span class="set-check-tx">Не давать компьютеру засыпать, пока вас нет
+              <span class="set-check-sub">со спящей машиной отвечать некому: агенты живут здесь, а не на сервере. Держит бодрым только в режиме «отошёл» — за столом сон вам не мешает</span></span>
           </label>
 
         </div>
@@ -1778,6 +1782,9 @@ function showSettingsModal(tab) {
     if (st.prompt && tgPromptBox.hidden) togglePromptBox(true);
     tgAwakeI.checked = !!st.keepAwake;
     tgMirrorI.checked = !!st.mirrorAll;
+    // Панель и кнопка в строке состояния показывают одно и то же состояние моста. Отвязка
+    // группы отвечает только сюда (main её не рассылает), а кнопка при этом должна исчезнуть.
+    renderAwayPill(st);
     if (document.activeElement !== tgWBinI) tgWBinI.value = st.whisperBin || '';
     if (document.activeElement !== tgWModelI) tgWModelI.value = st.whisperModel || '';
     // Инструкция по ручной установке — своя на ОС (brew есть только на маке), её присылает
@@ -3742,6 +3749,41 @@ setInterval(() => {
 }, 30 * 60 * 1000);
 
 document.getElementById('update-pill').addEventListener('click', openUpdateModal);
+
+// --- «меня нет за компьютером» ----------------------------------------------------------
+// Один выключатель на всё приложение, а не на вкладку: уходит человек, а не агент. Включён —
+// в группу едут итоги ВСЕХ ходов; выключен — только вопросы. Кто ушёл и когда вернулся,
+// решает человек: приложение это больше не угадывает (почему — см. tgAwayMode в main.js).
+//
+// Состояние живёт в main и приезжает оттуда же, чем бы его ни поменяли — этой кнопкой,
+// отвязкой группы в настройках или привязкой новой с телефона.
+const awayPill = document.getElementById('away-pill');
+let awayOn = false;
+
+function renderAwayPill(st) {
+  // Без привязанной группы кнопки нет: обещать «всё уйдёт в телегу» там, где телеги ещё нет,
+  // — обещать несуществующее.
+  const ready = !!(st && st.chatId != null);
+  awayPill.hidden = !ready;
+  if (!ready) { awayOn = false; return; }
+  awayOn = !!st.away;
+  awayPill.classList.toggle('is-on', awayOn);
+  awayPill.innerHTML = '';
+  const ic = document.createElement('span');
+  ic.className = 'ic';
+  ic.innerHTML = awayOn ? ICONS.phone : ICONS.door;
+  awayPill.appendChild(ic);
+  awayPill.appendChild(document.createTextNode(awayOn ? 'меня нет' : 'отошёл'));
+  awayPill.title = awayOn
+    ? 'Итоги всех ходов уезжают в Telegram. Нажмите, когда вернётесь за компьютер'
+    : 'Ухожу: присылать в Telegram итоги всех ходов, а не только вопросы';
+}
+
+awayPill.addEventListener('click', async () => {
+  renderAwayPill(await window.swarm.telegram.setAway(!awayOn));
+});
+window.swarm.telegram.onState(renderAwayPill);
+window.swarm.telegram.state().then(renderAwayPill).catch(() => {});
 
 document.getElementById('new-session-folder').addEventListener('click', createSessionInFolder);
 document.getElementById('settings-btn').addEventListener('click', () => showSettingsModal());

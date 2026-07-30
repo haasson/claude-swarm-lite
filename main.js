@@ -18,7 +18,7 @@
 //   just type `claude` into it. Bonus: auth "just works" because it's the same
 //   environment you log in from.
 
-const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeImage, shell, safeStorage, powerSaveBlocker, powerMonitor } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeImage, shell, safeStorage, powerSaveBlocker } = require('electron');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
@@ -549,7 +549,7 @@ setInterval(() => {
         // узнавал, что ему ответили. Спросил из телеги — получи ответ в телегу.
         const owed = !!d.tgAck;
         const relay = next.status === 'ready' && prev === 'running' && TG.chatId != null
-          && (owed || d.tgMode || TG.mirrorAll || tgAway());
+          && (owed || d.tgMode || TG.mirrorAll || tgAwayMode);
         // В журнал — КАЖДАЯ смена статуса вкладки, за которой следит телеграм, и решение
         // про итог. Без этого «в телегу ничего не пришло» неотличимо от «ход не считался
         // законченным»: журнал показывал входящее сообщение и обрывался, а дальше начинались
@@ -558,14 +558,13 @@ setInterval(() => {
         // И `relay` в условии: пока его не было, отчёт «человека нет за маком» уходил вообще
         // без строки о переходе — в журнале итог появлялся из ниоткуда. Именно на этом
         // застрял разбор «молчащая вкладка присылает одно и то же раз в полчаса»: не видно
-        // было, СЧИТАЕТ ли приложение, что там был ход. Не через `|| tgAway()`, иначе стоит
-        // человеку отойти — и каждая перерисовка каждой вкладки пишет строку.
+        // было, СЧИТАЕТ ли приложение, что там был ход.
         if (TG.chatId != null && (owed || d.tgMode || TG.mirrorAll || relay)) {
           tgLog(`  вкладка ${id}: ${prev} → ${next.status}${kind ? ':' + kind : ''}`
             + ` · итог ${relay ? 'отправляю' : 'нет'}`
             + (relay ? '' : ` (нужен переход работает→готов; долг=${owed ? 'да' : 'нет'}`
               + `, режим тлг=${d.tgMode ? 'да' : 'нет'}`
-              + `, зеркало=${TG.mirrorAll ? 'да' : 'нет'}, отошёл=${tgAway() ? 'да' : 'нет'})`));
+              + `, зеркало=${TG.mirrorAll ? 'да' : 'нет'}, меня нет=${tgAwayMode ? 'да' : 'нет'})`));
         }
         if (relay) tgOnDone(id, d);
       }
@@ -912,16 +911,24 @@ const TG_PAIR_TTL_MS = 900_000;   // 15 minutes
 // Сколько раз отказ проверки продлевает окно (см. tgBindChat). Не безграничное: иначе код
 // можно держать живым сколько угодно, присылая его раз в четверть часа.
 const TG_PAIR_RENEW_MAX = 2;
-// «Ты не за столом» — не по фокусу окна (окно часто так и остаётся впереди, когда человек
-// ушёл), а по отсутствию любого ввода на маке. Тогда в группу идут итоги ВСЕХ ходов: это и
-// есть зеркало, которого ждёшь из дороги. Вернулся за клавиатуру — снова только вопросы,
-// иначе телефон жужжал бы весь рабочий день.
-const TG_AWAY_S = 300;
-
-function tgAway() {
-  try { return powerMonitor.getSystemIdleTime() >= TG_AWAY_S; }
-  catch (_) { return false; }
-}
+// «Меня нет за компьютером» — ОДНА кнопка в строке состояния, а не догадка приложения.
+// Пока режим включён, в группу идут итоги ВСЕХ ходов: это и есть зеркало, которого ждёшь из
+// дороги. За столом приходят только вопросы, иначе телефон жужжал бы весь рабочий день.
+//
+// Раньше здесь стояла догадка — `powerMonitor.getSystemIdleTime() >= 300`, — и она врала в
+// обе стороны. Простой считается в момент, когда ход ЗАКОНЧИЛСЯ: загрузил десяток агентов,
+// встал и вышел — первые итоги приходят внутри пятиминутного окна, и ровно они, самые
+// интересные, никуда не уезжали. Задел трекпад, проходя мимо, — счётчик обнулился. И
+// наоборот: сидишь читаешь, мыши не касаешься пять минут — зеркало включилось само, хотя ты
+// за столом. Момент, когда человек ушёл, знает только человек.
+//
+// Снимается тоже руками. Автоснятие по первому вводу было бы той же эвристикой с другого
+// конца: разбудил мак будильником или тронул мышь через удалённый доступ — зеркало молча
+// выключилось, и узнаёшь об этом по тишине в телеге, когда уже поздно.
+//
+// На диске НЕ хранится: приложение запустилось — значит ты за компьютером. Иначе «включил
+// вчера, забыл выключить» встречало бы утром жужжащим телефоном.
+let tgAwayMode = false;
 // Журнал моста: каждое входящее сообщение и что мы с ним сделали — в
 // <userData>/telegram.log. Пишется ВСЕГДА, и это осознанно: раньше он включался
 // переменной окружения SWARM_TG_LOG, то есть ровно в тот момент, когда журнал нужен —
@@ -1506,6 +1513,9 @@ function tgState() {
     detail: TG.detail || 'short',
     keepAwake: !!TG.keepAwake,
     mirrorAll: !!TG.mirrorAll,
+    // Режим «меня нет» — не настройка, а положение дел прямо сейчас; кнопка в строке
+    // состояния рисуется по нему же, поэтому едет вместе с остальным состоянием моста.
+    away: tgAwayMode,
     whisperBin: TG.whisperBin,
     whisperModel: TG.whisperModel,
     voiceHint: voice.setupHint(process.platform),
@@ -1518,12 +1528,16 @@ function tgState() {
 
 function tgPush() { safeSend('telegram:state', tgState()); }
 
-// Hold off system sleep while a chat is bound. Only «app suspension» — the screen may
-// still turn off, we just need the process to keep polling.
+// Не давать системе уснуть — пока человека нет за компьютером. Только «app suspension»:
+// экран пусть гаснет, нам важно, чтобы процесс продолжал опрашивать телегу.
+//
+// Именно в режиме «меня нет», а не круглосуточно при привязанной группе, как было раньше:
+// за столом сон никому не мешает — ты рядом и сам разбудишь мак, — а держать батарею
+// разряженной весь день ради моста, которым в эту минуту не пользуешься, незачем.
 let tgAwakeId = null;
 
 function tgApplyKeepAwake() {
-  const want = !!(TG.keepAwake && TG.token && TG.chatId != null);
+  const want = !!(TG.keepAwake && tgAwayMode && TG.token && TG.chatId != null);
   if (want && tgAwakeId == null) {
     tgAwakeId = powerSaveBlocker.start('prevent-app-suspension');
   } else if (!want && tgAwakeId != null) {
@@ -2672,6 +2686,10 @@ ipcMain.handle('telegram:forget', async () => {
   TG = tgBlank();
   tgResetRouting();
   tgBot = ''; tgPair = null; tgError = null; tgCheck = null;
+  // Писать стало некуда — режим «меня нет» вместе с чатом и уходит. Иначе он остался бы
+  // включённым втихую: кнопка без привязанной группы не показывается, и следующая привязка
+  // начиналась бы с уже работающего зеркала, которого никто не просил.
+  tgAwayMode = false;
   try { fs.unlinkSync(tgPath()); } catch (_) { /* already gone */ }
   tgApplyKeepAwake();
   return tgState();
@@ -2719,9 +2737,9 @@ ipcMain.handle('telegram:setDetail', (_e, raw) => {
   return tgState();
 });
 
-// Keep the Mac awake while the bridge is on: with the lid closed nothing polls, so the
-// «answer from the taxi» case quietly stops working. Off = normal sleep behaviour.
-// Зеркалить итоги всегда, а не только когда тебя нет за маком.
+// Зеркалить итоги ВСЕГДА, а не только в режиме «меня нет»: для тех, кому телега — полный
+// журнал работы, а не связь на время отсутствия. Настройка, поэтому живёт на диске —
+// в отличие от самого режима (см. tgAwayMode).
 ipcMain.handle('telegram:setMirrorAll', (_e, on) => {
   TG.mirrorAll = !!on;
   try { tgSave(); } catch (e) { reportMainError(e); }
@@ -2736,6 +2754,8 @@ ipcMain.handle('telegram:setWhisper', (_e, { bin, model } = {}) => {
   return tgState();
 });
 
+// Не давать маку уснуть, пока человека нет: с закрытой крышкой ничто не опрашивает телегу,
+// и «ответить из такси» тихо перестаёт работать. Выключено = обычное поведение сна.
 ipcMain.handle('telegram:setKeepAwake', (_e, on) => {
   TG.keepAwake = !!on;
   try { tgSave(); } catch (e) { reportMainError(e); }
@@ -2743,8 +2763,25 @@ ipcMain.handle('telegram:setKeepAwake', (_e, on) => {
   return tgState();
 });
 
+// «Меня нет за компьютером» / «я вернулся» — одна кнопка в строке состояния. Не сохраняется
+// на диск (см. tgAwayMode): это состояние текущего запуска, а не настройка.
+//
+// Журналим оба перехода, и не ради полноты: «почему в телегу поехали итоги всех вкладок» и
+// «почему не поехали» разбираются именно по этой строке, а сама кнопка следов не оставляет.
+ipcMain.handle('telegram:setAway', (_e, on) => {
+  const next = !!on;
+  if (next !== tgAwayMode) {
+    tgAwayMode = next;
+    tgLog(next ? 'режим «меня нет» включён — итоги всех ходов идут в группу'
+               : 'режим «меня нет» снят — в группу снова только вопросы');
+    tgApplyKeepAwake();
+  }
+  return tgState();
+});
+
 ipcMain.handle('telegram:unpair', async () => {
   TG.chatId = null; TG.isForum = false; TG.topics = {}; tgCheck = null;
+  tgAwayMode = false;         // как и в forget: некуда зеркалить — нет и режима
   tgResetRouting();
   try { tgSave(); } catch (e) { reportMainError(e); }
   tgApplyKeepAwake();
