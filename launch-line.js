@@ -20,6 +20,7 @@
 // expand hands claude a literal `$SWARM_ASK_RULE` as its system prompt, or a settings
 // path that doesn't exist — and claude then refuses to start, so the tab greets its
 // owner with a dead shell instead of an agent.
+
 // Shells whose `"$VAR"` means what we think it means. Not a guess list: each of these
 // expands a double-quoted reference the POSIX way (fish and csh included — they differ
 // in plenty of things, but not in this one).
@@ -28,6 +29,7 @@ const POSIX_SHELLS = ['sh', 'bash', 'zsh', 'ksh', 'mksh', 'dash', 'ash', 'fish',
 // 'posix' | 'cmd' | 'powershell' | null. null means «unknown shell» (nushell, xonsh,
 // elvish, something homegrown in $SHELL) — we then pass values inline instead of
 // guessing a syntax, see envPassing.
+//
 // Split on both separators by hand instead of path.basename: this reads $SHELL/%COMSPEC%,
 // and a `C:\…\cmd.exe` handed to a POSIX path.basename comes back whole — the family
 // would be «unknown» and every Windows tab would take the fallback for no reason.
@@ -68,4 +70,4 @@ function clearPrefix(shellPath) {
   return shellFamily(shellPath) === 'cmd' ? 'cls&' : 'clear; ';
 }
 
-module.exports = { POSIX_SHELLS, shellFamily, envPassing, clearPrefix };
+module.exports = { shellFamily, envPassing, clearPrefix };
