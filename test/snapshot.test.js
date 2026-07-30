@@ -75,6 +75,52 @@ test('a permission prompt survives a shrunken frame as well', async () => {
   assert.strictEqual(raw.kind, 'permission');
 });
 
+// --- перенос по ширине окна — не перевод строки -------------------------------
+// В телегу уезжала лестница: терминал ломает абзац по ширине, каждый обрывок ложится
+// отдельным рядом, и в чате это выглядело как переводы строки посреди слов. Ширина окна —
+// свойство того, кто смотрит; в ответе её быть не должно. Проверяем на живом эмуляторе:
+// признак ряда-продолжения (isWrapped) ставит он сам, подделкой это не доказать.
+const LONG = 'Готово: подчистил маршрутизацию, переписал разбор ответа и прогнал сюиту — '
+  + 'зелёная, тридцать восемь тестов, ни одного пропущенного, дальше можно выпускать.';
+
+test('snapshotWrapped склеивает перенесённые ряды обратно в абзац', async () => {
+  const term = new Terminal({ cols: 60, rows: 20, scrollback: 200, allowProposedApi: true });
+  await write(term, 'что-то выше\r\n');
+  await write(term, LONG + '\r\n');
+  const buf = term.buffer.active;
+  const rows = S.snapshotRows(buf, SNAP_ROWS);
+  assert.ok(rows.split('\n').length > 3, 'терминал действительно разложил абзац по рядам');
+  const glued = S.snapshotWrapped(buf, SNAP_ROWS);
+  assert.ok(glued.includes(LONG), 'абзац должен вернуться одной строкой:\n' + glued);
+});
+
+test('snapshotWrapped не срастает слова на стыке рядов', async () => {
+  // Перенос попадает ровно на пробел: обрезав ряду хвост, мы бы склеили «сюиту» и «зелёная».
+  const term = new Terminal({ cols: 24, rows: 12, scrollback: 200, allowProposedApi: true });
+  await write(term, 'раз два три четыре пять шесть семь восемь\r\n');
+  const glued = S.snapshotWrapped(term.buffer.active, SNAP_ROWS);
+  assert.ok(glued.includes('раз два три четыре пять шесть семь восемь'), glued);
+});
+
+test('snapshotWrapped оставляет настоящие переводы строки на месте', async () => {
+  const term = new Terminal({ cols: 60, rows: 20, scrollback: 200, allowProposedApi: true });
+  await write(term, 'первая строка\r\nвторая строка\r\n');
+  assert.strictEqual(S.snapshotWrapped(term.buffer.active, SNAP_ROWS), 'первая строка\nвторая строка');
+});
+
+// Весь путь отчёта в телегу для вкладки БЕЗ стенограммы: живой экран → склейка переносов →
+// сообщение агента целиком. Проверяется целиком, потому что ломалось именно на стыках.
+test('ответ с экрана уходит абзацами и без мебели', async () => {
+  const term = new Terminal({ cols: 60, rows: 24, scrollback: 200, allowProposedApi: true });
+  await write(term, '⏺ Bash(npm test)\r\n  ⎿ 38 tests passed\r\n\r\n');
+  await write(term, '⏺ ' + LONG + '\r\n\r\n  Осталось выпустить.\r\n\r\n');
+  await write(term, '  Jump to bottom (click) ↓\r\n');
+  await write(term, '╭' + '─'.repeat(58) + '╮\r\n│ >' + ' '.repeat(56) + '│\r\n╰' + '─'.repeat(58) + '╯\r\n');
+  await write(term, '  ⏵⏵ auto mode on · ? for shortcuts\r\n');
+  const said = S.lastAgentBlock(S.snapshotWrapped(term.buffer.active, 200));
+  assert.strictEqual(said, LONG + '\n\nОсталось выпустить.');
+});
+
 test('an all-blank screen yields an empty snapshot, not a crash', async () => {
   const term = new Terminal({ cols: COLS, rows: ROWS, scrollback: 200, allowProposedApi: true });
   assert.strictEqual(S.snapshotRows(term.buffer.active, SNAP_ROWS), '');

@@ -292,6 +292,15 @@ test('turnText: одно длинное сообщение читают свер
   assert.ok(got.endsWith('…'));
 });
 
+// Настройка подробности — просьба к агенту отвечать короче, а НЕ ножницы по готовому
+// ответу. Поэтому мост зовёт turnText без предела, и предел не должен появиться «по
+// умолчанию»: обрезать сказанное значит решить за человека, какая часть ему не нужна.
+test('turnText без предела не режет ничего', () => {
+  const long = 'я'.repeat(30_000);
+  const one = T.parseEntries(assistant([{ type: 'text', text: long }], 1000));
+  assert.strictEqual(T.turnText(one), long);
+});
+
 test('turnText: без записей — пустая строка, а не «undefined»', () => {
   assert.strictEqual(T.turnText([]), '');
   assert.strictEqual(T.turnText(null), '');

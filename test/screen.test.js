@@ -596,7 +596,13 @@ test('lastAgentBlock не выдаёт за ответ текст человек
   assert.strictEqual(S.lastAgentBlock(null), null);
 });
 
-test('lastAgentBlock уважает предел длины', () => {
+// Мост зовёт lastAgentBlock без предела: в чат уходит всё, что агент сказал.
+test('lastAgentBlock без предела не режет ничего', () => {
+  const long = 'я'.repeat(9000);
+  assert.strictEqual(S.lastAgentBlock('⏺ ' + long + '\n\n> \n'), long);
+});
+
+test('lastAgentBlock уважает предел длины, если его задали', () => {
   const got = S.lastAgentBlock(SCREEN_REPLY, 24);
   assert.ok(got.length <= 24, got.length);
   assert.ok(got.endsWith('…'), got);

@@ -328,7 +328,7 @@ process.on('unhandledRejection', (reason) => reportMainError(reason));
 // tell "waiting for a prompt" apart from "idle/done". We deliberately do NOT
 // surface Claude's token counter or activity words — just the four states.
 const { Terminal: HeadlessTerminal } = require('@xterm/headless');
-const { extractQuestion, lastAgentBlock, readMode, modeTitle, modeFlag, countSubagents, contentEnd, snapshotRows, setAskPhrases, parsePrompt } = require('./screen');
+const { extractQuestion, lastAgentBlock, readMode, modeTitle, modeFlag, countSubagents, contentEnd, snapshotRows, snapshotWrapped, setAskPhrases, parsePrompt } = require('./screen');
 // The status state machine + «ждёт» latch + hook arbitration live in a pure,
 // unit-tested module; osc.js sniffs hook markers out of the raw pty stream.
 const { tickStatus, applyHook, applyTranscript, keyboardEvent } = require('./detector');
@@ -396,10 +396,12 @@ function snapshot(d) {
   return snapshotRows(d.term.buffer.active, SNAP_ROWS);
 }
 
-// То же, но настолько высоко, насколько помнит эмулятор: из этого окна берётся ТЕКСТ
-// ответа, когда стенограммы нет (см. lastAgentBlock).
+// То же, но настолько высоко, насколько помнит эмулятор, и с СКЛЕЕННЫМИ переносами: из
+// этого окна берётся ТЕКСТ ответа, когда стенограммы нет (см. lastAgentBlock). Ширина окна
+// терминала — свойство того, кто смотрит; в ответе, который читают с телефона, её быть не
+// должно (см. snapshotWrapped).
 function replySnapshot(d) {
-  return snapshotRows(d.term.buffer.active, REPLY_ROWS);
+  return snapshotWrapped(d.term.buffer.active, REPLY_ROWS);
 }
 
 // The user's Claude statusline (model │ dir [bar] % │ task) renders on the very
@@ -559,14 +561,15 @@ const transcript = require('./transcript');
 const TR_TICK_MS = 500;
 const TR_TAIL_BYTES = 64 * 1024;   // plenty for the last few entries of a big file
 const TR_TEXT_MAX = 500;           // question excerpt sent to the renderer
-// Сколько текста хода вообще имеет смысл хранить для пересылки в телегу. Зависит от
-// настройки подробности: в режиме «кратко» агент и сам отвечает коротко, а в режиме
-// «полностью» обрезка на трёх тысячах символов означала бы оборванный на полуслове ответ —
-// то есть настройку, которая обещает полноту и молча её не даёт. Длинное сообщение
-// Telegram всё равно примет частями (telegram.chunkText).
-const TR_REPLY_SHORT = 3000;
-const TR_REPLY_FULL = 12_000;
-function trReplyMax() { return TG && TG.detail === 'full' ? TR_REPLY_FULL : TR_REPLY_SHORT; }
+// Предела длины ответа здесь НЕТ, и это осознанно. Настройка подробности («кратко» /
+// «полностью») — это просьба к агенту отвечать короче, а не ножницы по готовому тексту:
+// обрезать то, что агент уже сказал, значит прислать оборванную мысль и молча решить за
+// человека, какая часть ответа ему не нужна. Длинное сообщение Telegram примет частями
+// (telegram.chunkText делит по абзацам, tgSend отправляет все).
+//
+// Естественная граница всё равно есть: TR_TAIL_BYTES — сколько хвоста стенограммы читаем.
+// Ход длиннее этого окна попадёт в чат не целиком, но такой ход не бывает ответом, он
+// бывает историей с гигантскими выводами инструментов.
 const TR_BIND_EVERY_MS = 2000;     // don't rescan a folder on every tick while unbound
 // A bound file this quiet, while the pty is clearly talking, means we're reading a dead
 // session — /clear starts a NEW one. Long enough that a slow tool (which writes nothing
@@ -827,7 +830,7 @@ setInterval(() => {
       // агент говорил между инструментами (см. transcript.turnText). d.trText намеренно
       // обрезан от фразы-триггера («Сейчас от тебя: …») и годится только в подпись на плашке
       // вкладки: в чат так уезжал огрызок, хотя всё полезное агент сказал ДО этой фразы.
-      if (v) d.trFinal = transcript.turnText(d.trEntries || [], trReplyMax());
+      if (v) d.trFinal = transcript.turnText(d.trEntries || []);
       // Итог хода — то, что мост отправляет как «вот что получилось».
       // Вместе с ним — ВРЕМЯ той записи, из которой он взят. Только по нему видно, этого хода
       // текст или прошлого: статус «готов» приходит от хука на секунду раньше, чем classify
@@ -2009,7 +2012,7 @@ async function tgNotifyDone(id, d, fresh) {
   // поле ввода — из-за этого в чат уезжала то линейка рамки, то собственный вопрос
   // пользователя, отражённый ему же как «ответ агента». И не lastAgentLine: одна строка —
   // это огрызок ответа, а человеку нужен ответ.
-  const text = fromTr || String(lastAgentBlock(replySnapshot(d), trReplyMax()) || '').trim();
+  const text = fromTr || String(lastAgentBlock(replySnapshot(d)) || '').trim();
   // Источник называем ЧЕСТНО, включая «текст стенограммы не от этого хода»: пометка
   // «стенограмма» на чужом тексте однажды уже отправила искать не ту проблему.
   const why = fromTr ? 'стенограмма'
@@ -2075,7 +2078,7 @@ async function tgNotifyWaiting(id, d) {
   // целиком; d.question (одна строка для плашки вкладки) остаётся последним запасом, из-за
   // него в чат уезжало «Jump to bottom (click) ↓» вместо вопроса.
   const said = String(d.trFinal || '').trim()
-    || String(lastAgentBlock(replySnapshot(d), trReplyMax()) || '').trim()
+    || String(lastAgentBlock(replySnapshot(d)) || '').trim()
     || d.question;
   const body = said ? '\n\n' + said : '';
   const tail = permission

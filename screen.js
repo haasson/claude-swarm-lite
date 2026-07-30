@@ -40,6 +40,33 @@ function snapshotRows(buf, rows) {
   return out.join('\n');
 }
 
+// Тот же снимок, но перенесённые строки склеены обратно в одну — для ТЕКСТА ответа, а не
+// для статуса.
+//
+// Терминал ломает абзац по ширине окна, и каждый обрывок ложится отдельным рядом. Для
+// детектора это неважно (он ищет маркеры), а в чат из-за этого уезжала лестница: перевод
+// строки посреди слова там, где агент писал сплошной абзац. Ширина окна — свойство того, кто
+// смотрит, и в ответе её быть не должно.
+//
+// Ряд-продолжение эмулятор помечает сам (isWrapped), и это единственный надёжный признак:
+// по длине строки перенос от настоящего перевода строки не отличить. Ряд, у которого есть
+// продолжение, дописан до края — обрезать ему хвост нельзя, иначе на стыке пропадёт пробел
+// и два слова срастутся.
+function snapshotWrapped(buf, rows) {
+  const end = contentEnd(buf);
+  const start = Math.max(0, end - rows);
+  const out = [];
+  for (let y = start; y < end; y++) {
+    const line = buf.getLine(y);
+    if (!line) continue;
+    const next = y + 1 < end ? buf.getLine(y + 1) : null;
+    const text = line.translateToString(!(next && next.isWrapped));
+    if (line.isWrapped && out.length) out[out.length - 1] += text;
+    else out.push(text);
+  }
+  return out.join('\n');
+}
+
 // A selection row before the answer: "❯ 1. Yes". Claude Code paints ❯, but
 // Cursor / some terminals use an arrow (→ ▸ ▶) or a plain ">".
 const OPTION_RE = /^\s*[❯>→➜▸►▶]?\s*\d+\.\s/;
@@ -465,5 +492,5 @@ module.exports = {
   extractQuestion, lastAgentLine, lastAgentBlock, readMode, modeTitle, modeFlag, MODE_TITLES, MODE_FLAGS,
   inferWaitingKind, asksForInput, setAskPhrases, countSubagents,
   parsePrompt, fingerprintOf,
-  contentEnd, snapshotRows,
+  contentEnd, snapshotRows, snapshotWrapped,
 };
