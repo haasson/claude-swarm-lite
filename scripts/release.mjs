@@ -93,7 +93,12 @@ const INTERNAL_TYPES = ['chore', 'test', 'docs', 'build', 'ci', 'style', 'releas
 const INTERNAL_RE = new RegExp(`^- (?:${INTERNAL_TYPES.join('|')})(?:\\([^)]*\\))?!?:`, 'i');
 
 let lastTag = '';
-try { lastTag = git(['describe', '--tags', '--abbrev=0']); } catch { /* first release */ }
+// --match 'v[0-9]*' обязателен, а не аккуратность: в репозитории есть теги, не имеющие
+// к версиям приложения отношения — `whisper` и `whisper-<версия>` держат релизы
+// распознавателя. Без фильтра describe находит ближайший ЛЮБОЙ тег, а он у нас стоит на
+// том же HEAD, и весь changelog выходит пустым: диапазон `whisper..HEAD` — ничто.
+try { lastTag = git(['describe', '--tags', '--abbrev=0', '--match', 'v[0-9]*']); }
+catch { /* first release */ }
 const range = lastTag ? `${lastTag}..HEAD` : 'HEAD';
 const allLines = (git(['log', range, '--no-merges', '--pretty=- %s']) || '').split('\n').filter(Boolean);
 const shown = allLines.filter((l) => !INTERNAL_RE.test(l));
