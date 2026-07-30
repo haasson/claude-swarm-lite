@@ -3,7 +3,7 @@
   "version": "0.22.0",
   "private": true,
   "description": "Minimal Electron GUI for several Claude Code sessions in tabs.",
-  "repository": "github:haasson/claude-swarm",
+  "repository": "github:raul-cortez/claude-swarm",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
