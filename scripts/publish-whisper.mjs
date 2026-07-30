@@ -1,17 +1,27 @@
 #!/usr/bin/env node
-// scripts/publish-whisper.mjs — выложить сборки whisper.cpp в реестр, откуда их берёт
-// кнопка «Включить голосовые».
+// scripts/publish-whisper.mjs — выложить сборки whisper.cpp в релизы гитхаба, откуда их
+// берёт кнопка «Включить голосовые».
 //
 // Запуск:  node scripts/publish-whisper.mjs [версия]      (по умолчанию 1.9.1)
-// Нужно:   GITLAB_TOKEN с scope `api`; на macOS — cmake (brew install cmake) и Xcode CLT.
-// Итог:    файлы в apps/whisper-<версия>/*, манифест в apps/latest/whisper.json.
+// Нужно:   gh CLI, залогиненный; на macOS — cmake (brew install cmake) и Xcode CLT.
+// Итог:    файлы в релизе `whisper-<версия>`, манифест — ассетом релиза `whisper`.
 //
 // Почему так, а не вложить бинарник в приложение: обновления ходят свопом app.asar, и
 // вложенный распознаватель дорожал бы каждое обновление ВСЕМ, включая тех, кому голос не
-// нужен. Поэтому он лежит в реестре и качается только по нажатию кнопки.
+// нужен. Поэтому он лежит отдельно и качается только по нажатию кнопки.
 //
 // Почему манифест, а не константы в voice.js: новую версию whisper.cpp можно выложить, не
 // выпуская версию приложения — приложение читает манифест и берёт то, что там описано.
+//
+// Два тега, а не один: версионный `whisper-<версия>` держит сами файлы (он неизменяемый,
+// поэтому клиент не может скачать половину одной версии и половину другой), а
+// фиксированный `whisper` держит только whisper.json, который перезаписывается. Это ровно
+// та мутабельная точка входа, которой раньше был путь `apps/latest/` в реестре гитлаба.
+//
+// ОБА релиза обязаны быть prerelease. `latest` у гитхаба — самый свежий релиз вообще, и
+// обычный релиз распознавателя стал бы им, после чего обновление приложения начало бы
+// получать 404 вместо своего манифеста. Ассеты prerelease качаются как обычные, из выбора
+// «latest» такой релиз просто исключён.
 //
 // macOS: готового CLI в релизах whisper.cpp нет, собираем сами — статически
 // (BUILD_SHARED_LIBS=OFF), с встроенными шейдерами Metal (GGML_METAL_EMBED_LIBRARY=ON),
@@ -27,13 +37,12 @@ import os from 'node:os';
 import path from 'node:path';
 
 const VERSION = process.argv[2] || '1.9.1';
-const HOST = 'gitlab.internal';
-const BASE = `https://${HOST}/api/v4/projects/331/packages/generic/apps`;
+const REPO = 'haasson/claude-swarm-lite';
 const ZIP = `https://github.com/ggml-org/whisper.cpp/releases/download/v${VERSION}/whisper-bin-x64.zip`;
 const WIN_KEEP = ['whisper-cli.exe', 'whisper.dll', 'ggml.dll', 'ggml-base.dll'];
 
-const token = process.env.GITLAB_TOKEN;
-if (!token) fail('нужен GITLAB_TOKEN с scope api');
+try { execFileSync('gh', ['auth', 'status'], { stdio: 'ignore' }); }
+catch { fail('gh не залогинен — `gh auth login`'); }
 if (process.platform !== 'darwin') fail('mac-бинарник собирается только на macOS');
 
 function fail(m) { console.error('✗ ' + m); process.exit(1); }
@@ -90,16 +99,27 @@ for (const [k, v] of Object.entries(manifest.runtimes)) {
 }
 
 // --- выложить -----------------------------------------------------------------
-async function put(url, body) {
-  const res = await fetch(url, { method: 'PUT', headers: { 'PRIVATE-TOKEN': token }, body });
-  if (!res.ok) fail(`${url} → HTTP ${res.status} ${await res.text()}`);
+// Создаём релиз, если его ещё нет; --prerelease обязателен (см. шапку файла).
+function ensureRelease(tag, title, notes) {
+  try { execFileSync('gh', ['release', 'view', tag, '--repo', REPO], { stdio: 'ignore' }); return; }
+  catch { /* нет — создаём */ }
+  sh('gh', ['release', 'create', tag, '--repo', REPO, '--prerelease',
+    '--title', title, '--notes', notes]);
 }
-for (const name of fs.readdirSync(pub)) {
-  step(`выкладываю ${name}`);
-  await put(`${BASE}/whisper-${VERSION}/${name}`, fs.readFileSync(path.join(pub, name)));
-}
+
+step(`выкладываю файлы в релиз whisper-${VERSION}`);
+ensureRelease(`whisper-${VERSION}`, `whisper.cpp ${VERSION}`, manifest.note);
+sh('gh', ['release', 'upload', `whisper-${VERSION}`, '--repo', REPO, '--clobber',
+  ...fs.readdirSync(pub).map((n) => path.join(pub, n))]);
+
 // Манифест — последним: пока он не обновлён, приложения продолжают брать прошлую версию,
 // а не половину выложенной новой.
-await put(`${BASE}/latest/whisper.json`, JSON.stringify(manifest, null, 2) + '\n');
+const manifestPath = path.join(work, 'whisper.json');
+fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+ensureRelease('whisper', 'whisper.cpp — точка входа',
+  'Здесь лежит только whisper.json: он говорит приложению, какую версию распознавателя'
+  + ' брать. Сами файлы — в релизах whisper-<версия>.');
+sh('gh', ['release', 'upload', 'whisper', '--repo', REPO, '--clobber', manifestPath]);
+
 fs.rmSync(work, { recursive: true, force: true });
 console.log(`\n✔ whisper.cpp ${VERSION} выложен. Кнопка «Включить голосовые» берёт его отсюда.`);

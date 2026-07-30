@@ -1,0 +1,106 @@
+name: Release
+
+# Собирает виндовую половину релиза и публикует его.
+#
+# Разделение труда: мак-половину (.dmg, app.asar, manifest.json) выкладывает
+# scripts/release.mjs с машины автора — подпись у нас ad-hoc, поэтому мак собирается за
+# клавиатурой, а не на раннере. Здесь добавляется .exe.
+#
+# Последний шаг — СНЯТЬ ЧЕРНОВИК, и это несущая часть схемы, а не формальность.
+# Обновлялка ходит за releases/latest/download/manifest.json, а `latest` у гитхаба
+# черновики игнорирует. Значит пока .exe не собран, версии для обновлялки не существует,
+# и никто не может попасть в окно, где манифест обещает установщик, которого ещё нет.
+#
+# Запуск вручную (workflow_dispatch) собирает .exe и кладёт артефактом, ничего не
+# публикуя, — этим удобно проверять виндовую сборку, не выпуская версию.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write   # доливать ассеты и публиковать релиз
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # node-pty здесь — форк с прибилдами: prebuild-install скачивает готовый бинарник
+      # под нашу цель Electron, поэтому ни компилятора, ни Python не нужно. Переменные
+      # говорят ему взять электронную сборку, а не нодовую.
+      #
+      # Саму дев-версию Electron не качаем: мы её не запускаем, только упаковываем, а
+      # дистрибутив для упаковки electron-builder берёт себе сам.
+      - name: Зависимости
+        run: npm ci
+        env:
+          npm_config_runtime: electron
+          npm_config_target: 29.4.6
+          npm_config_disturl: https://electronjs.org/headers
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+      # Без этого файла обновлялка в собранном приложении выключена (см. enabled() в
+      # updater.js). Токенов внутри больше нет — только отпечаток рантайма.
+      - name: build-info.json
+        run: node scripts/write-build-info.mjs
+
+      # --publish never обязателен. На теге electron-builder иначе пытается опубликовать
+      # релиз САМ, своим представлением о том, как он должен выглядеть, — и на гитхабе,
+      # где у него теперь есть рабочий токен, это не падение сборки, а тихая порча нашего
+      # черновика. Публикуем только шагами ниже.
+      - name: Сборка установщика
+        run: npm run dist:win -- --publish never
+
+      - name: Что собралось
+        shell: bash
+        run: ls -la dist/*.exe
+
+      - name: Дождаться черновика релиза
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          # Черновик создаёт release.mjs через секунды после пуша тега, а мы к этому
+          # моменту собирали .exe минуты — он почти наверняка уже на месте. «Почти» тут
+          # мало: без релиза следующий шаг упал бы, и тег остался бы вообще без виндового
+          # установщика, причём заметили бы это не сразу.
+          for i in $(seq 1 30); do
+            if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "релиз $GITHUB_REF_NAME на месте"
+              exit 0
+            fi
+            echo "ждём релиз $GITHUB_REF_NAME … ($i/30)"
+            sleep 10
+          done
+          echo "релиз $GITHUB_REF_NAME так и не появился — release.mjs его не создал?" >&2
+          exit 1
+
+      - name: Долить .exe в релиз
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: gh release upload "$GITHUB_REF_NAME" dist/*.exe --clobber --repo "$GITHUB_REPOSITORY"
+
+      # Теперь релиз полон, и только теперь ему можно стать latest.
+      - name: Опубликовать релиз
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --repo "$GITHUB_REPOSITORY"
+
+      # Ручной запуск: публиковать нечего, отдаём артефактом.
+      - name: Артефакт (ручной запуск)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-swarm-lite-windows
+          path: dist/*.exe
+          if-no-files-found: error

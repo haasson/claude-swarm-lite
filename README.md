@@ -10,12 +10,10 @@ Electron + node-pty + xterm.js.
 ## Скачать
 
 <!--DL-->
-**Последняя версия: 0.21.4** · [все релизы](https://gitlab.internal/ai-public/claude-swarm-lite/-/releases)
+**Последняя версия: 0.21.4** · [все релизы](https://github.com/haasson/claude-swarm-lite/releases)
 
-- **macOS** (Apple Silicon): [`claude-swarm-lite-0.21.4-arm64.dmg`](https://gitlab.internal/api/v4/projects/331/packages/generic/apps/0.21.4/claude-swarm-lite-0.21.4-arm64.dmg)
-- **Windows**: [`claude-swarm-lite-0.21.4-x64.exe`](https://gitlab.internal/api/v4/projects/331/packages/generic/apps/0.21.4/claude-swarm-lite-0.21.4-x64.exe) — собирается в CI после тега
-
-> Ссылки ведут в приватный GitLab — нужен доступ к репозиторию.
+- **macOS** (Apple Silicon): [`claude-swarm-lite-0.21.4-arm64.dmg`](https://github.com/haasson/claude-swarm-lite/releases/download/v0.21.4/claude-swarm-lite-0.21.4-arm64.dmg)
+- **Windows**: [`claude-swarm-lite-0.21.4-x64.exe`](https://github.com/haasson/claude-swarm-lite/releases/download/v0.21.4/claude-swarm-lite-0.21.4-x64.exe) — собирается в CI после тега
 <!--/DL-->
 
 ## Запуск (из исходников)
@@ -131,22 +129,26 @@ npm start
 Приложение нативное, поэтому каждая ОС собирается на своей платформе:
 
 - **macOS** (`.dmg`) — только на Mac: `npm run dist`. Только Apple Silicon (arm64).
-- **Windows** (`.exe`) — на Windows-машине `npm run dist:win`, **или** в GitLab CI
-  на Linux-раннере через Wine (node-pty подтягивает готовый win32-бинарь, компилятор
-  не нужен). CI собирает `.exe` автоматически при пуше тега.
+- **Windows** (`.exe`) — в GitHub Actions на настоящем `windows-latest` при пуше тега,
+  либо руками на Windows-машине: `npm run dist:win`.
 
 ### Выпуск версии — одной командой
 
 ```bash
-export GITLAB_TOKEN=<PAT с scope api>
+gh auth login        # один раз; нужны scope repo и workflow
 npm run release -- patch      # или minor / major
 ```
 
-Скрипт: поднимает версию, дописывает `CHANGELOG.md`, обновляет ссылки в этом README,
-коммитит и ставит тег `vX.Y.Z`, собирает `.dmg` и заливает его в GitLab-реестр пакетов,
-пушит `main` + тег. Пуш тега запускает CI: тот собирает Windows `.exe` и создаёт
-**GitLab Release** со ссылками на обе сборки.
+Скрипт: гоняет тесты, поднимает версию, дописывает `CHANGELOG.md`, обновляет ссылки в
+этом README, коммитит и ставит тег `vX.Y.Z`, собирает `.dmg`, пушит `main` + тег и
+создаёт релиз **черновиком** с тремя ассетами — `.dmg`, `app.asar` и `manifest.json`.
 
-> Ссылки на сборки ведут в приватный GitLab и требуют доступа к репозиторию.
+Пуш тега запускает CI: тот собирает Windows `.exe`, доливает его в этот же релиз и
+**снимает черновик**. Порядок именно такой, потому что автообновление ходит за
+`releases/latest/download/manifest.json`, а `latest` у гитхаба черновики не видит: пока
+`.exe` не собран, новой версии для обновлялки не существует — и никто не попадает в окно,
+где манифест обещает установщик, которого ещё нет.
+
+Никаких токенов в окружении не нужно: релизы публичные, `gh` авторизуется сам.
 
 Полная история версий — в [`CHANGELOG.md`](CHANGELOG.md).

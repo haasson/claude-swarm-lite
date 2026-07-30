@@ -1,38 +1,40 @@
 #!/usr/bin/env node
-// scripts/release.mjs — cut a release and publish it to GitLab.
+// scripts/release.mjs — cut a release and publish it to GitHub.
 //
 // Usage:  npm run release -- patch|minor|major       (default: patch)
-// Needs:  GITLAB_TOKEN  — a GitLab PAT with `api` scope, in the environment.
-// Run on: macOS (this builds the .dmg locally; GitLab has no macOS runner).
+// Needs:  gh CLI, logged in (`gh auth status`). Никаких токенов в окружении.
+// Run on: macOS (this builds the .dmg locally; подпись у нас ad-hoc, так что мак
+//         собирается за клавиатурой, а не на раннере).
 //
 // What it does, in order:
-//   1. sanity: clean tree, on `main`, token present
+//   1. sanity: clean tree, on `main`, gh залогинен
 //   2. npm test — a red suite stops the release before anything is written
 //   3. bump version in package.json
 //   4. prepend a CHANGELOG.md section from commits since the last tag
 //   5. refresh the download links block in README.md
 //   6. commit "release: vX.Y.Z" + annotated tag vX.Y.Z (tag message = changelog)
 //   7. build the .dmg  (npm run dist)
-//   8. upload the .dmg to the GitLab generic package registry
+//   8. собрать ассеты: app.asar (без нативных мака) + manifest.json для обновлялки
 //   9. push main + the tag
+//  10. gh release create --draft с тремя ассетами
 //
-// Pushing the tag triggers .gitlab-ci.yml, which builds the Windows .exe on a
-// Linux+Wine runner, uploads it next to the .dmg, and creates the GitLab Release
-// linking both. So this script owns the Mac half; CI owns the Windows half.
+// Релиз создаётся ЧЕРНОВИКОМ, и это несущее решение, а не осторожность. `latest` у
+// гитхаба игнорирует черновики, а обновлялка ходит именно за
+// releases/latest/download/manifest.json. Пока .exe не доложен из CI, релиз не должен
+// становиться latest: иначе несколько минут манифест обещает установщик, которого ещё
+// нет, и пришедший в это окно виндовый пользователь получает 404. Черновик снимает CI
+// последним шагом — ровно когда обещание становится правдой.
+//
+// Так что этот скрипт owns the Mac half; CI owns the Windows half и публикацию.
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, existsSync, copyFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const HOST = 'gitlab.internal';
-const PROJECT_ID = 331;
-const PKG = 'apps'; // generic-package name; download path is /packages/generic/apps/<version>/<file>
-
-const token = process.env.GITLAB_TOKEN;
-if (!token) fail('set GITLAB_TOKEN (a GitLab PAT with `api` scope) before running');
+const REPO = 'haasson/claude-swarm-lite';
 
 const bump = process.argv[2] || 'patch';
 if (!['patch', 'minor', 'major'].includes(bump)) fail('argument must be patch | minor | major');
@@ -45,6 +47,10 @@ function sh(cmd, args) { execFileSync(cmd, args, { stdio: 'inherit' }); }
 // 1. sanity ------------------------------------------------------------------
 if (git(['status', '--porcelain'])) fail('working tree is not clean — commit or stash first');
 if (git(['rev-parse', '--abbrev-ref', 'HEAD']) !== 'main') fail("switch to the 'main' branch first");
+// Проверяем ЗДЕСЬ, а не в момент публикации: там уже собран .dmg, сделан коммит и
+// проставлен тег, и «не залогинен» стоил бы разбора полузавершённого релиза руками.
+try { execFileSync('gh', ['auth', 'status'], { stdio: 'ignore' }); }
+catch { fail('gh не залогинен — `gh auth login` (нужны scope repo и workflow)'); }
 
 // 2. tests -------------------------------------------------------------------
 // BEFORE the bump on purpose: everything below writes to the repo (package.json,
@@ -109,15 +115,13 @@ step('CHANGELOG.md updated');
 // 5. README download links ---------------------------------------------------
 const dmgFile = `claude-swarm-lite-${version}-arm64.dmg`;
 const exeFile = `claude-swarm-lite-${version}-x64.exe`;
-const base = `https://${HOST}/api/v4/projects/${PROJECT_ID}/packages/generic/${PKG}/${version}`;
+const base = `https://github.com/${REPO}/releases/download/v${version}`;
 const dl = [
   '<!--DL-->',
-  `**Последняя версия: ${version}** · [все релизы](https://${HOST}/ai-public/claude-swarm-lite/-/releases)`,
+  `**Последняя версия: ${version}** · [все релизы](https://github.com/${REPO}/releases)`,
   '',
   `- **macOS** (Apple Silicon): [\`${dmgFile}\`](${base}/${dmgFile})`,
   `- **Windows**: [\`${exeFile}\`](${base}/${exeFile}) — собирается в CI после тега`,
-  '',
-  '> Ссылки ведут в приватный GitLab — нужен доступ к репозиторию.',
   '<!--/DL-->',
 ].join('\n');
 let readme = readFileSync('README.md', 'utf8');
@@ -149,9 +153,11 @@ function cachedElectronDist() {
   } catch { /* no cache — fall back to a normal download */ }
   return null;
 }
-// build-info.json — this build's runtimeId + read-only registry token, bundled into
-// the asar. runtimeId = sha256(electronVersion|nodePtyVersion); if it changes between
-// releases, app.asar isn't swap-safe and a full installer is required.
+// build-info.json — this build's runtimeId, bundled into the asar.
+// runtimeId = sha256(electronVersion|nodePtyVersion); if it changes between releases,
+// app.asar isn't swap-safe and a full installer is required — то есть каждому придётся
+// переставить приложение руками. Поднимать Electron или node-pty в одном релизе с чем-то
+// ещё поэтому не стоит: бамп сам по себе стоит людям ручной установки.
 const here = path.dirname(fileURLToPath(import.meta.url));
 sh('node', [path.join(here, 'write-build-info.mjs')]);
 const runtimeId = JSON.parse(readFileSync('build-info.json', 'utf8')).runtimeId;
@@ -163,30 +169,19 @@ sh('npm', distDir ? ['run', 'dist', '--', `-c.electronDist=${distDir}`] : ['run'
 const dmg = readdirSync('dist').find((f) => f === dmgFile) || readdirSync('dist').find((f) => f.endsWith('.dmg'));
 if (!dmg) fail('no .dmg found in dist/ after build');
 
-// 8. upload the dmg to the generic package registry --------------------------
-step(`uploading ${dmg} to the package registry …`);
-const bytes = readFileSync(path.join('dist', dmg));
-const put = await fetch(`${base}/${dmgFile}`, {
-  method: 'PUT',
-  headers: { 'PRIVATE-TOKEN': token },
-  body: bytes,
-});
-if (!put.ok) fail(`dmg upload failed: ${put.status} ${await put.text()}`);
-step('dmg uploaded');
-
-// Publish the platform-independent app.asar + a stable manifest for the in-app updater.
-const asarPath = path.join('dist', 'mac-arm64', 'Claude Swarm Lite.app', 'Contents', 'Resources', 'app.asar');
-if (!existsSync(asarPath)) fail('app.asar not found at ' + asarPath);
+// 8. assets: app.asar + manifest.json ----------------------------------------
+// Кладём рядом с .dmg в dist/: `gh release upload` берёт имя ассета из имени файла, а
+// asar лежит глубоко внутри .app и назвался бы правильно только случайно.
+const asarSrc = path.join('dist', 'mac-arm64', 'Claude Swarm Lite.app', 'Contents', 'Resources', 'app.asar');
+if (!existsSync(asarSrc)) fail('app.asar not found at ' + asarSrc);
 // Drop darwin natives packed into the asar — Windows must keep using its own
 // app.asar.unpacked/conpty.node after an asar-swap (see scripts/strip-asar-natives.mjs).
-sh('node', [path.join(here, 'strip-asar-natives.mjs'), asarPath]);
+sh('node', [path.join(here, 'strip-asar-natives.mjs'), asarSrc]);
+const asarPath = path.join('dist', 'app.asar');
+copyFileSync(asarSrc, asarPath);
 const asarBytes = readFileSync(asarPath);
 const asarSha = createHash('sha256').update(asarBytes).digest('hex');
-step(`uploading app.asar (${(asarBytes.length / 1e6).toFixed(1)} MB) …`);
-const asarPut = await fetch(`${base}/app.asar`, {
-  method: 'PUT', headers: { 'PRIVATE-TOKEN': token }, body: asarBytes,
-});
-if (!asarPut.ok) fail(`asar upload failed: ${asarPut.status} ${await asarPut.text()}`);
+step(`app.asar готов (${(asarBytes.length / 1e6).toFixed(1)} MB)`);
 
 // Notes = the changelog section we just generated for this version.
 const manifest = {
@@ -195,24 +190,36 @@ const manifest = {
   asar: { url: `${base}/app.asar`, sha256: asarSha },
   installers: {
     dmg: `${base}/${dmgFile}`,
-    exe: `${base}/claude-swarm-lite-${version}-x64.exe`,
+    exe: `${base}/${exeFile}`,
   },
   notes: commits,
   pubDate: today,
 };
-const latestBase = `https://${HOST}/api/v4/projects/${PROJECT_ID}/packages/generic/${PKG}/latest`;
-const manPut = await fetch(`${latestBase}/manifest.json`, {
-  method: 'PUT', headers: { 'PRIVATE-TOKEN': token, 'Content-Type': 'application/json' },
-  body: JSON.stringify(manifest, null, 2),
-});
-if (!manPut.ok) fail(`manifest upload failed: ${manPut.status} ${await manPut.text()}`);
-step('app.asar + manifest.json published');
+const manifestPath = path.join('dist', 'manifest.json');
+writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+step('manifest.json готов');
 
 // 9. push --------------------------------------------------------------------
+// Тег уходит ДО создания релиза: gh привязывает релиз к существующему тегу, а иначе
+// создал бы свой легковесный вместо нашего аннотированного (в его сообщении — changelog).
 step('pushing main + tag …');
-const authed = `https://oauth2:${token}@${HOST}/ai-public/claude-swarm-lite.git`;
-sh('git', ['push', authed, 'main']);
-sh('git', ['push', authed, `v${version}`]);
+sh('git', ['push', 'origin', 'main']);
+sh('git', ['push', 'origin', `v${version}`]);
 
-console.log(`\n✔ v${version} released. Windows .exe + GitLab Release are being built by CI:`);
-console.log(`  https://${HOST}/ai-public/claude-swarm-lite/-/pipelines`);
+// 10. draft release ----------------------------------------------------------
+step('создаю черновик релиза …');
+sh('gh', [
+  'release', 'create', `v${version}`,
+  '--repo', REPO,
+  '--draft',
+  '--title', `v${version}`,
+  '--notes', entry.trim(),
+  path.join('dist', dmgFile),
+  asarPath,
+  manifestPath,
+]);
+
+console.log(`\n✔ v${version} собран и выложен черновиком. Дальше CI собирает .exe,`);
+console.log('  доливает его в релиз и снимает черновик — до этого момента');
+console.log('  обновлялка новую версию не видит, и это нарочно.');
+console.log(`  https://github.com/${REPO}/actions`);
