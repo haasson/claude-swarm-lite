@@ -1,6 +1,6 @@
 {
   "name": "claude-swarm-lite",
-  "version": "0.21.0",
+  "version": "0.21.1",
   "private": true,
   "description": "Minimal Electron GUI for several Claude Code sessions in tabs.",
   "main": "main.js",
