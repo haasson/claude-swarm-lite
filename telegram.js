@@ -346,6 +346,10 @@ const ENTER = '\r';
 // приложения нажатие из телеги ничем не отличается от нажатия за клавиатурой.
 const BACK_TAB = '\x1b[Z';
 
+// Escape — «закрыть диалог, ничего не выбрав». Тем же байтом это делает клавиатура, поэтому
+// для Claude Code нажатие из телеги неотличимо от нажатия за компьютером. См. QA_ACTIONS.esc.
+const ESC = '\x1b';
+
 function inputWrites(text) {
   const body = String(text == null ? '' : text).replace(/\r\n?/g, '\n');
   if (!body) return [];
@@ -398,6 +402,15 @@ const QA_ACTIONS = {
   auto: '⚡ авто — сам решает',
   manual: '🔒 спрашивать разрешение',
   new: '➕ ещё агент здесь',
+  // Выход из тупика. Диалог на экране запирает вкладку: словами в него не ответить (одобряют
+  // только то, что предложил Клод), а кнопок с вариантами не будет, если разобрать их не
+  // удалось — и тогда с телефона нельзя ни выбрать, ни написать. Так живой квиз (вопрос с
+  // вариантами, у каждого своё описание) оставил человека без единого действия: сворм отвечал
+  // «выбери вариант кнопкой» на сообщение, под которым кнопок нет.
+  //
+  // Escape закрывает любой диалог Клода, ничего не одобряя, — это и есть безопасный выход:
+  // после него вкладка снова принимает прозу.
+  esc: '⎋ закрыть диалог',
   // Две последние — только для сообщения «тему закрыли, а вкладка жива» (см. main.js).
   // В шапку темы они не попадают: там свой список, HEADER_ACTIONS.
   reopen: '↩️ вернуть тему',
@@ -644,7 +657,7 @@ module.exports = {
   apiUrl, looksLikeToken, maskToken,
   pairCode, deepLink, pairingMatch,
   readUpdate, readService, senderLabel, routeMessage, chunkText, inlineKeyboard, buttonLabel, optionsList, BTN_MAX, callbackData, parseCallbackData, callbackTab, CB_MAX, backoffMs, retryAfterMs, classifyError,
-  inputWrites, PASTE_ON, PASTE_OFF, ENTER, BACK_TAB, routeFailure,
+  inputWrites, PASTE_ON, PASTE_OFF, ENTER, BACK_TAB, ESC, routeFailure,
   COMMANDS, QA_ACTIONS, HEADER_ACTIONS, actionData, parseAction, actionKeyboard,
   createPoller,
 };

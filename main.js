@@ -364,6 +364,14 @@ const REPLY_ROWS = 200;
 // плашка ложится по нижней кромке вида переписки, а под ней ещё поле ввода с подсказками,
 // и в шестнадцать строк она не попадает, стоит человеку набрать многострочный запрос.
 const SCROLL_HINT_ROWS = 40;
+// Окно для ДИАЛОГА с вариантами — тоже шире, чем для статуса, и по той же причине, что у
+// ответа. Запрос разрешения в шестнадцать строк укладывается («Bash command», команда, два
+// варианта), а вопрос с вариантами — нет: у каждого варианта своя строка описания, на узком
+// окне она переносится, и в снимок попадала половина списка. Номера тогда начинались не с
+// единицы, парсер отказывался (это правило защищает от прозаических списков в переписке), и в
+// телегу уходило «вариантов не разобрал» — то есть с телефона нельзя было ни выбрать, ни
+// написать словами. См. screen.parsePrompt.
+const PROMPT_ROWS = 44;
 const RESIZE_GRACE_MS = 700; // after a resize, ignore the repaint burst as "activity"
 const INPUT_GRACE_MS = 700;  // after a keystroke, ignore the echo/redraw as "activity"
 
@@ -378,7 +386,7 @@ function makeDetector(cols, rows) {
     // Экран отлистан назад (человек читает историю внутри Клода) и последний снимок,
     // сделанный, пока вид был живым. Пока отлистано, ВСЕ читатели экрана получают этот
     // снимок, а байты перерисовки не считаются работой. См. snapshot() ниже.
-    scrolledBack: false, liveSnap: '',
+    scrolledBack: false, liveSnap: '', livePrompt: '',
     status: '', detail: '', statusline: '', question: null, sub: 0, dead: false,
     // Waiting latch (fallback detection, no hooks): hold «ждёт» through screen
     // noise, release only when the agent genuinely resumed. See detector.js.
@@ -405,6 +413,11 @@ function makeDetector(cols, rows) {
     // текст, поэтому одну и ту же строку второй раз не шлём (см. tgProgressTick).
     tgNotifiedAt: 0, tgAck: null, tgAckText: '', tgLastSent: '', trFinal: '', mode: null,
     tgTopicLive: false, tgTopicName: '',
+    // Текст с телефона, который ждёт закрытия диалога: напечатать его прямо в диалог нельзя,
+    // а терять — значит просить набрать заново с телефона. Уходит по кнопке «закрыть диалог»
+    // (см. QA_ACTIONS.esc) и сбрасывается, как только вкладка перестала ждать: ответили за
+    // компьютером — отложенному сообщению уже некуда идти.
+    tgPending: '',
     // Отказы отправки уведомления: сколько подряд и когда пробовать снова. Без откола такт
     // (300 мс) долбил Telegram каждые полторы секунды всё время, пока вкладка ждёт.
     tgFails: 0, tgRetryAt: 0,
@@ -454,6 +467,21 @@ function markAnswered(d, now) {
   d.lastDataAt = now;
   d.answeredAt = now;
   try { d.askAnswered = askFingerprint(snapshot(d)); } catch (_) { d.askAnswered = ''; }
+}
+
+// Окно для разбора диалога с вариантами (см. PROMPT_ROWS). Отдельная дверь, но с той же
+// защитой от прокрутки, что и snapshot(): отпечаток запроса, кнопки под сообщением и проверка
+// при нажатии обязаны видеть ОДИН И ТОТ ЖЕ экран, иначе нажатие отвергается как «на экране
+// другое». Поэтому все, кто зовёт parsePrompt, ходят сюда.
+//
+// Переносы НЕ склеиваем: строка описания, приклеенная к строке варианта, уехала бы в подпись
+// кнопки целым абзацем.
+function promptSnapshot(d) {
+  const buf = d.term.buffer.active;
+  const live = snapshotRows(buf, PROMPT_ROWS);
+  if (d.scrolledBack) return d.livePrompt || live;
+  d.livePrompt = live;
+  return live;
 }
 
 // То же, но настолько высоко, насколько помнит эмулятор, и с СКЛЕЕННЫМИ переносами: из
@@ -2120,6 +2148,9 @@ function tgOnWaiting(id) {
 function tgCancelWaiting(d) {
   if (!d) return;
   if (d.tgTimer) { clearTimeout(d.tgTimer); d.tgTimer = null; }
+  // Диалога больше нет — отложенному тексту некуда идти. Держать его до следующего ожидания
+  // значило бы напечатать вчерашний ответ в завтрашний вопрос.
+  d.tgPending = '';
   // Вкладка больше не ждёт: следующее ожидание — новый повод уведомить, и повод свежий, так
   // что счётчик отказов начинается заново.
   d.tgNotifiedAt = 0;
@@ -2336,7 +2367,7 @@ async function tgNotifyWaiting(id, d) {
   // text. You approve what you see: the request (with the command in it) is in the message,
   // and nothing that wasn't on Claude's list can be chosen. Typing «да» here still gets
   // refused, because a word is not a choice from a list.
-  const prompt = permission ? parsePrompt(snapshot(d)) : null;
+  const prompt = permission ? parsePrompt(promptSnapshot(d)) : null;
   if (prompt && prompt.options.length) {
     const kb = telegram.inlineKeyboard(prompt.options, String(id), prompt.fingerprint);
     if (kb) {
@@ -2378,17 +2409,28 @@ async function tgNotifyWaiting(id, d) {
   const scraped = String(lastAgentBlock(replySnapshot(d)) || '').trim() || String(d.question || '').trim();
   const said = fromTr || (scraped.length >= TG_MIN_SCREEN_TEXT ? scraped : '');
   const body = said ? '\n\n' + said : '';
+  // Разрешение, вариантов которого мы не разобрали, — это была отправка человека к
+  // компьютеру, а с телефона он ничего сделать не мог: кнопок нет, а прозу в открытый диалог
+  // мост не печатает. Теперь выход есть всегда — Escape (см. QA_ACTIONS.esc), и подпись
+  // говорит именно про него, а не «ответь за компьютером».
+  const kb = permission ? telegram.actionKeyboard(String(id), ['esc']) : null;
   const tail = permission
-    ? '\n\nВариантов не разобрал — ответь за компьютером.'
+    ? '\n\nВариантов не разобрал — кнопок с ними не будет. Нажми «закрыть диалог»,'
+      + ' и можно отвечать словами; или ответь за компьютером.'
     : said
       ? '\n\nОтветь реплаем на это сообщение.'
       : '\n\nТекста вопроса не разобрал — загляни во вкладку.';
   const full = `${head} · ${tgTabName(id)}${body}${tail}`;
   // Вопрос прозой — это и есть исход хода, значит он вписывается в ту же заготовку: реплай
   // на неё маршрутизируется в ту же вкладку, потому что её id мы запомнили при отправке.
-  if (d.tgAck) { await tgAckResolve(id, d, full); return; }
-  const msgId = await tgSend({ threadId, text: full });
-  if (!permission) tgRemember(msgId, id);
+  // Кроме случая с кнопкой: правка сообщения клавиатуру не несёт, поэтому заготовка
+  // становится указателем, а выход уезжает отдельным сообщением — как и в ветке с вариантами.
+  if (d.tgAck) {
+    if (!kb) { await tgAckResolve(id, d, full); return; }
+    await tgAckResolve(id, d, `🔐 ${tgTabName(id)} держит диалог — что делать, ниже`);
+  }
+  const msgId = await tgSend({ threadId, text: full, replyMarkup: kb });
+  tgRemember(msgId, id);
   if (!msgId) tgNotifyFailed(d); else { d.tgFails = 0; d.tgRetryAt = 0; }
 }
 
@@ -2396,6 +2438,9 @@ async function tgNotifyWaiting(id, d) {
 // Claude Code не принимает «поставь accept edits», а жать вслепую — стрельба в темноте.
 const TG_MODE_MAX_STEPS = 4;         // круг короткий; больше — значит не поняли, где мы
 const TG_MODE_SETTLE_MS = 220;       // TUI успевает перерисовать строку режима
+// Сколько ждать после Escape, прежде чем печатать отложенный текст: Клод убирает рамку
+// диалога и возвращает поле ввода, и до этого момента буквы уходят в никуда.
+const TG_ESC_SETTLE_MS = 450;
 
 // Переключение режима, общее для /mode и быстрых кнопок. Возвращает, что получилось; слова
 // для человека подбирает вызывающий.
@@ -2405,7 +2450,7 @@ const TG_MODE_SETTLE_MS = 220;       // TUI успевает перерисов�
 // режим бессмысленно. И именно в этот момент человек чаще всего и пробует — потому что ему
 // надоели вопросы; поэтому вместо «не разобрал режим» надо сказать, что делать.
 async function tgSwitchMode(id, d, want) {
-  if (parsePrompt(snapshot(d))) return { blocked: 'permission' };
+  if (parsePrompt(promptSnapshot(d))) return { blocked: 'permission' };
   const was = readMode(snapshot(d)) || d.mode || null;
   if (was === want) return { ok: true, was, landed: was, already: true };
   let landed = was;
@@ -2465,6 +2510,33 @@ async function tgOnAction(qa, u, ack, routed) {
   if (qa.action === 'kill') {
     safeSend('app:closeTab', { id: tab });
     await ack(`Закрываю «${name}».`);
+    return;
+  }
+  // Выход из тупика: Escape закрывает диалог, ничего в нём не выбрав. Ничего не одобряет —
+  // именно поэтому такой кнопке можно быть там, где кнопкам с вариантами нельзя.
+  //
+  // Отложенный текст (см. отказ в tgOnMessage) уходит следом, а не вместо: человек уже написал
+  // словами то, что хотел, и заставлять его набирать это на телефоне второй раз — та же
+  // ловушка, только на один шаг длиннее. Пауза перед печатью нужна, чтобы TUI успел убрать
+  // рамку: буквы, напечатанные в исчезающий диалог, пропадают вместе с ним.
+  if (qa.action === 'esc') {
+    const p = sessions.get(tab);
+    if (!p) { await ack('Эта вкладка уже закрыта.'); return; }
+    // Кнопка из прошлого тупика остаётся в ленте навсегда, а Escape в РАБОТАЮЩЕГО агента —
+    // это прерванный ход. Поэтому нажатие действует только пока вкладка правда ждёт.
+    if (d.status !== 'waiting') {
+      await ack('Диалога сейчас нет — Escape не жму, чтобы не прервать работу. Пиши словами.');
+      return;
+    }
+    const pending = d.tgPending || '';
+    d.tgPending = '';
+    p.write(telegram.ESC);
+    markAnswered(d, Date.now());
+    tgLog(`  кнопка «закрыть диалог»: вкладка ${tab}${pending ? ' + отложенный текст' : ''}`);
+    if (!pending) { await ack('Закрыл диалог. Теперь можно писать словами.'); return; }
+    await new Promise((r) => setTimeout(r, TG_ESC_SETTLE_MS));
+    if (!tgAnswer(tab, pending)) { await ack('Диалог закрыл, но вкладки уже нет.'); return; }
+    await ack('Закрыл диалог и отправил твоё сообщение.');
     return;
   }
   // Режимы: то же, что /mode, но одним касанием. Ответ во всплывашке говорит, чем это
@@ -2527,7 +2599,7 @@ async function tgOnCallback(u) {
     await ack('Эта вкладка уже закрыта.');
     return;
   }
-  const now = parsePrompt(snapshot(d));
+  const now = parsePrompt(promptSnapshot(d));
   if (!now || now.fingerprint !== cb.fingerprint) {
     await ack('Запрос уже закрыт — на экране другое.');
     tgLog(`  нажатие мимо: отпечаток ${cb.fingerprint} ≠ ${now ? now.fingerprint : 'нет запроса'}`);
@@ -2690,18 +2762,38 @@ function tgOnUpdate(u) {
     return;
   }
   const d = det.get(id);
-  // The one thing that never travels from a phone: approving a command. See tgNotifyWaiting.
-  if (d && d.status === 'waiting' && d.waitingKind === 'permission') {
-    tgSend({
-      threadId: u.threadId, replyTo: u.messageId,
-      text: `${tgTabName(id)} ждёт разрешения: выбери вариант кнопкой под запросом.`
-        + ' Словами разрешение не даётся — одобрять можно только то, что предложил Клод.',
-    }).catch(reportMainError);
-    return;
-  }
   // Tag the text so the agent knows it's answering into a phone (short answers, no
   // interactive pickers). The first message of a session carries the whole convention.
   const tagged = telegram.tagInput({ text, instruction: TG_PROMPT, primed: !!(d && d.tgPrimed) });
+  // The one thing that never travels from a phone: approving a command. See tgNotifyWaiting.
+  //
+  // Но отказать можно только тому, у кого ЕСТЬ чем ответить, — кнопкам с вариантами Клода.
+  // Живой случай: вопрос с вариантами, под каждым из которых своя строка описания, парсер не
+  // разобрал (см. screen.parsePrompt), уведомление ушло без кнопок, и на любой текст с
+  // телефона приходило «выбери вариант кнопкой под запросом» — кнопкой, которой там нет.
+  // Выхода не оставалось вообще: ни выбрать, ни написать словами. Поэтому здесь тупика больше
+  // нет: текст ждёт, а Escape закрывает диалог и отправляет его следом.
+  if (d && d.status === 'waiting' && d.waitingKind === 'permission') {
+    const open = parsePrompt(promptSnapshot(d));
+    if (open && open.options.length) {
+      tgSend({
+        threadId: u.threadId, replyTo: u.messageId,
+        text: `${tgTabName(id)} ждёт разрешения: выбери вариант кнопкой под запросом.`
+          + ' Словами разрешение не даётся — одобрять можно только то, что предложил Клод.',
+      }).catch(reportMainError);
+      return;
+    }
+    d.tgPending = tagged;
+    tgLog(`  текст отложен: вкладка ${id} держит диалог, вариантов в нём не разобрал`);
+    tgSend({
+      threadId: u.threadId, replyTo: u.messageId,
+      text: `${tgTabName(id)} держит диалог на экране, а вариантов в нём я не разобрал —`
+        + ' напечатать словами прямо в него нельзя. Нажми «закрыть диалог»: я закрою его'
+        + ' и отправлю это сообщение.',
+      replyMarkup: telegram.actionKeyboard(String(id), ['esc']),
+    }).catch(reportMainError);
+    return;
+  }
   if (!tgAnswer(id, tagged)) {
     tgSend({ threadId: u.threadId, replyTo: u.messageId, text: 'Эта вкладка уже закрыта.' }).catch(reportMainError);
     return;
@@ -2722,8 +2814,15 @@ async function tgOnVoice(u) {
   }
   const d = det.get(id);
   if (d && d.status === 'waiting' && d.waitingKind === 'permission') {
+    // Как и с текстом (см. tgOnMessage): отсылать к кнопке можно только когда кнопка есть.
+    // Голосовое здесь ещё не расшифровано, откладывать нечего — но выход дать обязаны.
+    const open = parsePrompt(promptSnapshot(d));
     await tgSend({ threadId: u.threadId, replyTo: u.messageId,
-      text: `${tgTabName(id)} ждёт разрешения — выбери вариант кнопкой, голосом это не даётся.` });
+      text: open && open.options.length
+        ? `${tgTabName(id)} ждёт разрешения — выбери вариант кнопкой, голосом это не даётся.`
+        : `${tgTabName(id)} держит диалог, а вариантов в нём я не разобрал. Нажми «закрыть`
+          + ' диалог» и скажи голосовое снова.',
+      replyMarkup: open && open.options.length ? null : telegram.actionKeyboard(String(id), ['esc']) });
     return;
   }
   const secs = Number(u.voice.seconds) || 0;
