@@ -262,10 +262,8 @@ const ICONS = {
   grip: SVG('<circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/>'),
   // Lucide "bot" — the sub-agent badge.
   agents: SVG('<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>'),
-  // Lucide "monitor" / "monitor-smartphone" / "smartphone" — «где я сейчас»: за столом,
-  // на обоих устройствах, с одним телефоном.
+  // Lucide "monitor" / "smartphone" — «где я сейчас»: за столом или с одним телефоном.
   monitor: SVG('<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>'),
-  devices: SVG('<path d="M18 8V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h8"/><path d="M7 19h5"/><path d="M10 15v4"/><rect width="6" height="10" x="16" y="12" rx="2"/>'),
   phone: SVG('<rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/>'),
 };
 
@@ -1471,7 +1469,7 @@ function showSettingsModal(tab) {
           <label class="set-check">
             <input type="checkbox" id="set-tg-mirror" />
             <span class="set-check-tx">Присылать итоги всех ходов всегда
-              <span class="set-check-sub">по умолчанию — только те, что начаты из телеги; на сегодня то же самое включает «с обоих устройств» в строке состояния. С этой галкой «за компом» там выбрать нельзя: итоги идут всегда</span></span>
+              <span class="set-check-sub">по умолчанию — только те, что начаты из телеги, плюс все, пока вы «за телефоном». С этой галкой иконка «где я» из строки состояния пропадает: выбирать нечего, итоги идут всегда. Уходя, скажите боту /phone — тогда мак не уснёт</span></span>
           </label>
           <label class="set-check">
             <input type="checkbox" id="set-tg-awake" />
@@ -3781,28 +3779,25 @@ document.getElementById('update-pill').addEventListener('click', openUpdateModal
 // отвязкой группы в настройках или привязкой новой с телефона.
 const PRESENCE = [
   { id: 'desk', icon: 'monitor', name: 'за компом', hint: 'в телегу только вопросы и разрешения' },
-  { id: 'both', icon: 'devices', name: 'с обоих устройств', hint: 'итоги всех ходов уезжают в телегу' },
-  { id: 'phone', icon: 'phone', name: 'за телефоном', hint: 'то же и мак не засыпает' },
+  { id: 'phone', icon: 'phone', name: 'за телефоном', hint: 'все итоги в телегу, кратко, мак не спит' },
 ];
 const presencePill = document.getElementById('presence-pill');
 const presenceMenu = document.getElementById('presence-menu');
 let presenceNow = 'desk';
-let presenceForced = false;   // галка «слать итоги всех вкладок» держит зеркало включённым
 
 function presenceItem(id) {
   return PRESENCE.find((p) => p.id === id) || PRESENCE[0];
 }
 
 function renderPresencePill(st) {
-  // Без привязанной группы кнопки нет: обещать «всё уйдёт в телегу» там, где телеги ещё нет,
-  // — обещать несуществующее.
-  const ready = !!(st && st.chatId != null);
+  // Кнопки нет в двух случаях. Без привязанной группы — обещать «всё уйдёт в телегу» там,
+  // где телеги ещё нет, значит обещать несуществующее. И при включённой галке «присылать
+  // итоги всех ходов всегда» — человек и так получает всё, выбирать ему нечего; уходя, он
+  // скажет /phone с телефона, и мак не уснёт.
+  const ready = !!(st && st.chatId != null) && !(st && st.mirrorAll);
   presencePill.hidden = !ready;
   if (!ready) { presenceNow = 'desk'; closePresenceMenu(); return; }
-  presenceForced = !!st.mirrorAll;
-  // Галка включена, а выбрано «за компом» — рисуем то, что происходит НА САМОМ ДЕЛЕ:
-  // итоги всё равно уезжают, значит человек и правда на обоих устройствах.
-  presenceNow = presenceForced && st.presence === 'desk' ? 'both' : (st.presence || 'desk');
+  presenceNow = st.presence || 'desk';
   const it = presenceItem(presenceNow);
   presencePill.classList.toggle('is-on', presenceNow !== 'desk');
   presencePill.innerHTML = ICONS[it.icon];
@@ -3822,11 +3817,7 @@ function openPresenceMenu() {
     name.textContent = p.name;
     const hint = document.createElement('span');
     hint.className = 'cmd-hint';
-    // «За компом» при включённой галке — обещание тишины, которого приложение не сдержит.
-    // Пункт остаётся видимым, но недоступным, и говорит, кто именно его держит.
-    const locked = p.id === 'desk' && presenceForced;
-    hint.textContent = locked ? 'выключите в настройках «слать итоги всех вкладок»' : p.hint;
-    b.disabled = locked;
+    hint.textContent = p.hint;
     b.append(ic, name, hint);
     b.addEventListener('click', async () => {
       closePresenceMenu();
