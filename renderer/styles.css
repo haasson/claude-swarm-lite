@@ -1094,6 +1094,23 @@ body.pult-on #git-msg { display: none; }
 .presence-pill.is-on:hover { background: color-mix(in srgb, var(--permission) 26%, transparent); }
 .presence-pill svg { width: 13px; height: 13px; display: block; }
 
+/* «Я за телефоном» — красим ВСЮ нижнюю панель, а не только иконку. Возвращаясь за
+   стол, человек не разглядывает значки: он должен увидеть, что приложение ещё считает
+   его ушедшим (и потому пишет в телегу и не даёт маку спать), одним взглядом на окно.
+   Класс вешает renderPresencePill; цвет тот же янтарный, что у иконки, чтобы взгляд
+   вёл от панели к ней — именно ею положение и переключают обратно. */
+body.presence-phone #statusbar {
+  background: color-mix(in srgb, var(--permission) 16%, var(--panel));
+  border-top-color: color-mix(in srgb, var(--permission) 55%, var(--border));
+  color: color-mix(in srgb, var(--permission) 45%, var(--muted));
+}
+/* На крашеной панели прозрачная иконка сливается с фоном — под ней нужна своя
+   подложка, иначе подсветка «где я» пропадает ровно там, где она и нужна. */
+body.presence-phone .presence-pill.is-on {
+  background: color-mix(in srgb, var(--permission) 22%, var(--panel));
+  border-color: var(--permission);
+}
+
 /* Пункт списка: иконка, название, пояснение под ними. */
 .presence-item { display: grid; grid-template-columns: 16px 1fr; gap: 2px 8px; align-items: center; }
 .presence-item .ic { display: inline-flex; color: var(--muted); }

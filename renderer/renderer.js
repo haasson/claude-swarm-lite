@@ -3808,6 +3808,14 @@ function presenceItem(id) {
   return PRESENCE.find((p) => p.id === id) || PRESENCE[0];
 }
 
+// Красим нижнюю панель, пока положение «за телефоном». Иконки для этого мало: садясь за
+// стол, человек смотрит на окно целиком, а не на значки в углу, — а знать, что приложение
+// всё ещё считает его ушедшим, надо сразу (иначе телефон продолжает жужжать, а мак не
+// спит). Цвет и правила — в styles.css, body.presence-phone.
+function paintPresence() {
+  document.body.classList.toggle('presence-phone', presenceNow === 'phone');
+}
+
 function renderPresencePill(st) {
   // Кнопки нет в двух случаях. Без привязанной группы — обещать «всё уйдёт в телегу» там,
   // где телеги ещё нет, значит обещать несуществующее. И при включённой галке «присылать
@@ -3815,8 +3823,9 @@ function renderPresencePill(st) {
   // скажет /phone с телефона, и мак не уснёт.
   const ready = !!(st && st.chatId != null) && !(st && st.mirrorAll);
   presencePill.hidden = !ready;
-  if (!ready) { presenceNow = 'desk'; closePresenceMenu(); return; }
+  if (!ready) { presenceNow = 'desk'; paintPresence(); closePresenceMenu(); return; }
   presenceNow = st.presence || 'desk';
+  paintPresence();
   const it = presenceItem(presenceNow);
   presencePill.classList.toggle('is-on', presenceNow !== 'desk');
   presencePill.innerHTML = ICONS[it.icon];
