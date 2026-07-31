@@ -39,6 +39,15 @@ contextBridge.exposeInMainWorld('swarm', {
     return () => ipcRenderer.removeListener('session:claude', handler);
   },
 
+  // Чем вкладка занята на самом деле: имя команды, которая крутится в её шелле (main
+  // подсматривает его в дереве процессов). Рендерер решает, агент это или нет, и если да —
+  // запоминает как команду вкладки. cb({ id, cmd }). Возвращает отписку.
+  onTabProcess: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('session:proc', handler);
+    return () => ipcRenderer.removeListener('session:proc', handler);
+  },
+
   // Send user keystrokes to a session's pty.
   sendInput: (id, data) => ipcRenderer.send('session:input', { id, data }),
 

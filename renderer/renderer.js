@@ -810,6 +810,19 @@ function launchWordFrom(line) {
   return (listed || AGENT_CMD_RE.test(t)) ? word : null;
 }
 
+// Главный путь: main говорит, ЧТО крутится в шелле вкладки прямо сейчас (session:proc), а
+// мы решаем, агент ли это. Надёжнее любых догадок по набранному: ловит и алиас, и запуск из
+// скрипта, и смену агента внутри вкладки — то есть случай «открыли Клодом, потом запустили
+// Cursor командой agent», после которого вкладка возвращалась Клодом.
+window.swarm.onTabProcess(({ id, cmd }) => {
+  const word = launchWordFrom(cmd);
+  if (!word) return;                    // ls, vim, npm — вкладка не про них
+  const s = sessions.get(id);
+  if (!s || s.blank || s.cmd === word) return;
+  s.cmd = word;
+  persistTabs();
+});
+
 function rememberStartCommand(line, sessionId) {
   const cmd = launchWordFrom(line);
   if (!cmd) return;

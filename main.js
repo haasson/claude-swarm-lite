@@ -833,6 +833,48 @@ function stealByInjected(id, d, taken) {
   return mine;
 }
 
+// Чем вкладка ЗАНЯТА на самом деле: имя команды, запущенной в её шелле.
+//
+// Вкладка помнит, чем её запустили, и этим же восстанавливается — иначе после перезапуска
+// она поднимет не того агента. Раньше это знание собиралось из набранных человеком строк, и
+// мимо проходило всё остальное: алиас, запуск из скрипта, смена агента внутри вкладки. Живой
+// случай — вкладку открыли Клодом, потом запустили в ней Cursor командой `agent`; вкладка
+// осталась записанной как claude и им же вернулась после перезапуска.
+//
+// Здесь мы не угадываем, а смотрим: один `ps` на всё приложение, дети шеллов наших pty — это
+// ровно те команды («claude --resume …», «agent»). Что из этого считать агентом, решает
+// рендерер: список агентов ведёт он.
+const PROC_EVERY_MS = 5000;
+
+function scanTabProcesses() {
+  execFile('ps', ['-eo', 'pid=,ppid=,args='], { maxBuffer: 4 << 20 }, (err, out) => {
+    if (err) return;                     // ps недоступен — молча живём как раньше
+    const kids = new Map();              // ppid -> [{ pid, args }]
+    for (const line of String(out).split('\n')) {
+      const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
+      if (!m) continue;
+      const list = kids.get(m[2]) || [];
+      list.push({ pid: m[1], args: m[3] });
+      kids.set(m[2], list);
+    }
+    for (const [id, child] of sessions) {
+      const shellPid = child && child.pid != null ? String(child.pid) : null;
+      if (!shellPid) continue;
+      // Первый потомок шелла и есть запущенная команда. Глубже не идём: `claude` там уже
+      // будет своими node-процессами, а нам нужно имя, которым его зовут.
+      const run = (kids.get(shellPid) || [])[0];
+      if (!run) continue;                // в шелле пусто — вкладка помнит прежнее
+      const word = path.basename((run.args.trim().split(/\s+/)[0] || ''));
+      const d = det.get(id);
+      if (!word || !d || d.runCmd === word) continue;
+      d.runCmd = word;
+      safeSend('session:proc', { id, cmd: word });
+    }
+  });
+}
+
+setInterval(scanTabProcesses, PROC_EVERY_MS);
+
 // Файлы, закреплённые за ДРУГИМИ вкладками их session id, — для сканирования они заняты,
 // даже пока те вкладки к ним не привязались.
 //
