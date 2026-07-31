@@ -2675,6 +2675,11 @@ function setPult(on) {
   }
   const t = tabsEl.querySelector('.pult-tab');
   if (t) t.classList.toggle('active', next);
+  // Only one tab is ever lit. Entering the pult takes the highlight away from the
+  // session you were reading (activate() only strips it when you SWITCH sessions,
+  // so ⌘0 or a click on the pult would otherwise leave two tabs lit); leaving it
+  // hands the highlight back to whatever session is on screen.
+  for (const [id, s] of sessions) s.tab.classList.toggle('active', !next && id === activeId);
   // The strip changes .term-holder's inset, so the grid must be recomputed.
   refitActive();
 }
