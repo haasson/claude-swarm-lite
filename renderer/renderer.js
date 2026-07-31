@@ -787,13 +787,37 @@ function sessionLaunchCommand({ cmd, flags, sessionKey, sessionId, resume } = {}
 // is now curated in Settings, so we no longer silently adopt a typed cmd as the
 // default for new tabs — that would mutate a user-managed list behind their back.
 // Match a known launcher STEM (not any word) so `ls`/`git commit` aren't mistaken
-// for a launch.
-const AGENT_CMD_RE = /^\s*(?:claude|cld|glm|deepseek|codex|gemini|aider|qwen|kimi|opencode|crush|amp|droid)[\w-]*(?:\s+--?[\w-]+(?:=\S+)?)*\s*$/i;
+// for a launch. `cursor-agent`/`agent` — это Cursor; одним словом в строке терминала
+// «agent» ничем другим и не бывает.
+const AGENT_CMD_RE = /^\s*(?:claude|cld|glm|deepseek|codex|gemini|aider|qwen|kimi|opencode|crush|amp|droid|cursor|cursor-agent|agent)[\w-]*(?:\s+--?[\w-]+(?:=\S+)?)*\s*$/i;
+// Хвост из одних флагов — чтобы «agent --resume» считалось запуском, а «agent smith» нет.
+const AGENT_FLAGS_RE = /^(?:\s+--?[\w-]+(?:=\S+)?)*\s*$/;
+
+// Команды из СПИСКА АГЕНТОВ пользователя (Настройки → Запуск) — тоже маркеры запуска, и
+// это главный из двух путей: список ведёт он сам, а зашитый набор имён неизбежно отстаёт
+// от того, чем человек пользуется.
+//
+// Из-за этого и появился баг: вкладку открыли Клодом, внутри неё сделали /clear и запустили
+// Cursor командой `agent`, а вкладка так и осталась записанной как claude — с прежним
+// разговором. После перезапуска она честно восстановила то, что помнила: Клода с
+// --resume вместо Cursor.
+function launchWordFrom(line) {
+  const t = String(line || '').trim();
+  const word = t.split(/\s+/)[0] || '';
+  if (!word) return null;
+  const listed = launchList.some((a) => String((a && a.cmd) || '').trim() === word)
+    && AGENT_FLAGS_RE.test(t.slice(word.length));
+  return (listed || AGENT_CMD_RE.test(t)) ? word : null;
+}
+
 function rememberStartCommand(line, sessionId) {
-  const t = line.trim();
-  if (!AGENT_CMD_RE.test(t)) return;
-  const cmd = t.split(/\s+/)[0];
+  const cmd = launchWordFrom(line);
+  if (!cmd) return;
   const s = sessions.get(sessionId);
+  // Набрано ВНУТРИ агента — не команда шеллу. Клод и прочие TUI живут в альт-экране, и
+  // строка «agent» там это реплика в разговоре, а не запуск: раньше такая реплика молча
+  // переписывала вкладке команду запуска, и всплывало это только после перезапуска.
+  try { if (s && s.term.buffer.active.type === 'alternate') return; } catch (_) { /* нет буфера — считаем шеллом */ }
   // Don't bind a clean terminal to a cmd: it restores empty regardless, so the
   // learned cmd would be dead data.
   if (s && !s.blank && s.cmd !== cmd) {
