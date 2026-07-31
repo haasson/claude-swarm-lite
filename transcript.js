@@ -100,6 +100,22 @@ function lastMain(entries) {
   return null;
 }
 
+// Стенограмма описывает ПРОШЛУЮ жизнь вкладки: её последняя запись старше момента, с
+// которого эта вкладка живёт. Такому файлу верить нельзя, и вот почему это не мелочь.
+//
+// Вкладка поднимает разговор через `--resume`. Если тот оборвался на полуслове (последним
+// словом был промпт человека, ответить агент не успел — приложение закрыли), classify
+// честно читает это как «работает»: последнее слово чужое, значит агент думает. Только
+// дописывать оборванный ход уже некому, и вкладка висит жёлтой вечно.
+//
+// Сравниваем именно записи РАЗГОВОРА, а не mtime файла: при `--resume` Claude дописывает
+// туда служебные строки (permission-mode), так что файл выглядит только что тронутым даже
+// у разговора, который никто не ведёт.
+function isPastLife(entries, startedAt) {
+  const at = tsOf(lastMain(Array.isArray(entries) ? entries : []));
+  return !!at && !!startedAt && at < startedAt;
+}
+
 // How long after the last assistant text we still say «работает». Claude routinely
 // writes a paragraph and then keeps going (another tool, more text), so calling
 // «готов» on the first quiet tick would flap. This is the only timer here, and it's
@@ -344,7 +360,7 @@ function pickByScreen(cands, snapshot) {
 
 module.exports = {
   READY_DEBOUNCE_MS, BIND_MTIME_SLACK_MS, SCREEN_KEY_LEN, INJECTED_MIN, screenKey, pickByScreen,
-  projectSlug, parseEntries, blockTypes, entryText, lastMain, classify, cwdOf, pickBinding, isInterrupt,
+  projectSlug, parseEntries, blockTypes, entryText, lastMain, tsOf, isPastLife, classify, cwdOf, pickBinding, isInterrupt,
   belongsToTurn, turnText, currentTool, turnTokens,
   pickByInjected,
 };

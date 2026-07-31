@@ -390,6 +390,25 @@ test('turnText: прерывание ход не заканчивает, ска�
   assert.strictEqual(T.turnText(e), 'Сейчас посмотрю, что в сборке.');
 });
 
+// Живой случай (вкладка bnmap-lk, 0.26.1): в стенограмме два промпта человека и ни одного
+// ответа — агента закрыли посреди хода. classify честно говорит «работает», и после
+// перезапуска вкладка висела жёлтой вечно: дописывать этот ход уже некому.
+test('isPastLife: разговор, оборванный до перезапуска вкладки', () => {
+  const e = T.parseEntries([user('сделай раз', 40000), user('и ещё два', 30000)].join('\n'));
+  assert.strictEqual(T.classify(e, NOW, asks).status, 'running', 'сам вердикт не меняем');
+  // Вкладка открыта ПОСЛЕ этих записей — значит они из прошлой жизни.
+  assert.strictEqual(T.isPastLife(e, NOW - 10000), true);
+  // Та же вкладка, но записи появились уже при её жизни — обычная работа.
+  assert.strictEqual(T.isPastLife(e, NOW - 60000), false);
+});
+
+test('isPastLife молчит, когда сравнивать не с чем', () => {
+  const e = T.parseEntries(user('привет', 1000));
+  assert.strictEqual(T.isPastLife(e, 0), false, 'вкладка без времени старта');
+  assert.strictEqual(T.isPastLife([], NOW), false, 'пустая стенограмма');
+  assert.strictEqual(T.isPastLife(null, NOW), false);
+});
+
 test('isInterrupt узнаёт только сам маркер', () => {
   const mk = (c) => JSON.parse(user(c));
   assert.strictEqual(T.isInterrupt(mk([{ type: 'text', text: INTERRUPT }])), true);

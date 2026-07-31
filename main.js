@@ -932,7 +932,13 @@ setInterval(() => {
           d.trEntries = transcript.parseEntries(tailText(d.trFile, TR_TAIL_BYTES * 8));
         }
       }
-      const v = transcript.classify(d.trEntries || [], now, (t) => asksWith(ASK_MATCHER, t));
+      // Стенограмма из прошлой жизни вкладки вердиктов не даёт — почему, см. isPastLife.
+      // Статус в этот момент держит экран, где видно, что агент стоит у приглашения; как
+      // только в разговоре появится новая запись, канал заработает сам.
+      const pastLife = transcript.isPastLife(d.trEntries || [], d.startedAt);
+      const v = pastLife
+        ? null
+        : transcript.classify(d.trEntries || [], now, (t) => asksWith(ASK_MATCHER, t));
       applyTranscript(d, v);
       // The question, word for word — only for a turn that ended asking. Anything else
       // would be quoting streamed prose back at the user.
@@ -950,7 +956,8 @@ setInterval(() => {
         d.trReply = d.trFinal;
         d.trReplyAt = v.at || now;
       }
-      const why = v ? v.status + (v.kind ? ':' + v.kind : '') + ' (' + v.why + ')' : 'no entries';
+      const why = v ? v.status + (v.kind ? ':' + v.kind : '') + ' (' + v.why + ')'
+        : (pastLife ? 'прошлая жизнь вкладки — статус с экрана' : 'no entries');
       if (why !== d.trWhy) { d.trWhy = why; trLog(`tab=${id} ${why}`); }
     } catch (_) {
       // File rotated, deleted, or unreadable: drop the binding and fall back to the
