@@ -132,6 +132,11 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .layout-rail .group-tabs { flex-direction: column; }
 .layout-top  .group-tabs { flex-direction: row; align-items: stretch; }
 .group-head {
+  /* position + левый паддинг — место под ручку переноса (см. .grip): она лежит
+     поверх этого паддинга, поэтому её появление не двигает заголовок. Ширина
+     паддинга та же, что у карточек, так что ручки папки и вкладок стоят на одной
+     вертикали. */
+  position: relative;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -139,7 +144,7 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   font-size: 10px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  padding: 2px 4px;
+  padding: 2px 4px 2px var(--tab-pad-x);
   white-space: nowrap;
   overflow: hidden;
   cursor: pointer;
@@ -401,23 +406,22 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   z-index: 2;
 }
 .tab:hover .grip, .group-head:hover .grip { opacity: 1; }
-/* В шапке папки ручка, наоборот, не держит колонку: пока курсор не на шапке, её
-   ширина нулевая (и отрицательный margin гасит gap), а на ховере она плавно
-   раздвигает заголовок. Заголовков папок мало и они не «прыгают» под курсором,
-   как карточки, — там сдвиг читается как жест, а не как дёрганье.
-   Во время переноса держим ручку раскрытой: курсор уходит с шапки, и без этого
+/* В шапке папки — то же самое, что на карточке, и по той же причине: ручка вне
+   потока поверх левого паддинга, место под неё зарезервировано всегда. Раньше её
+   ширина была нулевой, а на ховере она раздвигала заголовок — то есть шапка
+   ползла в сторону ровно тогда, когда в неё целятся. Заголовков папок мало, но
+   промахнуться по движущейся цели это не помогает.
+   Во время переноса держим ручку видимой: курсор уходит с шапки, и без этого
    пустой слот папки схлопывался бы прямо посреди drag. */
 .group-head > .grip {
-  width: 0;
-  margin-right: -4px; /* = gap шапки */
-  transition: width 0.15s ease, margin-right 0.15s ease, opacity 0.15s ease;
+  position: absolute;
+  left: 0;
+  top: 1px;
+  bottom: 1px;
+  width: var(--tab-pad-x);
+  z-index: 2;
 }
-.group-head:hover > .grip,
-.tab-group.dragging .group-head > .grip {
-  width: 9px;
-  margin-right: 0;
-  opacity: 1;
-}
+.tab-group.dragging .group-head > .grip { opacity: 1; }
 .grip:hover { color: var(--text); }
 .grip:active { cursor: grabbing; }
 
