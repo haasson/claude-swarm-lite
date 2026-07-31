@@ -381,7 +381,7 @@ function statusName(s) {
 const KIND_LABEL = { permission: 'разрешение', question: 'вопрос' };
 function waitLabel(s) { return KIND_LABEL[s && s.waitKind] || 'ждёт ответа'; }
 
-window.swarm.onStatus(({ id, status, detail, statusline, question, sub, waitingKind }) => {
+window.swarm.onStatus(({ id, status, detail, statusline, question, sub, waitingKind, sure }) => {
   const s = sessions.get(id);
   if (!s || !s.alive) return;
 
@@ -402,6 +402,9 @@ window.swarm.onStatus(({ id, status, detail, statusline, question, sub, waitingK
   // see effectiveStatus (the «оранжевый пока работает сабагент» toggle).
   s.rawStatus = status;
   s.rawDetail = detail;
+  // Пришло это от хука/стенограммы (факт) или со скрёба экрана (догадка) — от этого
+  // зависит, буферизуем ли «работает». См. applyStatus.
+  s.sure = !!sure;
   applyStatus(s, { notify: true });
 });
 
@@ -447,10 +450,26 @@ function applyStatus(s, opts) {
   if (eff.status === 'running') {
     if (s.runningSince == null) s.runningSince = Date.now(); // real start of this run
     if (s.status === 'running') return;
+    // Буфер существует, чтобы не мигать жёлтым на КОРОТКИХ ВСПЛЕСКАХ, которые
+    // померещились скрёбу экрана. Значит и придерживать надо только его догадки.
+    //
+    // `s.sure` — статус пришёл от хука (UserPromptSubmit: «промпт отправлен») или из
+    // стенограммы (в файле новая реплика). Это события, а не наблюдения, мигать им
+    // нечем. `answeredHere` — ты сам нажал Enter в этой вкладке; факт того же рода, и
+    // он выручает сессии без хуков, где сигнал придёт с экрана.
+    //
+    // Без этого любой «готов» красился мгновенно, а возврат в «работает» ждал 2.5 с, и
+    // вкладка две с половиной секунды после отправки сообщения стояла зелёной — будто
+    // статус сначала загорелся не тем, а потом «актуализировался».
     if (leaveWait && s.status === 'waiting') {
       // Coming out of «ждёт»: we already held the tab for LEAVE_WAIT_MS, which IS
       // the anti-blip buffer. Stacking RUN_BUFFER_MS on top of it was the lag
       // between answering a prompt and the tab finally turning «работает».
+      if (s.runTimer) { clearTimeout(s.runTimer); s.runTimer = null; }
+      setStatus(s.id, 'running', eff.detail);
+      return;
+    }
+    if (s.sure || answeredHere(s)) {
       if (s.runTimer) { clearTimeout(s.runTimer); s.runTimer = null; }
       setStatus(s.id, 'running', eff.detail);
       return;

@@ -534,6 +534,13 @@ setInterval(() => {
       // Status = hooks when this session has spoken through them (arbitration:
       // hook wins, screen only upgrades a «ready» to a prose question); otherwise
       // the screen-scrape + «ждёт» latch fallback (never released by mere typing).
+      // Точный сигнал или догадка — это РАЗНЫЕ вещи для рендерера: «работает» он
+      // придерживает на RUN_BUFFER_MS, чтобы не мигать жёлтым на всплесках, и такая
+      // задержка нужна только шумному источнику. Ветки те же, что выбирает tickStatus:
+      // хук (событие Клода) и стенограмма (новая реплика в файле) — факты, скрёб
+      // экрана — догадка. Считаем ДО tickStatus: она может сама перевести сессию на
+      // экран, и тогда флаг относился бы уже к следующему тику.
+      const sure = !!(d.hooksActive || d.trState);
       const next = tickStatus(d, now, snap);
       // Режим разрешений помним: на экране его строка есть не всегда (при открытом запросе
       // её нет вовсе), а /mode должен отвечать «какой сейчас» и в этот момент тоже.
@@ -560,7 +567,7 @@ setInterval(() => {
         d.question = question;
         d.sub = sub;
         d.waitingKind = kind;
-        safeSend('session:status', { id, status: next.status, detail: next.detail, statusline, question, sub, waitingKind: kind });
+        safeSend('session:status', { id, status: next.status, detail: next.detail, statusline, question, sub, waitingKind: kind, sure });
         // Telegram: an agent starting to wait is the whole point of the bridge. Sent on
         // a delay (see tgOnWaiting) and cancelled if you answer at the keyboard first.
         if (next.status === 'waiting') tgOnWaiting(id);
