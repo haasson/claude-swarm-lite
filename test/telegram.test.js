@@ -430,13 +430,22 @@ test('inlineKeyboard offers exactly the options Claude gave, carrying tab + fing
   assert.deepStrictEqual(T.parseCallbackData(flat[1].callback_data), { tab: '3', fingerprint: 'abc123', n: 2 });
 });
 
-test('inlineKeyboard puts a long option on its own row — alone, not paired with a short one', () => {
+// Одна кнопка в ряд — всегда: подпись это единственное, что на кнопке видно, и делить
+// ширину с соседом ей нельзя. Проверяем и на смеси длин, и на двух коротких, где соблазн
+// поставить пару максимальный.
+test('inlineKeyboard даёт каждому варианту свой ряд целиком', () => {
   const kb = T.inlineKeyboard([
     { n: 1, text: 'Yes' }, { n: 2, text: 'Yes, and don\'t ask again for rm commands' }, { n: 3, text: 'No' },
   ], '3', 'abc123');
   assert.deepStrictEqual(kb.inline_keyboard.map((r) => r.length), [1, 1, 1],
     JSON.stringify(kb.inline_keyboard));
   assert.strictEqual(kb.inline_keyboard[1][0].callback_data, 'p|3|abc123|2');
+});
+
+test('inlineKeyboard не ставит парой даже «Yes» и «No»', () => {
+  const kb = T.inlineKeyboard([{ n: 1, text: 'Yes' }, { n: 2, text: 'No' }], '3', 'abc123');
+  assert.deepStrictEqual(kb.inline_keyboard.map((r) => r.length), [1, 1],
+    JSON.stringify(kb.inline_keyboard));
 });
 
 // Кнопка в Telegram — одна строка фиксированной высоты, переносов в ней нет. Значит
@@ -469,14 +478,12 @@ test('optionsList печатает варианты полностью, номе
   assert.strictEqual(T.optionsList(null), '');
 });
 
-test('inlineKeyboard кладёт на кнопку обрезанную подпись, а раскладку считает по полной', () => {
+test('inlineKeyboard кладёт на кнопку обрезанную подпись, а полный текст оставляет списку', () => {
   const long = "Yes, and don't ask again for rm commands in this project";
   const kb = T.inlineKeyboard([{ n: 1, text: 'Yes' }, { n: 2, text: long }], '3', 'abc123');
   const flat = kb.inline_keyboard.flat();
   assert.strictEqual(flat[1].text, T.buttonLabel(2, long));
-  // Длинный вариант — своей строкой, хотя его ПОДПИСЬ после обрезки уже короткая.
-  assert.deepStrictEqual(kb.inline_keyboard.map((r) => r.length), [1, 1],
-    JSON.stringify(kb.inline_keyboard));
+  assert.ok(T.optionsList([{ n: 2, text: long }]).includes(long));
 });
 
 test('inlineKeyboard drops an option it cannot address, and nothing means no keyboard', () => {

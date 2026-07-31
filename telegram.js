@@ -428,7 +428,10 @@ function parseCallbackData(raw) {
 // сам — молча и ровно посередине слова. Поэтому режем мы: по границе слова и с
 // многоточием, чтобы обрезка была видна. Полный текст варианта при этом уходит в само
 // сообщение (см. optionsList) — там перенос свободный, и решение принимают по нему.
-const BTN_MAX = 30;
+// Кнопки идут по одной в ряд (см. inlineKeyboard), то есть подписи достаётся вся ширина
+// сообщения — отсюда и предел. Он всё равно осторожный: на узком телефоне клиент дорежет
+// сам, но полный текст варианта в этот момент уже прочитан в сообщении.
+const BTN_MAX = 36;
 
 function buttonLabel(n, text, max) {
   const cap = Math.max(8, max || BTN_MAX);
@@ -450,29 +453,19 @@ function optionsList(options) {
     .join('\n');
 }
 
-// `options` is what screen.js parsed: [{ n, text }]. Two per row keeps «1. Yes / 2. No»
-// side by side and still fits a long «3. No, and tell Claude what to do» on its own line.
-// Раскладку считаем по ИСХОДНОЙ длине варианта, а не по обрезанной подписи: иначе после
-// обрезки все варианты стали бы «короткими» и легли парами, отдав каждому половину
-// ширины экрана — то есть обрезка съела бы ещё больше.
-const BTN_WIDE = 24;   // длиннее этого — вариант получает ряд целиком
-
+// `options` is what screen.js parsed: [{ n, text }]. Одна кнопка в ряд — ВСЕГДА, даже под
+// «Yes» и «No». Пары экономили две строки в чате и стоили половины ширины каждой подписи, а
+// подпись — единственное, что видно на кнопке: переносов в ней нет, и обрезку клиент делает
+// молча. Варианты у Клода почти всегда разной длины, так что пара из короткого и длинного
+// (его обычное «1. Yes / 2. Yes, and don't ask again for … / 3. No») получалась сама собой и
+// била как раз по самому важному варианту.
 function inlineKeyboard(options, tab, fingerprint) {
   const rows = [];
-  let row = [];
   for (const o of Array.isArray(options) ? options : []) {
     const data = callbackData(tab, fingerprint, o.n);
     if (!data) continue;                       // can't address it => don't offer it
-    const wide = String(o && o.text == null ? '' : o.text).length > BTN_WIDE;
-    // Длинный вариант закрывает предыдущий ряд, а не встаёт в него вторым. Раньше он
-    // лишь завершал ряд, то есть у Клода с его обычным «1. Yes / 2. Yes, and don't ask
-    // again for … / 3. No» самый длинный вариант делил строку с «Yes» и получал ПОЛОВИНУ
-    // ширины экрана — там от него оставалось два слова.
-    if (wide && row.length) { rows.push(row); row = []; }
-    row.push({ text: buttonLabel(o.n, o.text), callback_data: data });
-    if (wide || row.length === 2) { rows.push(row); row = []; }
+    rows.push([{ text: buttonLabel(o.n, o.text), callback_data: data }]);
   }
-  if (row.length) rows.push(row);
   return rows.length ? { inline_keyboard: rows } : null;
 }
 
