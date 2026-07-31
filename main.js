@@ -726,6 +726,12 @@ function bindTranscript(d, taken) {
     // а потом ищем сканом папки — с теми же защитами, что и для вкладки без id.
     if (Date.now() - (d.startedAt || 0) < TR_PIN_GRACE_MS) return null;
   }
+  // Скан ищет файл, имени которого мы НЕ знаем, — то есть по косвенным признакам. Вкладке,
+  // в которой не было ни одного хода, он противопоказан: своего разговора у неё пока нет (её
+  // только что открыли, или в ней сделали /clear и ничего не сказали), а единственный
+  // подходящий по признакам файл в папке — это чужой живой разговор соседней вкладки. Ровно
+  // так пустая вкладка и начинала показывать чужой статус, а потом ещё и запоминала чужой id.
+  if (!d.turnStartedAt) return null;
   let names;
   try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')); } catch (_) { return null; }
   const cands = [];
@@ -827,6 +833,32 @@ function stealByInjected(id, d, taken) {
   return mine;
 }
 
+// Файлы, закреплённые за ДРУГИМИ вкладками их session id, — для сканирования они заняты,
+// даже пока те вкладки к ним не привязались.
+//
+// Без этого канал сам себя травил, и это видно в журнале: вкладка без своей стенограммы
+// (после /clear ничего не сказано, файла ещё нет) уходила в скан папки, находила там
+// ЕДИНСТВЕННЫЙ живой разговор — соседней вкладки — и забирала его. Дальше по коду ниже её
+// id записывался вкладке в память и уезжал в localStorage. После перезапуска три вкладки
+// восстанавливались «по session id» на ОДИН файл: один агент, три статуса, чужие ответы в
+// чужих темах.
+//
+// Свой собственный id из резерва вычитается: если он уже размножен по вкладкам (а у тех,
+// кто пострадал, он размножен), право на файл разбирает `taken` — первый привязавшийся
+// забирает, остальные остаются на экранном détecteur'е. Показывать чужой статус хуже, чем
+// не показывать никакого.
+function reservedByOthers(self) {
+  const out = new Set();
+  for (const d of det.values()) {
+    if (d === self || d.dead || !d.claudeSessionId || !d.cwd) continue;
+    out.add(path.join(projectDir(d.cwd), d.claudeSessionId + '.jsonl'));
+  }
+  if (self.claudeSessionId && self.cwd) {
+    out.delete(path.join(projectDir(self.cwd), self.claudeSessionId + '.jsonl'));
+  }
+  return out;
+}
+
 setInterval(() => {
   const now = Date.now();
   const taken = new Set();
@@ -860,7 +892,10 @@ setInterval(() => {
       if (!d.trFile) {
         if (now - (d.trTryAt || 0) < TR_BIND_EVERY_MS) continue;
         d.trTryAt = now;
-        const file = bindTranscript(d, taken);
+        // Занято = привязано кем-то сейчас ИЛИ закреплено за кем-то его id (см. выше).
+        const busy = new Set(taken);
+        for (const f of reservedByOthers(d)) busy.add(f);
+        const file = bindTranscript(d, busy);
         if (!file) continue;
         d.trFile = file;
         taken.add(file);

@@ -3918,7 +3918,21 @@ async function restoreOrStart() {
   try { saved = JSON.parse(localStorage.getItem('swarm.tabs') || '[]'); } catch (_) {}
   saved = Array.isArray(saved) ? saved.filter((t) => t && t.cwd) : [];
   if (!saved.length) { createSession(); return; }
+  // Один разговор — одной вкладке. В сохранённых вкладках один и тот же claudeSessionId
+  // может стоять у нескольких: так бывало, когда вкладка без своей стенограммы забирала
+  // сканом папки чужой живой разговор и запоминала его id (в main это теперь закрыто
+  // резервом, но у тех, кто уже пострадал, дубли лежат в localStorage и сами не уйдут).
+  //
+  // Восстанавливать по такому id можно только ПЕРВУЮ вкладку. Остальные стартуют чистыми:
+  // три вкладки на одном разговоре — это одна история в трёх окнах, чужой статус на чужой
+  // вкладке и «сессия не найдена» от Клода, которому один и тот же id называют дважды.
+  const usedIds = new Set();
+  const usedKeys = new Set();
   for (const t of saved) {
+    const dupId = !!t.claudeSessionId && usedIds.has(t.claudeSessionId);
+    const dupKey = !!t.sessionKey && usedKeys.has(t.sessionKey);
+    if (t.claudeSessionId && !dupId) usedIds.add(t.claudeSessionId);
+    if (t.sessionKey && !dupKey) usedKeys.add(t.sessionKey);
     await createSession({
       cwd: t.cwd,
       name: t.name,
@@ -3928,10 +3942,12 @@ async function restoreOrStart() {
       blank: t.blank || undefined,
       cmd: t.blank ? undefined : (t.cmd || launch.cmd),
       flags: t.blank ? undefined : (t.flags != null ? t.flags : undefined),
-      sessionKey: t.sessionKey || undefined,
-      claudeSessionId: t.claudeSessionId || undefined,
+      // Дубликат зацепки — не зацепка: вкладка открывается свежей, а не второй копией
+      // чужого разговора.
+      sessionKey: (dupKey ? null : t.sessionKey) || undefined,
+      claudeSessionId: (dupId ? null : t.claudeSessionId) || undefined,
       tabKey: t.tabKey || undefined,   // same tab → same Telegram topic as before
-      resume: !!(resumeSessions && (t.claudeSessionId || t.sessionKey)),
+      resume: !!(resumeSessions && ((t.claudeSessionId && !dupId) || (t.sessionKey && !dupKey))),
     });
   }
   const first = sessions.keys().next();
