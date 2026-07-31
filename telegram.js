@@ -423,16 +423,54 @@ function parseCallbackData(raw) {
   return { tab: parts[1], fingerprint: parts[2], n };
 }
 
+// Подпись кнопки. Telegram рисует inline-кнопку ОДНОЙ строкой фиксированной высоты:
+// переносов в ней не бывает, растянуть её по высоте нельзя, а всё лишнее клиент обрезает
+// сам — молча и ровно посередине слова. Поэтому режем мы: по границе слова и с
+// многоточием, чтобы обрезка была видна. Полный текст варианта при этом уходит в само
+// сообщение (см. optionsList) — там перенос свободный, и решение принимают по нему.
+const BTN_MAX = 30;
+
+function buttonLabel(n, text, max) {
+  const cap = Math.max(8, max || BTN_MAX);
+  const full = `${n}. ${String(text == null ? '' : text).trim()}`;
+  if (full.length <= cap) return full;
+  const window = full.slice(0, cap - 1);
+  const cut = window.lastIndexOf(' ');
+  // Слово нашлось слишком рано — от подписи остался бы один номер; тогда лучше рубить
+  // по символу, чем показывать «2. …».
+  const body = cut >= cap * 0.6 ? window.slice(0, cut) : window;
+  return body.replace(/[\s,;:.—-]+$/, '') + '…';
+}
+
+// Варианты Клода списком, как он их и пронумеровал. Это НЕ дубль кнопок: на кнопке
+// живёт короткая метка, а здесь — то, что человек читает перед нажатием.
+function optionsList(options) {
+  return (Array.isArray(options) ? options : [])
+    .map((o) => `${o.n}. ${String(o && o.text == null ? '' : o.text).trim()}`)
+    .join('\n');
+}
+
 // `options` is what screen.js parsed: [{ n, text }]. Two per row keeps «1. Yes / 2. No»
 // side by side and still fits a long «3. No, and tell Claude what to do» on its own line.
+// Раскладку считаем по ИСХОДНОЙ длине варианта, а не по обрезанной подписи: иначе после
+// обрезки все варианты стали бы «короткими» и легли парами, отдав каждому половину
+// ширины экрана — то есть обрезка съела бы ещё больше.
+const BTN_WIDE = 24;   // длиннее этого — вариант получает ряд целиком
+
 function inlineKeyboard(options, tab, fingerprint) {
   const rows = [];
   let row = [];
   for (const o of Array.isArray(options) ? options : []) {
     const data = callbackData(tab, fingerprint, o.n);
     if (!data) continue;                       // can't address it => don't offer it
-    row.push({ text: `${o.n}. ${o.text}`, callback_data: data });
-    if (o.text.length > 24 || row.length === 2) { rows.push(row); row = []; }
+    const wide = String(o && o.text == null ? '' : o.text).length > BTN_WIDE;
+    // Длинный вариант закрывает предыдущий ряд, а не встаёт в него вторым. Раньше он
+    // лишь завершал ряд, то есть у Клода с его обычным «1. Yes / 2. Yes, and don't ask
+    // again for … / 3. No» самый длинный вариант делил строку с «Yes» и получал ПОЛОВИНУ
+    // ширины экрана — там от него оставалось два слова.
+    if (wide && row.length) { rows.push(row); row = []; }
+    row.push({ text: buttonLabel(o.n, o.text), callback_data: data });
+    if (wide || row.length === 2) { rows.push(row); row = []; }
   }
   if (row.length) rows.push(row);
   return rows.length ? { inline_keyboard: rows } : null;
@@ -561,7 +599,7 @@ module.exports = {
   PROMPTS, DETAILS, detailPrompt,
   apiUrl, looksLikeToken, maskToken,
   pairCode, deepLink, pairingMatch,
-  readUpdate, readService, senderLabel, routeMessage, chunkText, inlineKeyboard, callbackData, parseCallbackData, callbackTab, CB_MAX, backoffMs, retryAfterMs, classifyError,
+  readUpdate, readService, senderLabel, routeMessage, chunkText, inlineKeyboard, buttonLabel, optionsList, BTN_MAX, callbackData, parseCallbackData, callbackTab, CB_MAX, backoffMs, retryAfterMs, classifyError,
   inputWrites, PASTE_ON, PASTE_OFF, ENTER, BACK_TAB, routeFailure,
   COMMANDS, QA_ACTIONS, HEADER_ACTIONS, actionData, parseAction, actionKeyboard,
   createPoller,

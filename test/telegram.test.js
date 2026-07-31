@@ -430,11 +430,53 @@ test('inlineKeyboard offers exactly the options Claude gave, carrying tab + fing
   assert.deepStrictEqual(T.parseCallbackData(flat[1].callback_data), { tab: '3', fingerprint: 'abc123', n: 2 });
 });
 
-test('inlineKeyboard puts a long option on its own row', () => {
+test('inlineKeyboard puts a long option on its own row — alone, not paired with a short one', () => {
   const kb = T.inlineKeyboard([
     { n: 1, text: 'Yes' }, { n: 2, text: 'Yes, and don\'t ask again for rm commands' }, { n: 3, text: 'No' },
   ], '3', 'abc123');
-  assert.strictEqual(kb.inline_keyboard.length, 2, JSON.stringify(kb.inline_keyboard));
+  assert.deepStrictEqual(kb.inline_keyboard.map((r) => r.length), [1, 1, 1],
+    JSON.stringify(kb.inline_keyboard));
+  assert.strictEqual(kb.inline_keyboard[1][0].callback_data, 'p|3|abc123|2');
+});
+
+// Кнопка в Telegram — одна строка фиксированной высоты, переносов в ней нет. Значит
+// длинную подпись всё равно обрежут; вопрос лишь в том, мы это сделаем или клиент молча
+// посреди слова.
+test('buttonLabel оставляет короткую подпись как есть', () => {
+  assert.strictEqual(T.buttonLabel(1, 'Yes'), '1. Yes');
+});
+
+test('buttonLabel режет длинную подпись по границе слова и помечает обрезку', () => {
+  const label = T.buttonLabel(2, "Yes, and don't ask again for rm commands in this project");
+  assert.ok(label.length <= T.BTN_MAX, label);
+  assert.ok(label.endsWith('…'), label);
+  assert.ok(label.startsWith('2. Yes'), label);
+  // По слову, а не посреди него: перед многоточием — целое слово.
+  assert.ok(!/\s…$/.test(label), label);
+  assert.ok("Yes, and don't ask again for rm commands in this project".startsWith(
+    label.slice(3, -1)), label);
+});
+
+test('buttonLabel рубит по символу, когда первое слово само длиннее кнопки', () => {
+  const label = T.buttonLabel(3, 'A'.repeat(80));
+  assert.ok(label.length <= T.BTN_MAX, label);
+  assert.ok(label.startsWith('3. AAA'), label);   // не «3. …»
+});
+
+test('optionsList печатает варианты полностью, номерами Клода', () => {
+  const list = T.optionsList([{ n: 1, text: 'Yes' }, { n: 2, text: 'No, and tell Claude what to do' }]);
+  assert.strictEqual(list, '1. Yes\n2. No, and tell Claude what to do');
+  assert.strictEqual(T.optionsList(null), '');
+});
+
+test('inlineKeyboard кладёт на кнопку обрезанную подпись, а раскладку считает по полной', () => {
+  const long = "Yes, and don't ask again for rm commands in this project";
+  const kb = T.inlineKeyboard([{ n: 1, text: 'Yes' }, { n: 2, text: long }], '3', 'abc123');
+  const flat = kb.inline_keyboard.flat();
+  assert.strictEqual(flat[1].text, T.buttonLabel(2, long));
+  // Длинный вариант — своей строкой, хотя его ПОДПИСЬ после обрезки уже короткая.
+  assert.deepStrictEqual(kb.inline_keyboard.map((r) => r.length), [1, 1],
+    JSON.stringify(kb.inline_keyboard));
 });
 
 test('inlineKeyboard drops an option it cannot address, and nothing means no keyboard', () => {

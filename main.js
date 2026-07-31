@@ -2189,9 +2189,14 @@ async function tgNotifyWaiting(id, d) {
       // Части запроса — каждая своей строкой: «Bash command · rm -rf build · Do you want to
       // proceed?» одной строкой на телефоне читается как мешанина, а решение по нему
       // принимают за секунды и не разглядывая.
+      // Варианты — и списком в тексте, и метками на кнопках. Дублирование намеренное:
+      // подпись кнопки Telegram рисует одной строкой и обрезает по ширине экрана, так
+      // что длинный вариант («Yes, and don't ask again for rm commands in …») на кнопке
+      // не читается совсем. Читают его здесь, а кнопкой только выбирают номер.
       const msgId = await tgSend({
         threadId,
-        text: `🔐 ${tgTabName(id)} просит разрешение\n\n${prompt.title.split(' · ').join('\n')}`,
+        text: `🔐 ${tgTabName(id)} просит разрешение\n\n${prompt.title.split(' · ').join('\n')}`
+          + `\n\n${telegram.optionsList(prompt.options)}`,
         replyMarkup: kb,
       });
       tgRemember(msgId, id);
