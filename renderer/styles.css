@@ -459,7 +459,12 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 
 /* Bottom-bar action icons (commands / settings / layout), VS Code style. */
 #bar-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; -webkit-app-region: no-drag; }
-#bar-actions button {
+/* :where() — чтобы у этого правила была специфичность ОДНОГО тега, а не id. Иначе
+   «#bar-actions button» перебивал по специфичности все пилюли, которые живут в той же
+   панели и красят себя классом: «!» об ошибках оставался серым вместо красного, плашка
+   обновления — вместо акцентной, иконка «где я» — вместо янтарной. Заявленных цветов не
+   было видно ни разу: правило-то общее, а классы слабее id. */
+:where(#bar-actions) button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -470,7 +475,7 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   color: var(--muted);
   cursor: pointer;
 }
-#bar-actions button:hover { color: var(--text); background: var(--panel-2); }
+:where(#bar-actions) button:hover { color: var(--text); background: var(--panel-2); }
 #bar-actions .ic { display: inline-flex; }
 #bar-actions .ic svg { width: 14px; height: 14px; }
 #bar-actions .tx { display: none; } /* icon-only in the bar; the title attr is the tooltip */
