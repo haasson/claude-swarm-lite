@@ -809,6 +809,26 @@ async function createSession(opts = {}) {
   // We use an overlay scrollbar (styled thin in CSS, floats over content), so reserve
   // nothing and let the terminal fill the width.
   if (term._core && term._core.viewport) term._core.viewport.scrollBarWidth = 0;
+  // Колесо мыши — ТОЛЬКО наша прокрутка, в pty оно не уходит никогда.
+  //
+  // Claude включает отчёты о мыши, и тогда xterm отдаёт прокрутку не своему буферу, а
+  // агенту: тот листает СВОЙ вид и перерисовывает экран старой перепиской. Детектор
+  // читает именно экран — и видит на нём вопрос, заданный полчаса назад, без спиннера.
+  // Отсюда «прокрутил работающую вкладку вверх → она стала готова и прислала
+  // уведомление о старом вопросе». Прокрутка — это чтение, у неё нет права менять ни
+  // статус, ни состояние агента.
+  //
+  // Листаем скроллбек эмулятора (10 000 строк — вся переписка вкладки) вручную, тем же
+  // handleWheel, каким это делает сам xterm без отчётов о мыши: попиксельно, так что на
+  // трекпаде инерция остаётся живой. Слушаем на ПЕРЕХВАТЕ и глушим событие: иначе
+  // xterm либо дошлёт отчёт агенту, либо прокрутит вид второй раз.
+  term.attachCustomWheelEventHandler(() => false);
+  holder.addEventListener('wheel', (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const vp = term._core && term._core.viewport;
+    if (vp) { try { vp.handleWheel(ev); } catch (_) {} }
+  }, { capture: true, passive: false });
   fit.fit();
 
   // Give Claude tabs a stable swarm-* display name (shown in the prompt box and the
