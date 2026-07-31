@@ -258,6 +258,8 @@ const ICONS = {
   chevron: SVG('<path d="m6 9 6 6 6-6"/>'),
   branch: SVG('<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>'),
   gear: SVG('<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>'),
+  // Lucide "grip-vertical" — the drag handle on a card / folder header.
+  grip: SVG('<circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/>'),
   // Lucide "bot" — the sub-agent badge.
   agents: SVG('<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>'),
   // Lucide "door-open" / "smartphone" — «отошёл» и «меня нет»: ушёл из-за стола, следить
@@ -919,7 +921,7 @@ async function createSession(opts = {}) {
   const tab = document.createElement('div');
   tab.className = 'tab';
   tab.innerHTML = `
-    <span class="grip" title="Перетащить"></span>
+    <span class="grip" title="Перетащить">${ICONS.grip}</span>
     <span class="dot"></span>
     <span class="body">
       <span class="label"></span>
@@ -950,7 +952,7 @@ async function createSession(opts = {}) {
     const inGroup = (withinOrder.get(cwd) || []).length > 1;
 
     return inGroup ? { kind: 'card', id, cwd } : { kind: 'unit', cwd };
-  }, { swallowClick: false });
+  });
   attachRename(tab.querySelector('.label'));
 
   sessions.set(id, {
@@ -2089,7 +2091,7 @@ function showSettingsModal(tab) {
        <span class="pult-count">2</span>
      </div>
      <div class="tab active status-running">
-       <span class="grip"></span>
+       <span class="grip">${ICONS.grip}</span>
        <span class="dot"></span>
        <span class="body">
          <span class="label">api</span>
@@ -2102,7 +2104,7 @@ function showSettingsModal(tab) {
        <span class="close" title="Close">×</span>
      </div>
      <div class="tab status-ready">
-       <span class="grip"></span>
+       <span class="grip">${ICONS.grip}</span>
        <span class="dot"></span>
        <span class="body">
          <span class="label">web</span>
@@ -2719,7 +2721,8 @@ function relayoutTabs() {
     head.dataset.cwd = cwd;
     const grip = document.createElement('span');
     grip.className = 'grip';
-    grip.title = 'Перетащить папку';   // рисунок ручки — фоном, см. .grip в styles.css
+    grip.title = 'Перетащить папку';
+    grip.innerHTML = ICONS.grip;
     attachDragHandle(head, grip, () => ({ kind: 'unit', cwd }));
     const chev = document.createElement('span');
     chev.className = 'group-chev';
@@ -2783,22 +2786,14 @@ function dropBefore(els, x, y) {
   return null;
 }
 
-// Cards and folder headers are dragged by their grip only — dragging the whole
-// card fought the click-to-activate and the double-click rename. HTML5 DnD can't
-// tell us where the drag began, so the element is made draggable on mousedown
-// over the grip and locked again as soon as the button is up.
-//
-// `swallowClick` — что делать с ПРОСТЫМ щелчком по ручке, без переноса. Ручка
-// теперь полоса по верхней кромке во всю ширину, и попасть в неё, целясь в
-// карточку, стало легко: гасить там щелчок значило бы «тыкаю в карточку сверху, а
-// она не переключается». Поэтому у карточки щелчок проходит дальше и просто
-// активирует вкладку — то же, что и щелчок по её середине. У шапки папки гасим:
-// щелчок по ней сворачивает папку, и свернуть её, промахнувшись мимо ручки, —
-// потеря места и контекста, а не безобидное переключение.
-function attachDragHandle(el, grip, payloadFor, { swallowClick = true } = {}) {
+// Cards and folder headers are dragged by their left grip only — dragging the
+// whole card fought the click-to-activate and the double-click rename. HTML5 DnD
+// can't tell us where the drag began, so the element is made draggable on
+// mousedown over the grip and locked again as soon as the button is up.
+function attachDragHandle(el, grip, payloadFor) {
   el.draggable = false;
   grip.addEventListener('mousedown', () => { el.draggable = true; });
-  if (swallowClick) grip.addEventListener('click', (e) => e.stopPropagation());
+  grip.addEventListener('click', (e) => e.stopPropagation()); // not an activate/collapse click
   el.addEventListener('dragstart', (e) => startDrag(e, payloadFor()));
 }
 

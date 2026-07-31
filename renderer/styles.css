@@ -132,9 +132,6 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 .layout-rail .group-tabs { flex-direction: column; }
 .layout-top  .group-tabs { flex-direction: row; align-items: stretch; }
 .group-head {
-  /* position + верхний отступ — место под ручку переноса (см. .grip): она лежит
-     полосой по верхней кромке шапки и не сдвигает заголовок. */
-  position: relative;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -142,7 +139,7 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
   font-size: 10px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  padding: max(var(--tab-pad-y), 6px) 4px 2px;
+  padding: 2px 4px;
   white-space: nowrap;
   overflow: hidden;
   cursor: pointer;
@@ -376,47 +373,51 @@ body.layout-top  { grid-template-columns: 1fr;        grid-template-rows: auto 1
 }
 .tab.dragging * { visibility: hidden; }
 .tab-group.dragging { opacity: 0.5; }
-/* Перетаскивать можно только за ручку — полосу по ВЕРХНЕЙ кромке карточки или
-   шапки папки. Она вне потока (position:absolute) и живёт в собственном верхнем
-   отступе элемента, поэтому её появление ничего не сдвигает: ни имя вкладки, ни
-   заголовок папки. Раньше ручка стояла слева — на карточке отдельной колонкой
-   поверх паддинга, а в шапке папки и вовсе раздвигала заголовок на ховере.
-
-   Рисунок набран фоном, а не иконкой: полосу шириной во всю карточку иконка
-   12×12 не заполнит, а растянутая выглядела бы как четыре кляксы. Точки едут
-   по центру полосы — это та же «перфорация», что у ручек в системных панелях, и
-   она сразу читается как «возьмись здесь». Вся полоса при этом — зона захвата,
-   не только точки. */
+/* Перетаскивать можно только за ручку слева. Она проявляется на ховере строки,
+   но место под неё занято всегда — иначе карточка дёргалась бы под курсором. */
 .grip {
-  position: absolute;
-  left: 1px;
-  right: 1px;
-  top: 1px;
-  height: max(var(--tab-pad-y), 5px);
+  flex: none;
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 9px;
   color: var(--muted);
   opacity: 0;
   cursor: grab;
-  z-index: 1;                  /* ниже крестика (2): угловой бейдж остаётся кликабельным */
-  border-radius: 7px 7px 0 0;  /* повторяет верхние углы карточки */
-  /* Точки + слабая плашка под ними. Плашка нужна именно ряду точек во всю ширину:
-     без неё полоса над шапкой папки читалась как пунктирный разделитель между
-     папками, а не как ручка этой папки. */
-  background-color: rgba(255, 255, 255, 0.05);
-  background-image: radial-gradient(currentColor 0.9px, transparent 1.1px);
-  background-size: 5px 5px;
-  background-position: center;
-  background-repeat: repeat-x; /* один ряд точек, а не сетка на всю высоту */
 }
-.tab:hover > .grip { opacity: 1; }
-/* Шапка папки — та же полоса сверху, но там своего отступа нет (padding 2px 4px),
-   поэтому место под ручку резервируется постоянно. Постоянно, а не на ховере:
-   раньше ручка «раздвигала» заголовок в момент наведения, и шапка прыгала под
-   курсором ровно тогда, когда в неё целятся.
-   Во время переноса держим полосу видимой: курсор уходит с шапки, и без этого
+.grip svg { width: 12px; height: 12px; }
+/* На карточке ручка вне потока — как крестик: лежит поверх левого паддинга
+   вплотную к краю и не резервирует колонку (9px + gap раньше съедали место у
+   имени). Ширина = паддинг карточки, поэтому вся левая кромка — зона захвата;
+   сами точки иконки узкие (ink ~4px по центру 12px бокса), так что за границы
+   паддинга они не выходят даже в компактной плотности. */
+.tab > .grip {
+  position: absolute;
+  left: 0;
+  top: 1px;
+  bottom: 1px;
+  width: var(--tab-pad-x);
+  z-index: 2;
+}
+.tab:hover .grip, .group-head:hover .grip { opacity: 1; }
+/* В шапке папки ручка, наоборот, не держит колонку: пока курсор не на шапке, её
+   ширина нулевая (и отрицательный margin гасит gap), а на ховере она плавно
+   раздвигает заголовок. Заголовков папок мало и они не «прыгают» под курсором,
+   как карточки, — там сдвиг читается как жест, а не как дёрганье.
+   Во время переноса держим ручку раскрытой: курсор уходит с шапки, и без этого
    пустой слот папки схлопывался бы прямо посреди drag. */
-.group-head > .grip { border-radius: 5px 5px 0 0; }
+.group-head > .grip {
+  width: 0;
+  margin-right: -4px; /* = gap шапки */
+  transition: width 0.15s ease, margin-right 0.15s ease, opacity 0.15s ease;
+}
 .group-head:hover > .grip,
-.tab-group.dragging .group-head > .grip { opacity: 1; }
+.tab-group.dragging .group-head > .grip {
+  width: 9px;
+  margin-right: 0;
+  opacity: 1;
+}
 .grip:hover { color: var(--text); }
 .grip:active { cursor: grabbing; }
 
