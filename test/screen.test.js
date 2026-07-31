@@ -665,6 +665,33 @@ test('setAskPhrases swaps the marker the scraper looks for', () => {
   assert.strictEqual(S.asksForInput('Сейчас от тебя: путь'), true);
 });
 
+// --- плашка «вернуться вниз»: экран отлистан и ему нельзя верить ---------------
+// Строки сняты с живого claude 2.1.220 (колесо вверх в pty, снимок глазами
+// детектора): плашка ложится ПОВЕРХ содержимого, а её текст меняется.
+test('отлистанный экран узнаётся по плашке возврата вниз', () => {
+  assert.strictEqual(S.scrolledBack(
+    '│                     ▘▘ ▝▝      Jump to bottom (click) ↓ aude Opus 5 (`claude-opus-5`)… │'), true);
+  assert.strictEqual(S.scrolledBack(
+    '  ⎿  $ ls -la /Users/evgeniy/WebstormP 1 new message (click) ↓ /node_modules 2>&1'), true);
+  assert.strictEqual(S.scrolledBack('  3 new messages ↓'), true);
+  assert.strictEqual(S.scrolledBack('  Jump to bottom: fn+↓ to scroll'), true);
+  assert.strictEqual(S.scrolledBack('  Jump to bottom (ctrl+b) ↓'), true);
+});
+
+test('живой экран отлистанным не считается', () => {
+  assert.strictEqual(S.scrolledBack(PERMISSION), false);
+  assert.strictEqual(S.scrolledBack('✻ Roosting… (7s · ↓ 75 tokens · thought for 4s)'), false);
+  assert.strictEqual(S.scrolledBack('  ◯ Explore  найти вызовы   2m 2s · ↓ 28.4k tokens'), false);
+});
+
+// Без стрелки «Jump to bottom» — обычные английские слова, и вкладка замирала бы
+// каждый раз, когда агент печатает их на экране (хоть выводя этот самый файл).
+test('одна фраза без стрелки экран не морозит', () => {
+  assert.strictEqual(S.scrolledBack('чтобы вернуться вниз, Клод рисует Jump to bottom'), false);
+  assert.strictEqual(S.scrolledBack('const RE = /(?:Jump to bottom|\\d+ new messages?)/;'), false);
+  assert.strictEqual(S.scrolledBack('⏺ Пришло 2 new messages, разбираю'), false);
+});
+
 for (const [name, fn] of tests) {
   try { fn(); passed++; }
   catch (e) { console.error('FAIL: ' + name + '\n  ' + e.message); process.exitCode = 1; }

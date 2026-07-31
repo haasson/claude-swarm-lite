@@ -512,9 +512,35 @@ function countSubagents(snapshot) {
   return rows;
 }
 
+// --- экран отлистан назад: этому не верить ------------------------------------
+// Прокрутка колесом уходит АГЕНТУ (Claude включает отслеживание мыши и живёт в
+// альт-экране, где скроллбека у эмулятора нет). Листая, он перерисовывает экран
+// прошлой перепиской — и детектор, который читает именно экран, видит вопрос,
+// заданный полчаса назад, и отсутствие спиннера. Отсюда «прокрутил работающую
+// вкладку вверх → стала готова и прислала уведомление о старом вопросе».
+//
+// Отлистанный вид Клод помечает сам — плашкой возврата вниз. Проверено на живом
+// claude 2.1.220: плашка ложится ПОВЕРХ строки содержимого, а не отдельной строкой,
+// поэтому ищем подстроку, а не строку целиком:
+//   "│   ▘▘ ▝▝      Jump to bottom (click) ↓ aude Opus 5 (`claude-opus-5`)… │"
+//   "⎿  $ ls -la /Users/evgeniy/WebstormP 1 new message (click) ↓ /node_modules"
+// Текст плашки разный: «Jump to bottom» либо «N new message(s)», а хвост зависит от
+// терминала и раскладки хоткеев — «(click) ↓», «(ctrl+b) ↓», «: fn+↓ to scroll»,
+// в самом узком окне просто «… ↓». Общее у всех — сама фраза и стрелка вниз следом.
+//
+// Стрелку требуем ОБЯЗАТЕЛЬНО: без неё «Jump to bottom» — обычные английские слова,
+// и вкладка замирала бы всякий раз, когда агент печатает их на экране (например
+// выводит этот самый файл). Плашка без стрелки остаётся только в окне уже 18 колонок,
+// чего не бывает.
+const RE_SCROLLED_BACK = /(?:Jump to bottom|\d+ new messages?)[^\n]{0,40}?↓/;
+
+function scrolledBack(snapshot) {
+  return RE_SCROLLED_BACK.test(String(snapshot == null ? '' : snapshot));
+}
+
 module.exports = {
   extractQuestion, lastAgentLine, lastAgentBlock, readMode, modeTitle, modeFlag, MODE_TITLES, MODE_FLAGS,
   inferWaitingKind, asksForInput, askFingerprint, setAskPhrases, countSubagents,
-  parsePrompt, fingerprintOf,
+  parsePrompt, fingerprintOf, scrolledBack,
   contentEnd, snapshotRows, snapshotWrapped,
 };

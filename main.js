@@ -348,7 +348,7 @@ process.on('unhandledRejection', (reason) => reportMainError(reason));
 // tell "waiting for a prompt" apart from "idle/done". We deliberately do NOT
 // surface Claude's token counter or activity words — just the four states.
 const { Terminal: HeadlessTerminal } = require('@xterm/headless');
-const { extractQuestion, lastAgentBlock, readMode, modeTitle, modeFlag, countSubagents, contentEnd, snapshotRows, snapshotWrapped, setAskPhrases, askFingerprint, parsePrompt } = require('./screen');
+const { extractQuestion, lastAgentBlock, readMode, modeTitle, modeFlag, countSubagents, contentEnd, snapshotRows, snapshotWrapped, setAskPhrases, askFingerprint, parsePrompt, scrolledBack } = require('./screen');
 // The status state machine + «ждёт» latch + hook arbitration live in a pure,
 // unit-tested module; osc.js sniffs hook markers out of the raw pty stream.
 const { tickStatus, applyHook, applyTranscript, keyboardEvent } = require('./detector');
@@ -360,6 +360,10 @@ const SNAP_ROWS = 16;        // how many bottom screen rows to inspect
 // это абзацы, и в шестнадцать строк он не влезает: в телегу уезжал хвост сообщения. Больше
 // scrollback эмулятора (200) брать всё равно нечего.
 const REPLY_ROWS = 200;
+// Окно поиска плашки «вернуться вниз» (см. screen.scrolledBack). Шире, чем SNAP_ROWS:
+// плашка ложится по нижней кромке вида переписки, а под ней ещё поле ввода с подсказками,
+// и в шестнадцать строк она не попадает, стоит человеку набрать многострочный запрос.
+const SCROLL_HINT_ROWS = 40;
 const RESIZE_GRACE_MS = 700; // after a resize, ignore the repaint burst as "activity"
 const INPUT_GRACE_MS = 700;  // after a keystroke, ignore the echo/redraw as "activity"
 
@@ -371,6 +375,10 @@ function makeDetector(cols, rows) {
     term: new HeadlessTerminal({ cols: cols || 80, rows: rows || 24, scrollback: 200, allowProposedApi: true }),
     lastDataAt: Date.now(),
     graceUntil: 0,
+    // Экран отлистан назад (человек читает историю внутри Клода) и последний снимок,
+    // сделанный, пока вид был живым. Пока отлистано, ВСЕ читатели экрана получают этот
+    // снимок, а байты перерисовки не считаются работой. См. snapshot() ниже.
+    scrolledBack: false, liveSnap: '',
     status: '', detail: '', statusline: '', question: null, sub: 0, dead: false,
     // Waiting latch (fallback detection, no hooks): hold «ждёт» through screen
     // noise, release only when the agent genuinely resumed. See detector.js.
@@ -416,8 +424,21 @@ function makeDetector(cols, rows) {
 // Read the bottom SNAP_ROWS lines of the emulator's current screen. The window is
 // anchored to the last row WITH CONTENT, not to buf.length — see screen.js for why
 // (a shrinking TUI frame leaves blank rows the buffer never gives back).
+//
+// И ещё это ЕДИНСТВЕННАЯ дверь к экрану для всех, кто его читает, — поэтому здесь же
+// живёт защита от прокрутки. Колесо уходит агенту, тот листает свой вид и рисует на
+// экране прошлую переписку; отлистанный экран — не «что происходит сейчас», а чтение
+// истории. Пока плашка возврата вниз на экране, отдаём последний ЖИВОЙ снимок: и
+// статус, и вопрос, и разрешения, и отпечатки — всё видит вкладку такой, какой она
+// была в момент, когда человек полез в историю. Само собой отпускается, как только он
+// вернулся вниз и Клод убрал плашку. См. screen.scrolledBack.
 function snapshot(d) {
-  return snapshotRows(d.term.buffer.active, SNAP_ROWS);
+  const buf = d.term.buffer.active;
+  d.scrolledBack = scrolledBack(snapshotRows(buf, SCROLL_HINT_ROWS));
+  const live = snapshotRows(buf, SNAP_ROWS);
+  if (d.scrolledBack) return d.liveSnap || live;
+  d.liveSnap = live;
+  return live;
 }
 
 // Ты ответил в эту вкладку (за клавиатурой или с телефона — путь один, см. tgAnswer).
@@ -486,8 +507,15 @@ function feedDetector(id, chunk) {
   // NOT real work. Inside the grace window after a resize we keep feeding the
   // emulator (so the screen stays correct) but don't count it as activity, so an
   // idle agent won't flash "работает" and fire a false notification.
+  //
+  // Прокрутка — та же история: пока человек листает историю внутри Клода, тот
+  // перерисовывает вид на каждый щелчок колеса. Это чтение, а не работа агента, и
+  // считать эти байты активностью значит красить спокойную вкладку в «работает» под
+  // мышью. Пока экран отлистан, поток не двигает lastDataAt вообще — статус вкладки
+  // держится на снимке, сделанном до прокрутки (см. snapshot), и на хуках, которым
+  // экран не нужен.
   const now = Date.now();
-  if (now >= d.graceUntil) d.lastDataAt = now;
+  if (now >= d.graceUntil && !d.scrolledBack) d.lastDataAt = now;
 }
 
 setInterval(() => {
