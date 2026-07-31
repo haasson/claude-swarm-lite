@@ -1465,11 +1465,11 @@ function showSettingsModal(tab) {
             </div>
           </div>
 
-          <span class="set-label set-label-gap">Когда присылать итоги</span>
+          <span class="set-label set-label-gap">Когда писать в телегу</span>
           <label class="set-check">
             <input type="checkbox" id="set-tg-mirror" />
-            <span class="set-check-tx">Присылать итоги всех ходов всегда
-              <span class="set-check-sub">по умолчанию — только те, что начаты из телеги, плюс все, пока вы «за телефоном». С этой галкой иконка «где я» из строки состояния пропадает: выбирать нечего, итоги идут всегда. Уходя, скажите боту /phone — тогда мак не уснёт</span></span>
+            <span class="set-check-tx">Писать всегда, даже когда я за компом
+              <span class="set-check-sub">по умолчанию мост сам пишет, только пока вы «за телефоном» (иконка справа внизу): за компом вы видите вкладки и без него. Ответы на ваши сообщения и команды приходят всегда. С этой галкой иконка не нужна и прячется, а «я ушёл» говорится боту: /phone</span></span>
           </label>
           <label class="set-check">
             <input type="checkbox" id="set-tg-awake" />
@@ -3778,8 +3778,8 @@ document.getElementById('update-pill').addEventListener('click', openUpdateModal
 // Положение живёт в main и приезжает оттуда же, чем бы его ни поменяли — этим списком,
 // отвязкой группы в настройках или привязкой новой с телефона.
 const PRESENCE = [
-  { id: 'desk', icon: 'monitor', name: 'за компом', hint: 'в телегу только вопросы и разрешения' },
-  { id: 'phone', icon: 'phone', name: 'за телефоном', hint: 'все итоги в телегу, кратко, мак не спит' },
+  { id: 'desk', icon: 'monitor', name: 'за компом', hint: 'телега молчит, вы и так всё видите' },
+  { id: 'phone', icon: 'phone', name: 'за телефоном', hint: 'вопросы и итоги в телегу, мак не спит' },
 ];
 const presencePill = document.getElementById('presence-pill');
 const presenceMenu = document.getElementById('presence-menu');

@@ -319,8 +319,8 @@ const CB_MAX = 64;
 const COMMANDS = [
   { command: 'tabs', description: 'вкладки и кто чем занят' },
   { command: 'last', description: 'что агент сказал последним' },
-  { command: 'phone', description: 'я с телефоном: все итоги сюда, кратко, маку не спать' },
-  { command: 'comp', description: 'я за компьютером: сюда только вопросы' },
+  { command: 'phone', description: 'я с телефоном: писать сюда обо всём, маку не спать' },
+  { command: 'comp', description: 'я за компьютером: молчать, пока не спрошу' },
   { command: 'usage', description: 'расход: контекст вкладки, 5 часов, неделя' },
   { command: 'mode', description: 'режим вкладки: auto, edits, plan, manual' },
   { command: 'new', description: 'ещё один агент в папке этой темы' },
