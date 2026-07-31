@@ -86,7 +86,10 @@ const CHROME_RE = new RegExp([
   '(?:auto|plan|accept edits|bypass permissions|bypassing permissions) mode on',
   'auto-compact', 'context left until', 'tokens? (?:used|remaining)',
   'jump to bottom', '/clear to save', '^new task\\?',
-  '^[⏵⏸⧉⎿✻✽✶✳·◯○◌]',
+  // ● — не только ростер: Claude Code 2.1.220 рисует им строку усилия («● high · /effort»),
+  // а имя сессии, которым её назвал сворм («swarm-f81789c0 …»), стоит там же. Обе уехали в
+  // телегу как «ответ агента» на вкладке, у которой ещё не привязалась стенограмма.
+  '^[⏵⏸⧉⎿✻✽✶✳·◯○◌●]', '^swarm-[0-9a-f]{6,}\\b',
 ].join('|'), 'i');
 // After edge trimming, a leftover │ or a progress bar means we're looking at the
 // user's Claude statusline ("model │ dir │ ███░ 65%"), not at a question.

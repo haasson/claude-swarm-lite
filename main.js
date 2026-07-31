@@ -1991,9 +1991,24 @@ function tgClearMode(d) {
 // one message with the real question instead of two with half of it.
 const TG_NOTIFY_DELAY_MS = 1200;
 
+// Вкладка только что открылась — молчим, даже если она «ждёт».
+//
+// Восстановленная вкладка возобновляет разговор (`--resume`), и Клод перерисовывает ПРОШЛУЮ
+// переписку. На экране снова стоит вопрос, который человек видел до перезапуска, — а
+// стенограммы, из которой берётся текст, в эти секунды ещё нет: привязка занимает секунды.
+// Получалось худшее сочетание: уведомление о старом вопросе, да ещё с огрызком экрана
+// вместо текста («main», строка усилия, имя сессии).
+//
+// Отказ здесь не теряется: пока вкладка ждёт, такт зовёт tgOnWaiting снова (см. цикл
+// статуса), так что настоящий вопрос уедет, когда у него появится настоящий текст.
+const TG_TAB_WARMUP_MS = 12_000;
+// Сколько символов должно быть в тексте С ЭКРАНА, чтобы отправить его как вопрос.
+const TG_MIN_SCREEN_TEXT = 12;
+
 function tgOnWaiting(id) {
   const d = det.get(id);
   if (!d || TG.chatId == null || !TG.token) return;
+  if (Date.now() - (d.startedAt || 0) < TG_TAB_WARMUP_MS) return;
   // «За компом» мост молчит: вопрос и запрос разрешения человек видит на экране, перед
   // которым сидит. Исключение одно — долг: в чате висит «получил, думаю…», и вопрос агента
   // здесь не уведомление, а ответ на заданный оттуда вопрос (см. tgNotifyWaiting → tgAck).
@@ -2137,11 +2152,15 @@ async function tgNotifyDone(id, d, fresh) {
   // `fresh` — принадлежит ли текст стенограммы ЭТОМУ ходу (см. tgOnDone). Не принадлежит —
   // значит его нет, и никакой «почти подходящий» текст его не заменяет.
   const fromTr = fresh ? String(d.trReply || '').trim() : '';
+  // Экранный запас — только если это похоже на ответ, а не на огрызок мебели: в чат уезжало
+  // «✅ fastio 2 · main» и «✅ fastio 3 · swarm-1a437470». Честное «готов» без текста
+  // человеку понятнее, чем слово, которое он должен как-то истолковать. См. TG_MIN_SCREEN_TEXT.
   // lastAgentBlock, а НЕ extractQuestion: вторая берёт нижнюю значимую строку, а внизу стоит
   // поле ввода — из-за этого в чат уезжала то линейка рамки, то собственный вопрос
   // пользователя, отражённый ему же как «ответ агента». И не lastAgentLine: одна строка —
   // это огрызок ответа, а человеку нужен ответ.
-  const text = fromTr || String(lastAgentBlock(replySnapshot(d)) || '').trim();
+  const scraped = String(lastAgentBlock(replySnapshot(d)) || '').trim();
+  const text = fromTr || (scraped.length >= TG_MIN_SCREEN_TEXT ? scraped : '');
   // Источник называем ЧЕСТНО, включая «текст стенограммы не от этого хода»: пометка
   // «стенограмма» на чужом тексте однажды уже отправила искать не ту проблему.
   const why = fromTr ? 'стенограмма'
@@ -2211,13 +2230,20 @@ async function tgNotifyWaiting(id, d) {
   // выводы агента ему нужны не меньше самого вопроса. Без стенограммы — сообщение с экрана
   // целиком; d.question (одна строка для плашки вкладки) остаётся последним запасом, из-за
   // него в чат уезжало «Jump to bottom (click) ↓» вместо вопроса.
-  const said = String(d.trFinal || '').trim()
-    || String(lastAgentBlock(replySnapshot(d)) || '').trim()
-    || d.question;
+  //
+  // И то, что взято с экрана, обязано быть ДЛИННЕЕ огрызка. Строку мебели мы отсеиваем
+  // (см. screen.isProse), но мебель Клод обновляет чаще, чем мы успеваем узнавать её виды, а
+  // цена ошибки тут прямая: в чат уезжало «main» и «swarm-f81789c0» как вопрос агента.
+  // Осмысленный вопрос короче десятка символов не бывает, а из стенограммы верим любому.
+  const fromTr = String(d.trFinal || '').trim();
+  const scraped = String(lastAgentBlock(replySnapshot(d)) || '').trim() || String(d.question || '').trim();
+  const said = fromTr || (scraped.length >= TG_MIN_SCREEN_TEXT ? scraped : '');
   const body = said ? '\n\n' + said : '';
   const tail = permission
     ? '\n\nВариантов не разобрал — ответь за компьютером.'
-    : '\n\nОтветь реплаем на это сообщение.';
+    : said
+      ? '\n\nОтветь реплаем на это сообщение.'
+      : '\n\nТекста вопроса не разобрал — загляни во вкладку.';
   const full = `${head} · ${tgTabName(id)}${body}${tail}`;
   // Вопрос прозой — это и есть исход хода, значит он вписывается в ту же заготовку: реплай
   // на неё маршрутизируется в ту же вкладку, потому что её id мы запомнили при отправке.
@@ -2785,7 +2811,11 @@ async function tgCatchUp() {
 // дословно из стенограммы, а без неё — последним блоком с экрана.
 function tgLastText(d) {
   const fromTr = String(d.trFinal || d.trReply || '').trim();
-  return { text: fromTr || String(lastAgentBlock(replySnapshot(d)) || '').trim(), fromTr: !!fromTr };
+  const scraped = String(lastAgentBlock(replySnapshot(d)) || '').trim();
+  return {
+    text: fromTr || (scraped.length >= TG_MIN_SCREEN_TEXT ? scraped : ''),
+    fromTr: !!fromTr,
+  };
 }
 
 // /last — что агент сказал последним. Нужна ровно тогда, когда режим переключили ПОСЛЕ

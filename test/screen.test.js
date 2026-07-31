@@ -639,6 +639,19 @@ test('lastAgentBlock не выдаёт за ответ текст человек
   assert.strictEqual(S.lastAgentBlock(null), null);
 });
 
+// Живой случай: восстановленная вкладка ещё не привязала стенограмму, текст берётся с
+// экрана — и в телегу уехали «● high · /effort» и имя сессии как «ответ агента». Это
+// мебель Claude Code 2.1.220 и наша собственная подпись вкладки, и ни то ни другое никто
+// не писал.
+test('строка усилия и имя сессии — мебель, а не слова агента', () => {
+  const scr = ['⏺ Собрал релиз, тесты зелёные.', '', '> ', '  ● high · /effort',
+    '  swarm-f81789c0 · bnmap-common'].join('\n');
+  assert.strictEqual(S.lastAgentBlock(scr), 'Собрал релиз, тесты зелёные.');
+  const only = ['  ● high · /effort', '  swarm-f81789c0 · bnmap-common', '> '].join('\n');
+  assert.strictEqual(S.lastAgentBlock(only), null, 'кроме мебели на экране ничего нет');
+  assert.strictEqual(S.extractQuestion(only), null);
+});
+
 // Мост зовёт lastAgentBlock без предела: в чат уходит всё, что агент сказал.
 test('lastAgentBlock без предела не режет ничего', () => {
   const long = 'я'.repeat(9000);
