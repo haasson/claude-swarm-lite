@@ -190,6 +190,52 @@ function turnText(entries, max) {
   return cut && body ? '…\n\n' + body : body;
 }
 
+// --- признаки жизни во время хода ---------------------------------------------
+// «Получил, думаю…» в чате может висеть десять минут, и по нему не отличить думающего
+// агента от уснувшего мака. Отличают эти две функции: обе читают уже разобранные записи,
+// то есть стоят ровно ноль дополнительной работы.
+
+// Чем агент занят ПРЯМО СЕЙЧАС. Открытый tool_use (результат ещё не пришёл) — это имя
+// работающего инструмента; всё остальное значит «думает сам», и имени у этого нет.
+function currentTool(entries) {
+  const e = lastMain(Array.isArray(entries) ? entries : []);
+  const c = e && e.message && e.message.content;
+  if (!Array.isArray(c)) return null;
+  for (let i = c.length - 1; i >= 0; i--) {
+    if (c[i] && c[i].type === 'tool_use' && c[i].name) return String(c[i].name);
+  }
+  return null;
+}
+
+// Токены ЭТОГО хода. Claude Code записывает расход в каждое своё сообщение (message.usage),
+// так что складывать нужно только записи после последней реплики человека — граница та же,
+// что у turnText, и по той же причине: результат инструмента репликой не является.
+//
+//   out — сколько агент написал. Это число растёт на глазах, пока он говорит, и именно оно
+//         отвечает на «он жив?».
+//   inp — сколько прочитал: свежий ввод плюс кэш. Больше out в сотни раз, поэтому и
+//         показывается отдельно, а не в общей сумме, которую нечем истолковать.
+function turnTokens(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  let out = 0;
+  let inp = 0;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const e = list[i];
+    if (!e || e.isSidechain) continue;
+    if (e.type === 'user') {
+      if (blockTypes(e).includes('tool_result')) continue;
+      if (isInterrupt(e)) continue;
+      break;
+    }
+    const u = e.message && e.message.usage;
+    if (!u) continue;
+    out += Number(u.output_tokens) || 0;
+    inp += (Number(u.input_tokens) || 0) + (Number(u.cache_creation_input_tokens) || 0)
+      + (Number(u.cache_read_input_tokens) || 0);
+  }
+  return { out, inp };
+}
+
 // Текст, взятый из стенограммы, — про ЭТОТ ход или про прошлый?
 //
 // Вопрос не праздный: статус «готов» и текст хода приходят по разным каналам и с разной
@@ -299,6 +345,6 @@ function pickByScreen(cands, snapshot) {
 module.exports = {
   READY_DEBOUNCE_MS, BIND_MTIME_SLACK_MS, SCREEN_KEY_LEN, INJECTED_MIN, screenKey, pickByScreen,
   projectSlug, parseEntries, blockTypes, entryText, lastMain, classify, cwdOf, pickBinding, isInterrupt,
-  belongsToTurn, turnText,
+  belongsToTurn, turnText, currentTool, turnTokens,
   pickByInjected,
 };

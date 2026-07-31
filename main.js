@@ -401,7 +401,9 @@ function makeDetector(cols, rows) {
     // приходило дважды. tgAck — сообщение «получил, думаю…», которое станет ответом. mode —
     // последний увиденный режим разрешений: на экране его строка есть не всегда.
     tabKey: '', name: '', tgTimer: null, tgMode: false, tgPrimed: false, trReply: '',
-    tgNotifiedAt: 0, tgAck: null, tgLastSent: '', trFinal: '', mode: null,
+    // tgAckText — что в заготовке написано сейчас: Telegram отвергает правку, не меняющую
+    // текст, поэтому одну и ту же строку второй раз не шлём (см. tgProgressTick).
+    tgNotifiedAt: 0, tgAck: null, tgAckText: '', tgLastSent: '', trFinal: '', mode: null,
     tgTopicLive: false, tgTopicName: '',
     // Отказы отправки уведомления: сколько подряд и когда пробовать снова. Без откола такт
     // (300 мс) долбил Telegram каждые полторы секунды всё время, пока вкладка ждёт.
@@ -2080,8 +2082,61 @@ async function tgAckSend(id, d, u) {
   }
   const msgId = await tgSend({ threadId: u.threadId, replyTo: u.messageId, text: TG_THINKING, silent: true });
   tgRemember(msgId, id);          // ответом на него тоже можно продолжать разговор
-  if (d && msgId) d.tgAck = { messageId: msgId, chatId: TG.chatId };
+  if (d && msgId) { d.tgAck = { messageId: msgId, chatId: TG.chatId }; d.tgAckText = ''; }
 }
+
+// --- заготовка, которая показывает признаки жизни ------------------------------
+// Пока идёт ход, «⏳ получил, думаю…» переписывается живыми числами: сколько уже думает,
+// каким инструментом занят, сколько написал, насколько полон контекст (см.
+// telegram.thinkingLine). С телефона это единственный способ отличить работающего агента от
+// уснувшего мака — до вкладки не дотянуться.
+//
+// Цена — один запрос на правку в полминуты на КАЖДУЮ висящую заготовку, а висят они только
+// у вкладок, которым человек сам написал с телефона. Все числа уже прочитаны для других
+// нужд (стенограмма разбирается тактом, снимок статуслайна лежит файлом), так что считать
+// заново нечего. Telegram отвергает правку, не меняющую текст, — поэтому одинаковую строку
+// второй раз не отправляем.
+const TG_PROGRESS_MS = 30_000;
+
+function tgClock(now) {
+  return new Date(now).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+}
+
+// Снимок расхода, если он не протух. Статуслайн перерисовывается на каждом ходе, но во
+// время долгого инструмента может молчать минутами: показать пятиминутной давности процент
+// как текущий — соврать ровно там, где человек ищет признак жизни.
+const TG_USAGE_FRESH_MS = 300_000;
+
+function tgCtxOf(d, now) {
+  const u = readUsage(d.claudeSessionId);
+  if (!u || !u.ctx || now - (u.at || 0) * 1000 > TG_USAGE_FRESH_MS) return null;
+  return { pct: u.ctx.used, total: statusline.fmtTok(u.ctx.total) };
+}
+
+async function tgProgressTick() {
+  if (TG.chatId == null || !TG.token) return;
+  const now = Date.now();
+  for (const [, d] of det) {
+    if (d.dead || !d.tgAck || d.status !== 'running' || !d.turnStartedAt) continue;
+    const elapsed = now - d.turnStartedAt;
+    if (elapsed < TG_PROGRESS_MS) continue;      // первые полминуты и часиков достаточно
+    const text = telegram.thinkingLine({
+      elapsedMs: elapsed,
+      tool: transcript.currentTool(d.trEntries),
+      tokens: transcript.turnTokens(d.trEntries),
+      ctx: tgCtxOf(d, now),
+      clock: tgClock(now),
+    });
+    if (text === d.tgAckText) continue;
+    const ack = d.tgAck;
+    d.tgAckText = text;
+    await tgFetchJson(telegram.apiUrl(TG.token, 'editMessageText'),
+      { chat_id: ack.chatId, message_id: ack.messageId, text })
+      .catch(reportMainError);
+  }
+}
+
+setInterval(() => { tgProgressTick().catch(reportMainError); }, TG_PROGRESS_MS);
 
 // Переписать заготовку. Не вышло (сообщение удалили, прошли сутки, чат сменился) — отправим
 // обычным сообщением: тишина вместо ответа хуже лишней записи в ленте.

@@ -253,6 +253,56 @@ function detailPrompt(detail) {
   return PROMPTS[detail] || PROMPTS.short;
 }
 
+// --- живое «думаю…» ------------------------------------------------------------
+// Заготовка ответа висит в чате всё время хода, а ход бывает и на десять минут. Часики,
+// которые не меняются, отвечают на «работает или уснул?» ровно ничем — а вопрос этот с
+// телефона главный: до мака не дотянуться, чтобы посмотреть самому.
+//
+// Поэтому в заготовку раз в полминуты вписываются живые числа. Все они уже есть у
+// приложения (стенограмма и снимок статуслайна), так что стоят они одного запроса на
+// правку сообщения — не опроса, не подсчёта, не лишнего процесса.
+//
+// Время округляем крупно: разница между «4 мин» и «4 мин 12 с» не значит ничего, а
+// секундная стрелка в чате только притворяется точностью.
+function fmtSpan(ms) {
+  const s = Math.max(0, Math.round(Number(ms) || 0) / 1000);
+  if (s < 60) return `${Math.round(s)} с`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} мин`;
+  const h = Math.floor(m / 60);
+  const rest = m % 60;
+  return rest ? `${h} ч ${rest} мин` : `${h} ч`;
+}
+
+// Токены — тысячами: точное число здесь не решение, а шум, и на узком экране оно съедает
+// строку, в которой всё остальное важнее.
+function fmtTokens(n) {
+  const v = Math.max(0, Math.round(Number(n) || 0));
+  if (v < 1000) return String(v);
+  if (v < 1e6) return (v / 1000).toFixed(v < 10_000 ? 1 : 0).replace('.0', '') + 'K';
+  return (v / 1e6).toFixed(1).replace('.0', '') + 'M';
+}
+
+// Строка заготовки. Всё, кроме времени, необязательно: вкладка без стенограммы не знает ни
+// инструмента, ни токенов, и врать о них нечем — тогда в строке останется время и часы, а
+// это уже отвечает на «жив ли он», потому что меняется.
+//
+//   { elapsedMs, tool, tokens: {out, inp}, ctx: {pct, total}, clock }
+function thinkingLine(info) {
+  const i = info || {};
+  const parts = [`⏳ думаю ${fmtSpan(i.elapsedMs)}`];
+  if (i.tool) parts.push(i.tool);
+  if (i.tokens && i.tokens.out > 0) {
+    const inp = i.tokens.inp > 0 ? ` из ${fmtTokens(i.tokens.inp)}` : '';
+    parts.push(`написал ${fmtTokens(i.tokens.out)}${inp}`);
+  }
+  if (i.ctx && i.ctx.pct != null) {
+    parts.push(`контекст ${i.ctx.pct}%${i.ctx.total ? ' из ' + i.ctx.total : ''}`);
+  }
+  if (i.clock) parts.push(i.clock);
+  return parts.join(' · ');
+}
+
 function tagInput(opts) {
   const o = opts || {};
   const text = String(o.text == null ? '' : o.text).trim();
@@ -590,6 +640,7 @@ function createPoller(deps) {
 module.exports = {
   API_HOST, MAX_TEXT, POLL_TIMEOUT_S, BACKOFF_MAX_MS, CODE_LEN, TG_TAG, tagInput,
   PROMPTS, DETAILS, detailPrompt,
+  thinkingLine, fmtSpan, fmtTokens,
   apiUrl, looksLikeToken, maskToken,
   pairCode, deepLink, pairingMatch,
   readUpdate, readService, senderLabel, routeMessage, chunkText, inlineKeyboard, buttonLabel, optionsList, BTN_MAX, callbackData, parseCallbackData, callbackTab, CB_MAX, backoffMs, retryAfterMs, classifyError,

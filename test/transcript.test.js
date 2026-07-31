@@ -271,6 +271,39 @@ test('turnText не выходит за реплику человека и не 
   assert.ok(!/вслух не говорю/.test(got), 'мысли человек не видит');
 });
 
+// --- признаки жизни: чем занят и сколько написал ------------------------------
+// С телефона «получил, думаю…» без чисел не отличает работающего агента от уснувшего мака.
+// Оба числа берутся из уже разобранных записей — своей работы это не стоит.
+
+test('currentTool называет инструмент, пока результат не пришёл', () => {
+  const running = T.parseEntries([
+    user('почини сборку', 8000),
+    assistant([{ type: 'tool_use', name: 'Bash', input: {} }], 6000),
+  ].join('\n'));
+  assert.strictEqual(T.currentTool(running), 'Bash');
+  // Результат пришёл — инструмент отработал, дальше думает модель, и имени у этого нет.
+  assert.strictEqual(T.currentTool(TURN), null);
+  assert.strictEqual(T.currentTool([]), null);
+  assert.strictEqual(T.currentTool(null), null);
+});
+
+test('turnTokens считает расход ЭТОГО хода, а не всей сессии', () => {
+  const usage = (out, read) => ({
+    message: { usage: { output_tokens: out, cache_read_input_tokens: read, input_tokens: 2 } },
+  });
+  const entries = T.parseEntries([
+    assistant([{ type: 'text', text: 'прошлый ход' }], 9000, usage(9999, 9999)),
+    user('почини сборку', 8000),
+    assistant([{ type: 'text', text: 'смотрю' }], 7000, usage(100, 1000)),
+    user([{ type: 'tool_result', content: 'ошибка' }], 6000),
+    assistant([{ type: 'text', text: 'починил' }], 5000, usage(50, 2000)),
+  ].join('\n'));
+  const got = T.turnTokens(entries);
+  assert.strictEqual(got.out, 150, 'сложились только записи после реплики человека');
+  assert.strictEqual(got.inp, 3004, 'вход — свежий плюс кэш');
+  assert.deepStrictEqual(T.turnTokens([]), { out: 0, inp: 0 });
+});
+
 // Ответ инструмента приходит записью того же типа, что и реплика человека. Принять его за
 // границу — значит обрезать ход по первому же инструменту, то есть вернуть тот же огрызок.
 test('turnText: результат инструмента ход не заканчивает', () => {

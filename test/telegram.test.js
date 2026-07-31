@@ -392,6 +392,41 @@ test('список команд для меню бота непустой и с 
   }
 });
 
+// --- живое «думаю…» -----------------------------------------------------------
+// Заготовка висит весь ход, и неподвижные часики не отвечают на «работает или уснул?».
+// Числа в ней — единственный ответ, доступный с телефона.
+
+test('thinkingLine показывает время, инструмент, написанное и контекст', () => {
+  const line = T.thinkingLine({
+    elapsedMs: 4 * 60_000, tool: 'Bash', tokens: { out: 4600, inp: 310_000 },
+    ctx: { pct: 38, total: '200K' }, clock: '17:58',
+  });
+  assert.strictEqual(line, '⏳ думаю 4 мин · Bash · написал 4.6K из 310K · контекст 38% из 200K · 17:58');
+});
+
+test('thinkingLine: чего не знаем, о том молчим — но время есть всегда', () => {
+  assert.strictEqual(T.thinkingLine({ elapsedMs: 45_000 }), '⏳ думаю 45 с');
+  // Вкладка без стенограммы не знает ни инструмента, ни токенов: пустой расход — не «0».
+  assert.strictEqual(T.thinkingLine({ elapsedMs: 90_000, tokens: { out: 0, inp: 0 }, clock: '17:58' }),
+    '⏳ думаю 2 мин · 17:58');
+  assert.strictEqual(T.thinkingLine(), '⏳ думаю 0 с');
+});
+
+test('fmtSpan округляет крупно, а часы называет часами', () => {
+  assert.strictEqual(T.fmtSpan(0), '0 с');
+  assert.strictEqual(T.fmtSpan(59_400), '59 с');
+  assert.strictEqual(T.fmtSpan(60_000), '1 мин');
+  assert.strictEqual(T.fmtSpan(72 * 60_000), '1 ч 12 мин');
+  assert.strictEqual(T.fmtSpan(120 * 60_000), '2 ч');
+});
+
+test('fmtTokens: тысячи, а не длинные числа', () => {
+  assert.strictEqual(T.fmtTokens(940), '940');
+  assert.strictEqual(T.fmtTokens(4600), '4.6K');
+  assert.strictEqual(T.fmtTokens(310_000), '310K');
+  assert.strictEqual(T.fmtTokens(2_400_000), '2.4M');
+});
+
 // Shift+Tab, которым Claude Code переключает режим разрешений: приложение должно посылать
 // ровно то, что посылает терминал (CSI Z), иначе для Claude это будет не нажатие, а мусор.
 test('BACK_TAB — это CSI Z, то есть настоящий Shift+Tab', () => {
