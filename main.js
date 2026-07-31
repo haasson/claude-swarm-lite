@@ -410,8 +410,10 @@ function makeDetector(cols, rows) {
     // последний увиденный режим разрешений: на экране его строка есть не всегда.
     tabKey: '', name: '', tgTimer: null, tgMode: false, tgPrimed: false, trReply: '',
     // tgAckText — что в заготовке написано сейчас: Telegram отвергает правку, не меняющую
-    // текст, поэтому одну и ту же строку второй раз не шлём (см. tgProgressTick).
-    tgNotifiedAt: 0, tgAck: null, tgAckText: '', tgLastSent: '', trFinal: '', mode: null,
+    // текст, поэтому одну и ту же строку второй раз не шлём (см. tgProgressTick). tgAckAt —
+    // когда её правили в последний раз, tgAckWhy — почему не правят (для журнала).
+    tgNotifiedAt: 0, tgAck: null, tgAckText: '', tgAckAt: 0, tgAckWhy: '',
+    tgLastSent: '', trFinal: '', mode: null,
     tgTopicLive: false, tgTopicName: '',
     // Текст с телефона, который ждёт закрытия диалога: напечатать его прямо в диалог нельзя,
     // а терять — значит просить набрать заново с телефона. Уходит по кнопке «закрыть диалог»
@@ -2197,7 +2199,10 @@ async function tgAckSend(id, d, u) {
   }
   const msgId = await tgSend({ threadId: u.threadId, replyTo: u.messageId, text: TG_THINKING, silent: true });
   tgRemember(msgId, id);          // ответом на него тоже можно продолжать разговор
-  if (d && msgId) { d.tgAck = { messageId: msgId, chatId: TG.chatId }; d.tgAckText = ''; }
+  if (d && msgId) {
+    d.tgAck = { messageId: msgId, chatId: TG.chatId };
+    d.tgAckText = ''; d.tgAckAt = 0; d.tgAckWhy = '';
+  }
 }
 
 // --- заготовка, которая показывает признаки жизни ------------------------------
@@ -2212,6 +2217,11 @@ async function tgAckSend(id, d, u) {
 // заново нечего. Telegram отвергает правку, не меняющую текст, — поэтому одинаковую строку
 // второй раз не отправляем.
 const TG_PROGRESS_MS = 30_000;
+// Смотреть, не пора ли, надо ЧАЩЕ, чем править. Пока такт был один на оба дела, момент
+// правки зависел от того, когда запустили приложение: ход, начавшийся сразу после такта,
+// получал первую живую строку через минуту, а ход короче минуты — никогда. Часики, которые
+// не сменились ни разу, — это ровно та жалоба, с которой всё началось.
+const TG_PROGRESS_STEP_MS = 5_000;
 
 function tgClock(now) {
   return new Date(now).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
@@ -2228,13 +2238,35 @@ function tgCtxOf(d, now) {
   return { pct: u.ctx.used, total: statusline.fmtTok(u.ctx.total) };
 }
 
+// Почему заготовка стоит без живой строки. Пустая строка — «всё в порядке, можно править».
+//
+// Отдельной функцией, потому что это ответ на главный вопрос разбора: часики не меняются —
+// приложение не считает вкладку работающей, или считает, а правка не доходит? Раньше у
+// этого такта не было НИ ОДНОЙ записи в журнале, и обе причины выглядели одинаково.
+function tgProgressWhy(d) {
+  if (d.dead) return 'вкладка закрыта';
+  if (d.status !== 'running') return `вкладка не работает (${d.status || '—'})`;
+  if (!d.turnStartedAt) return 'начало хода неизвестно';
+  return '';
+}
+
 async function tgProgressTick() {
   if (TG.chatId == null || !TG.token) return;
   const now = Date.now();
-  for (const [, d] of det) {
-    if (d.dead || !d.tgAck || d.status !== 'running' || !d.turnStartedAt) continue;
+  for (const [id, d] of det) {
+    if (!d.tgAck) continue;                      // заготовки нет — и переписывать нечего
+    // В журнал пишем ПЕРЕМЕНУ причины, а не каждый такт: иначе одна забытая заготовка
+    // засыпала бы журнал одной и той же строкой раз в пять секунд и стёрла бы собой всю
+    // остальную диагностику моста.
+    const why = tgProgressWhy(d);
+    if (why) {
+      if (why !== d.tgAckWhy) { d.tgAckWhy = why; tgLog(`  ⏳ вкладка ${id}: живой строки нет — ${why}`); }
+      continue;
+    }
+    d.tgAckWhy = '';
     const elapsed = now - d.turnStartedAt;
     if (elapsed < TG_PROGRESS_MS) continue;      // первые полминуты и часиков достаточно
+    if (now - (d.tgAckAt || 0) < TG_PROGRESS_MS) continue;   // правим не чаще раза в полминуты
     const text = telegram.thinkingLine({
       elapsedMs: elapsed,
       tool: transcript.currentTool(d.trEntries),
@@ -2244,14 +2276,22 @@ async function tgProgressTick() {
     });
     if (text === d.tgAckText) continue;
     const ack = d.tgAck;
-    d.tgAckText = text;
-    await tgFetchJson(telegram.apiUrl(TG.token, 'editMessageText'),
-      { chat_id: ack.chatId, message_id: ack.messageId, text })
-      .catch(reportMainError);
+    d.tgAckAt = now;                             // попытка была — считаем её за такт правки
+    const res = await tgFetchJson(telegram.apiUrl(TG.token, 'editMessageText'),
+      { chat_id: ack.chatId, message_id: ack.messageId, text });
+    if (res.ok && res.body && res.body.ok === true) {
+      d.tgAckText = text;
+      tgLog(`  ⏳ ${ack.messageId}: ${text}`);
+      continue;
+    }
+    // Не вписалась. Текст заготовки НЕ запоминаем — следующая попытка должна считать себя
+    // первой, иначе одна осечка выключала живую строку до конца хода молча.
+    tgLog(`  ✗ живая строка не вписалась в ${ack.messageId}: `
+      + `${res.netError || (res.body && res.body.description) || 'HTTP ' + res.status}`);
   }
 }
 
-setInterval(() => { tgProgressTick().catch(reportMainError); }, TG_PROGRESS_MS);
+setInterval(() => { tgProgressTick().catch(reportMainError); }, TG_PROGRESS_STEP_MS);
 
 // Переписать заготовку. Не вышло (сообщение удалили, прошли сутки, чат сменился) — отправим
 // обычным сообщением: тишина вместо ответа хуже лишней записи в ленте.
