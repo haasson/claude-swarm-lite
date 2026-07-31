@@ -262,9 +262,10 @@ const ICONS = {
   grip: SVG('<circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/>'),
   // Lucide "bot" — the sub-agent badge.
   agents: SVG('<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>'),
-  // Lucide "door-open" / "smartphone" — «отошёл» и «меня нет»: ушёл из-за стола, следить
-  // остаётся телефон.
-  door: SVG('<path d="M13 4h3a2 2 0 0 1 2 2v14"/><path d="M2 20h3"/><path d="M13 20h9"/><path d="M10 12v.01"/><path d="M13 4.562v16.157a1 1 0 0 1-1.242.97L5 20V5.562a2 2 0 0 1 1.515-1.94l4-1A2 2 0 0 1 13 4.561Z"/>'),
+  // Lucide "monitor" / "monitor-smartphone" / "smartphone" — «где я сейчас»: за столом,
+  // на обоих устройствах, с одним телефоном.
+  monitor: SVG('<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>'),
+  devices: SVG('<path d="M18 8V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h8"/><path d="M7 19h5"/><path d="M10 15v4"/><rect width="6" height="10" x="16" y="12" rx="2"/>'),
   phone: SVG('<rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/>'),
 };
 
@@ -1470,12 +1471,12 @@ function showSettingsModal(tab) {
           <label class="set-check">
             <input type="checkbox" id="set-tg-mirror" />
             <span class="set-check-tx">Присылать итоги всех ходов всегда
-              <span class="set-check-sub">по умолчанию — только те, что начаты из телеги; уходя, нажмите «отошёл» в строке состояния, и в телегу пойдут все</span></span>
+              <span class="set-check-sub">по умолчанию — только те, что начаты из телеги; на сегодня то же самое включает «с обоих устройств» в строке состояния. С этой галкой «за компом» там выбрать нельзя: итоги идут всегда</span></span>
           </label>
           <label class="set-check">
             <input type="checkbox" id="set-tg-awake" />
             <span class="set-check-tx">Не давать компьютеру засыпать, пока вас нет
-              <span class="set-check-sub">со спящей машиной отвечать некому: агенты живут здесь, а не на сервере. Держит бодрым только в режиме «отошёл» — за столом сон вам не мешает</span></span>
+              <span class="set-check-sub">со спящей машиной отвечать некому: агенты живут здесь, а не на сервере. Держит бодрым только в положении «за телефоном» — пока вы рядом, сон вам не мешает</span></span>
           </label>
 
         </div>
@@ -1790,7 +1791,7 @@ function showSettingsModal(tab) {
     tgMirrorI.checked = !!st.mirrorAll;
     // Панель и кнопка в строке состояния показывают одно и то же состояние моста. Отвязка
     // группы отвечает только сюда (main её не рассылает), а кнопка при этом должна исчезнуть.
-    renderAwayPill(st);
+    renderPresencePill(st);
     if (document.activeElement !== tgWBinI) tgWBinI.value = st.whisperBin || '';
     if (document.activeElement !== tgWModelI) tgWModelI.value = st.whisperModel || '';
     // Инструкция по ручной установке — своя на ОС (brew есть только на маке), её присылает
@@ -3039,20 +3040,26 @@ async function openCmdMenu() {
     }
   }
   cmdMenu.classList.remove('hidden');
-  // Anchor to the burger button; flip above / clamp to viewport as needed.
-  cmdMenu.style.visibility = 'hidden';
-  cmdMenu.style.left = '0px';
-  cmdMenu.style.top = '0px';
-  const r = cmdBtn.getBoundingClientRect();
-  const mh = cmdMenu.offsetHeight;
-  const mw = cmdMenu.offsetWidth;
+  placeMenuUnder(cmdMenu, cmdBtn);
+  setTimeout(() => document.addEventListener('mousedown', outsideCloseCmd), 0);
+}
+
+// Поставить всплывающий список под кнопкой: перевернуть вверх, если снизу не влезает,
+// и прижать к краю окна. Меню должно быть уже показано (иначе нечего мерить), поэтому
+// меряем его невидимым и открываем на месте — без этого он мигает в левом верхнем углу.
+function placeMenuUnder(menu, anchor) {
+  menu.style.visibility = 'hidden';
+  menu.style.left = '0px';
+  menu.style.top = '0px';
+  const r = anchor.getBoundingClientRect();
+  const mh = menu.offsetHeight;
+  const mw = menu.offsetWidth;
   let top = r.bottom + 6;
   if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 6);
   const left = Math.max(8, Math.min(r.left, window.innerWidth - mw - 8));
-  cmdMenu.style.top = top + 'px';
-  cmdMenu.style.left = left + 'px';
-  cmdMenu.style.visibility = 'visible';
-  setTimeout(() => document.addEventListener('mousedown', outsideCloseCmd), 0);
+  menu.style.top = top + 'px';
+  menu.style.left = left + 'px';
+  menu.style.visibility = 'visible';
 }
 
 function closeCmdMenu() {
@@ -3761,40 +3768,93 @@ setInterval(() => {
 
 document.getElementById('update-pill').addEventListener('click', openUpdateModal);
 
-// --- «меня нет за компьютером» ----------------------------------------------------------
-// Один выключатель на всё приложение, а не на вкладку: уходит человек, а не агент. Включён —
-// в группу едут итоги ВСЕХ ходов; выключен — только вопросы. Кто ушёл и когда вернулся,
-// решает человек: приложение это больше не угадывает (почему — см. tgAwayMode в main.js).
+// --- «где я сейчас» ---------------------------------------------------------------------
+// Одно положение на всё приложение, а не на вкладку: уходит человек, а не агент. Оно
+// отвечает на два вопроса разом — что уезжает в телегу и можно ли маку спать (почему выбор
+// руками, а не по простою мыши — см. tgPresence в main.js).
 //
-// Состояние живёт в main и приезжает оттуда же, чем бы его ни поменяли — этой кнопкой,
+// В строке состояния — ОДНА иконка: где ты сейчас. Прошлая кнопка была выключателем с двумя
+// подписями («отошёл» / «меня нет»), и обе читались как объявление об отсутствии — по
+// выключенной было не понять, включено что-нибудь или нет. Выбор переехал в список.
+//
+// Положение живёт в main и приезжает оттуда же, чем бы его ни поменяли — этим списком,
 // отвязкой группы в настройках или привязкой новой с телефона.
-const awayPill = document.getElementById('away-pill');
-let awayOn = false;
+const PRESENCE = [
+  { id: 'desk', icon: 'monitor', name: 'за компом', hint: 'в телегу только вопросы и разрешения' },
+  { id: 'both', icon: 'devices', name: 'с обоих устройств', hint: 'итоги всех ходов уезжают в телегу' },
+  { id: 'phone', icon: 'phone', name: 'за телефоном', hint: 'то же и мак не засыпает' },
+];
+const presencePill = document.getElementById('presence-pill');
+const presenceMenu = document.getElementById('presence-menu');
+let presenceNow = 'desk';
+let presenceForced = false;   // галка «слать итоги всех вкладок» держит зеркало включённым
 
-function renderAwayPill(st) {
+function presenceItem(id) {
+  return PRESENCE.find((p) => p.id === id) || PRESENCE[0];
+}
+
+function renderPresencePill(st) {
   // Без привязанной группы кнопки нет: обещать «всё уйдёт в телегу» там, где телеги ещё нет,
   // — обещать несуществующее.
   const ready = !!(st && st.chatId != null);
-  awayPill.hidden = !ready;
-  if (!ready) { awayOn = false; return; }
-  awayOn = !!st.away;
-  awayPill.classList.toggle('is-on', awayOn);
-  awayPill.innerHTML = '';
-  const ic = document.createElement('span');
-  ic.className = 'ic';
-  ic.innerHTML = awayOn ? ICONS.phone : ICONS.door;
-  awayPill.appendChild(ic);
-  awayPill.appendChild(document.createTextNode(awayOn ? 'меня нет' : 'отошёл'));
-  awayPill.title = awayOn
-    ? 'Итоги всех ходов уезжают в Telegram. Нажмите, когда вернётесь за компьютер'
-    : 'Ухожу: присылать в Telegram итоги всех ходов, а не только вопросы';
+  presencePill.hidden = !ready;
+  if (!ready) { presenceNow = 'desk'; closePresenceMenu(); return; }
+  presenceForced = !!st.mirrorAll;
+  // Галка включена, а выбрано «за компом» — рисуем то, что происходит НА САМОМ ДЕЛЕ:
+  // итоги всё равно уезжают, значит человек и правда на обоих устройствах.
+  presenceNow = presenceForced && st.presence === 'desk' ? 'both' : (st.presence || 'desk');
+  const it = presenceItem(presenceNow);
+  presencePill.classList.toggle('is-on', presenceNow !== 'desk');
+  presencePill.innerHTML = ICONS[it.icon];
+  presencePill.title = `Где я: ${it.name} — ${it.hint}`;
 }
 
-awayPill.addEventListener('click', async () => {
-  renderAwayPill(await window.swarm.telegram.setAway(!awayOn));
+function openPresenceMenu() {
+  presenceMenu.innerHTML = '';
+  for (const p of PRESENCE) {
+    const b = document.createElement('button');
+    b.className = 'cmd-item presence-item' + (p.id === presenceNow ? ' is-now' : '');
+    const ic = document.createElement('span');
+    ic.className = 'ic';
+    ic.innerHTML = ICONS[p.icon];
+    const name = document.createElement('span');
+    name.className = 'cmd-name';
+    name.textContent = p.name;
+    const hint = document.createElement('span');
+    hint.className = 'cmd-hint';
+    // «За компом» при включённой галке — обещание тишины, которого приложение не сдержит.
+    // Пункт остаётся видимым, но недоступным, и говорит, кто именно его держит.
+    const locked = p.id === 'desk' && presenceForced;
+    hint.textContent = locked ? 'выключите в настройках «слать итоги всех вкладок»' : p.hint;
+    b.disabled = locked;
+    b.append(ic, name, hint);
+    b.addEventListener('click', async () => {
+      closePresenceMenu();
+      renderPresencePill(await window.swarm.telegram.setPresence(p.id));
+    });
+    presenceMenu.appendChild(b);
+  }
+  presenceMenu.classList.remove('hidden');
+  placeMenuUnder(presenceMenu, presencePill);
+  setTimeout(() => document.addEventListener('mousedown', outsideClosePresence), 0);
+}
+
+function closePresenceMenu() {
+  presenceMenu.classList.add('hidden');
+  document.removeEventListener('mousedown', outsideClosePresence);
+}
+
+function outsideClosePresence(e) {
+  if (!presenceMenu.contains(e.target) && !presencePill.contains(e.target)) closePresenceMenu();
+}
+
+presencePill.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (presenceMenu.classList.contains('hidden')) openPresenceMenu();
+  else closePresenceMenu();
 });
-window.swarm.telegram.onState(renderAwayPill);
-window.swarm.telegram.state().then(renderAwayPill).catch(() => {});
+window.swarm.telegram.onState(renderPresencePill);
+window.swarm.telegram.state().then(renderPresencePill).catch(() => {});
 
 document.getElementById('new-session-folder').addEventListener('click', createSessionInFolder);
 document.getElementById('settings-btn').addEventListener('click', () => showSettingsModal());

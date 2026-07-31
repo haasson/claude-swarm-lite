@@ -138,9 +138,9 @@ contextBridge.exposeInMainWorld('swarm', {
     setDetail: (d)     => ipcRenderer.invoke('telegram:setDetail', d),
     keepAwake: (on)    => ipcRenderer.invoke('telegram:setKeepAwake', on),
     mirrorAll: (on)    => ipcRenderer.invoke('telegram:setMirrorAll', on),
-    // «Меня нет за компьютером» — кнопка в строке состояния, а не настройка: с этого момента
-    // в группу едут итоги всех ходов, а не только вопросы.
-    setAway:   (on)    => ipcRenderer.invoke('telegram:setAway', on),
+    // «Где я» — выбор в строке состояния, а не настройка: 'desk' | 'both' | 'phone'.
+    // Решает, едут ли в группу итоги ВСЕХ ходов и можно ли маку спать.
+    setPresence: (p)   => ipcRenderer.invoke('telegram:setPresence', p),
     setWhisper: (bin, model) => ipcRenderer.invoke('telegram:setWhisper', { bin, model }),
     onState:   (cb)    => ipcRenderer.on('telegram:state', (_e, s) => cb(s)),
   },
