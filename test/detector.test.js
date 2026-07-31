@@ -284,6 +284,40 @@ test('arbitrate: a hook «ready» with a quiet screen stays ready', () => {
   assert.strictEqual(D.tickStatus(d, NOW, QUIET).status, 'ready');
 });
 
+// --- канал хуков ослеп, а агент работает --------------------------------------
+// «Готов» от хука не стареет сам: пропал один маркер — и вкладка зелёная, пока агент
+// ведёт разговор. Живой спиннер на экране — единственная улика, которой в этом случае
+// верят, и только против «готов».
+
+test('arbitrate: замолчавший хук «готов» + живой спиннер = работает', () => {
+  const d = mkD();
+  D.applyHook(d, 'idle', NOW);
+  const late = NOW + D.HOOK_STALE_MS + 1;
+  assert.strictEqual(D.tickStatus(d, late, SPINNER).status, 'running');
+});
+
+test('arbitrate: свежий хук «готов» спиннером не отменяется', () => {
+  const d = mkD();
+  D.applyHook(d, 'idle', NOW);
+  assert.strictEqual(D.tickStatus(d, NOW + 1000, SPINNER).status, 'ready',
+    'сразу после Stop экран ещё перерисовывается — верим хуку');
+});
+
+test('arbitrate: спиннер на отлистанном экране ничего не отменяет', () => {
+  const d = mkD({ scrolledBack: true });
+  D.applyHook(d, 'idle', NOW);
+  assert.strictEqual(D.tickStatus(d, NOW + D.HOOK_STALE_MS + 1, SPINNER).status, 'ready',
+    'отлистанный экран — прошлое, спиннер на нём может быть от прошлого хода');
+});
+
+test('arbitrate: «ждёт» от хука спиннером не сбивается', () => {
+  const d = mkD();
+  D.applyHook(d, 'perm', NOW);
+  const eff = D.tickStatus(d, NOW + D.HOOK_STALE_MS + 1, SPINNER);
+  assert.strictEqual(eff.status, 'waiting');
+  assert.strictEqual(eff.kind, 'permission');
+});
+
 test('tickStatus: without hooks it falls back to the latch', () => {
   const d = mkD();
   const eff = D.tickStatus(d, NOW, PERMISSION);   // no hooks → screen decides

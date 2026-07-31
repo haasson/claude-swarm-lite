@@ -102,10 +102,10 @@ test('the hook fallback phrases are exactly ask-phrases.js defaults', () => {
 });
 
 test('a custom phrase file replaces the default marker', () => {
-  // realpath: on macOS os.tmpdir() is the /var → /private/var symlink, and the
-  // script's «am I being run directly?» check compares import.meta.url (resolved)
-  // with argv[1] (not) — through the symlink it would never run main().
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-hook-')));
+  // Никакого realpath: на маке os.tmpdir() — это симлинк /var → /private/var, и скрипт
+  // обязан узнавать себя ЧЕРЕЗ него сам (см. isDirectRun). Разрешать путь за него здесь
+  // значило бы прятать от теста ровно ту проверку, которая однажды всё и выключила.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-hook-'));
   const staged = path.join(dir, 'swarm-signal.mjs');
   fs.copyFileSync(SCRIPT, staged);
   const phrases = ['Твой ход (важно)'];
@@ -122,6 +122,41 @@ test('a custom phrase file replaces the default marker', () => {
   assert.strictEqual(run('Готово. Сейчас от тебя: путь'), 'idle', 'the default no longer applies');
   assert.strictEqual(run('Твой ход (важно): ничего, жди'), 'idle', 'the «ничего/жди» rule still holds');
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// --- хук должен запускаться ОТТУДА, КУДА ЕГО КЛАДЁТ ПРИЛОЖЕНИЕ -----------------
+// А кладёт оно его в userData, то есть на маке — в «~/Library/Application Support/…».
+// Пробел в пути ломал проверку «меня запустили напрямую» (склейка `file://` + путь против
+// import.meta.url, где пробел записан как %20): main() не вызывался, хук печатал пустоту,
+// приложение не получало ни одного маркера — и весь «точный статус через хуки» был
+// выключен у КАЖДОЙ установленной копии, оставаясь исправным в разработке, где путь
+// репозитория без пробелов. Поэтому тест ставит скрипт именно в такую папку.
+
+test('запуск из папки с пробелом в имени всё равно даёт маркер', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-hook-'));
+  const dir = path.join(base, 'Application Support');
+  fs.mkdirSync(dir);
+  const staged = path.join(dir, 'swarm-signal.mjs');
+  fs.copyFileSync(SCRIPT, staged);
+  const out = execFileSync(process.execPath, [staged], {
+    input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 'abc' }),
+    encoding: 'utf8',
+  });
+  assert.ok(out.trim(), 'хук из пути с пробелом обязан что-то напечатать');
+  const { signals } = extractHookSignals(JSON.parse(out).terminalSequence);
+  assert.deepStrictEqual(signals[0], { token: 'busy', sessionId: 'abc' });
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('isDirectRun сравнивает адреса, а не строки', () => {
+  const spaced = path.join(os.tmpdir(), 'Application Support', 'swarm-signal.mjs');
+  assert.strictEqual(H.isDirectRun(pathToFileURL(spaced).href, spaced), true,
+    'пробел в пути — это %20 в адресе, и это ОДИН и тот же файл');
+  assert.strictEqual(H.isDirectRun(`file://${spaced}`, spaced), false,
+    'старая склейка адресом не является — так проверка и не срабатывала');
+  assert.strictEqual(H.isDirectRun(pathToFileURL(spaced).href, ''), false, 'запуска нет — argv пуст');
+  assert.strictEqual(H.isDirectRun(pathToFileURL(spaced).href,
+    path.join(os.tmpdir(), 'other.mjs')), false, 'другой файл — не мы');
 });
 
 // --- last_assistant_message comes in more than one shape ----------------------

@@ -269,6 +269,13 @@ function applyLatch(d, now, snap, raw) {
 // --- hooks: the deterministic channel --------------------------------------
 // A Claude hook prints a marker (parsed in osc.js) whose token we map to a status
 // here — so the meaning lives in tested code, not in the installed hook script.
+// Насколько старым должен стать последний сигнал хука, чтобы экрану позволили сказать
+// «нет, агент работает». Не меньше пары секунд: сразу после Stop спиннера на экране уже
+// нет, а вот перерисовка ещё идёт. Восемь — это заметно дольше любого промежутка между
+// маркерами исправного канала (они приходят на каждом инструменте) и достаточно быстро,
+// чтобы человек не успел решить, что вкладка врёт. См. arbitrate.
+const HOOK_STALE_MS = 8000;
+
 const HOOK_TOKEN = {
   busy: { status: 'running' },              // UserPromptSubmit / a normal tool starts
   idle: { status: 'ready' },                // Stop — the turn ended
@@ -297,7 +304,7 @@ function detailFor(status) {
 // open permission can't be cancelled by the tool_use entry of that same moment.
 // The screen may still add the one thing an unbound session can't get anywhere else:
 // a prose question after the turn ended. It never overrides running / ready / perm.
-function arbitrate(d, snap) {
+function arbitrate(d, now, snap) {
   const hs = d.hookState || { status: 'ready', kind: null, at: 0 };
   const tr = d.trState;
   const trNewer = !!tr && tr.at > (hs.at || 0);
@@ -305,6 +312,26 @@ function arbitrate(d, snap) {
     return { status: 'waiting', detail: 'ждёт ответа', kind: hs.kind || null };
   }
   if (trNewer) return fromTranscript(tr);
+  // Канал хуков ослеп, а агент работает. «Готов» держится на последнем услышанном сигнале
+  // и сам по себе не стареет: пропал один маркер (сессия перезапущена без наших настроек,
+  // хук упал, событие переименовали в новой версии Клода) — и вкладка остаётся зелёной,
+  // пока агент ведёт с человеком разговор. Экран в этом случае знает правду, но в
+  // hook-режиме его не слушают вовсе.
+  //
+  // Слушаем ровно одну его улику и только против «готов»: ЖИВОЙ спиннер с бегущим
+  // таймером (RE_RUNNING). Он рисуется, пока ход идёт, и исчезает, как только тот кончился,
+  // так что принять за него остаток прошлого хода нельзя. Три ограничения, чтобы эта
+  // подстраховка не начала спорить с исправным каналом:
+  //   • только из «готов» — «ждёт» (разрешение, вопрос) экран не отменяет, там хук видит
+  //     то, чего на экране нет;
+  //   • только когда последний сигнал уже несвежий: по живым хукам ход всё равно
+  //     подтверждается маркером на каждом инструменте, и спорить не о чем;
+  //   • только по живому экрану — отлистанный назад показывает прошлое (см. scrolledBack
+  //     в main.js), и спиннер на нём может быть позавчерашним.
+  if (hs.status === 'ready' && now - (hs.at || 0) > HOOK_STALE_MS
+      && !d.scrolledBack && RE_RUNNING.test(snap)) {
+    return { status: 'running', detail: 'работает' };
+  }
   if (!tr && hs.status === 'ready' && asksNow(d, snap)) {
     return { status: 'waiting', detail: 'ждёт ответа', kind: 'question' };
   }
@@ -316,13 +343,13 @@ function arbitrate(d, snap) {
 // (sees pixels). The latch stays under the screen — and under the transcript, where it
 // still guards the one screen read that survives: the live prompt box.
 function tickStatus(d, now, snap) {
-  if (d.hooksActive) return arbitrate(d, snap);
+  if (d.hooksActive) return arbitrate(d, now, snap);
   if (d.trState) return applyLatch(d, now, snap, decideFromTranscript(d.trState, snap));
   return applyLatch(d, now, snap, decide(d, now, snap));
 }
 
 module.exports = {
-  ACTIVE_MS, LATCH_RELEASE_MS, ANSWER_HINT_MS,
+  ACTIVE_MS, LATCH_RELEASE_MS, ANSWER_HINT_MS, HOOK_STALE_MS,
   RE_WAIT, RE_WAIT_NOW, RE_RUNNING,
   decide, hasWaitChrome, hasPromptBox, asksNow, applyLatch, keyboardEvent,
   applyHook, applyTranscript, fromTranscript, decideFromTranscript, arbitrate, tickStatus,

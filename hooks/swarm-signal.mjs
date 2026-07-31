@@ -10,6 +10,8 @@
 // Contract: read the event JSON on stdin, print {"terminalSequence": "<OSC>"} on
 // stdout and exit 0. It prints nothing else and never blocks or returns a decision,
 // so it can't interfere with Claude's own prompt / permission flow.
+import { pathToFileURL } from 'node:url';
+import { realpathSync } from 'node:fs';
 
 // --- the «agent is calling you» phrases --------------------------------------
 // Compiled by the app (ask-phrases.js) and written next to this script as
@@ -167,7 +169,26 @@ async function main() {
   });
 }
 
-// Run only when invoked directly (so tests can import the pure helpers).
-if (import.meta.url === `file://${process.argv[1]}`) main();
+// Запущены ли мы НАПРЯМУЮ (а не импортированы тестом ради чистых функций)?
+//
+// Сравнивать надо два адреса одного файла, и оба нуждаются в приведении, иначе проверка
+// молча не срабатывает — а «молча» здесь значит, что хук не печатает НИЧЕГО и весь
+// точный статус выключен, хотя в настройках он включён и в settings всё прописано:
+//
+//   • путь → URL только через pathToFileURL. Склейка `file://` + путь ломается на первом
+//     же пробеле: живёт этот скрипт в «~/Library/Application Support/claude-swarm-lite»,
+//     то есть на маке ВСЕГДА. import.meta.url пишет пробел как %20, склейка — как пробел,
+//     строки не равны, main() не вызывается. Именно так канал хуков и был мёртв у всех
+//     установленных копий, а в разработке (путь репозитория без пробелов) работал.
+//   • симлинки. Модульный адрес у ESM уже разрешён до реального файла, а argv[1] — нет
+//     (на маке os.tmpdir() это /var → /private/var). realpath приводит их к одному виду.
+function isDirectRun(moduleUrl, argvPath) {
+  if (!argvPath) return false;
+  let p = String(argvPath);
+  try { p = realpathSync(p); } catch (_) { /* нет файла — сравним как есть */ }
+  try { return moduleUrl === pathToFileURL(p).href; } catch (_) { return false; }
+}
 
-export { tokenFor, markerFor, loadMatcher, callsUser, messageText, deniesPicker, outputFor, denyReason, DENY_REASON, FALLBACK };
+if (isDirectRun(import.meta.url, process.argv[1])) main();
+
+export { tokenFor, markerFor, loadMatcher, callsUser, messageText, deniesPicker, outputFor, denyReason, DENY_REASON, FALLBACK, isDirectRun };
