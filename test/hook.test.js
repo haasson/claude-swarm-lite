@@ -32,11 +32,22 @@ function runHook(payload) {
 
 test('UserPromptSubmit → busy', () => {
   assert.deepStrictEqual(runHook({ hook_event_name: 'UserPromptSubmit', session_id: 'abc' }),
-    { token: 'busy', sessionId: 'abc' });
+    { token: 'busy', sessionId: 'abc', transcript: null });
 });
 
 test('Stop with nothing to say → idle', () => {
   assert.strictEqual(runHook({ hook_event_name: 'Stop', session_id: 's1' }).token, 'idle');
+});
+
+// Адрес разговора приложение обязано УЗНАВАТЬ, а не складывать. Складывало оно его из
+// ~/.claude/projects, и у вкладки, запущенной с другим CLAUDE_CONFIG_DIR (алиас `claude-my`),
+// файл не находился никогда: статус держался на экране, а в телегу вместо ответа агента
+// уезжали статуслайн, имя ветки и обрывок команды. Клод сообщает путь в каждом событии —
+// хук обязан его передавать, каким бы конфигом вкладка ни пользовалась.
+test('хук передаёт адрес стенограммы из события', () => {
+  const file = '/Users/x/.claude-my/projects/-Users-x-proj/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl';
+  const sig = runHook({ hook_event_name: 'UserPromptSubmit', session_id: 'abc', transcript_path: file });
+  assert.strictEqual(sig.transcript, file);
 });
 
 // The whole point of reading last_assistant_message: a turn that ENDED and a turn
@@ -144,7 +155,7 @@ test('запуск из папки с пробелом в имени всё ра
   });
   assert.ok(out.trim(), 'хук из пути с пробелом обязан что-то напечатать');
   const { signals } = extractHookSignals(JSON.parse(out).terminalSequence);
-  assert.deepStrictEqual(signals[0], { token: 'busy', sessionId: 'abc' });
+  assert.deepStrictEqual(signals[0], { token: 'busy', sessionId: 'abc', transcript: null });
   fs.rmSync(base, { recursive: true, force: true });
 });
 

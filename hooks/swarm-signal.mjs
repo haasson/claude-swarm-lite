@@ -92,14 +92,22 @@ function tokenFor(p, matcher) {
 }
 
 // Build the marker osc.js expects: a valid OSC 777 «notify» carrying our payload —
-// ESC ] 777 ; notify ; swarm ; <token> ; <sessionId> BEL.
+// ESC ] 777 ; notify ; swarm ; <token> ; <sessionId> ; <transcriptPath> BEL.
 // sessionId is a cross-check only (routing is by pty). JSON.stringify encodes the
 // control bytes ( / ) for us.
+//
+// transcript_path Клод сообщает в КАЖДОМ событии — и это единственный надёжный способ
+// сказать приложению, где лежит разговор. Складывать путь самому нельзя: вкладка с другим
+// CLAUDE_CONFIG_DIR (у человека это алиас `claude-my`) пишет разговор в другой конфиг, а
+// приложение искало файл только в ~/.claude — и не находило никогда. Точку с запятой из
+// пути НЕ вырезаем: он идёт последним полем, а разбор режет по первой (см. osc.js).
+// Управляющие байты вырезаем — они порвали бы саму последовательность.
 function markerFor(payload, matcher) {
   const token = tokenFor(payload, matcher);
   if (!token) return null;
   const sid = String((payload && payload.session_id) || '').replace(/[\x07\x1b;]/g, '');
-  return `\x1b]777;notify;swarm;${token};${sid}\x07`;
+  const tr = String((payload && payload.transcript_path) || '').replace(/[\x07\x1b]/g, '');
+  return `\x1b]777;notify;swarm;${token};${sid};${tr}\x07`;
 }
 
 // --- refusing the picker while the user is on a phone -------------------------

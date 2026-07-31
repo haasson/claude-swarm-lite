@@ -30,6 +30,24 @@ function projectSlug(cwd) {
   return String(cwd || '').replace(/[/\\.:]/g, '-');
 }
 
+// Обратная дорога: по адресу стенограммы — КОНФИГ, в котором она лежит. Адрес выглядит как
+// <корень>/projects/<слаг>/<id>.jsonl, и корень там не обязательно ~/.claude: `CLAUDE_CONFIG_DIR`
+// уводит Клода в другой конфиг целиком (у человека это алиасы `claude-my`, `claude-my2`).
+// Приложение раньше складывало путь из зашитого ~/.claude и файла такой вкладки не находило
+// НИКОГДА: в телегу вместо ответа агента уезжал соскоб с картинки терминала, а при перезапуске
+// вкладка открывалась пустой, потому что её разговор считался мёртвым. Адрес сообщает сам
+// Клод (хук), а корень виден из адреса — угадывать больше нечего.
+//
+// Пустая строка, если это не похоже на путь стенограммы: тогда зовущий остаётся с ~/.claude.
+function homeOfTranscript(file) {
+  const norm = String(file == null ? '' : file).replace(/\\/g, '/').replace(/\/+$/, '');
+  const parts = norm.split('/');
+  if (parts.length < 3) return '';
+  if (parts[parts.length - 2] === 'projects') return '';   // файл лежит прямо в projects
+  if (parts[parts.length - 3] !== 'projects') return '';
+  return parts.slice(0, -3).join('/');
+}
+
 // Lines that are conversation; everything else in the file (mode, permission-mode,
 // ai-title, last-prompt, file-history-*) is bookkeeping we skip.
 const MSG_TYPES = new Set(['assistant', 'user']);
@@ -360,7 +378,7 @@ function pickByScreen(cands, snapshot) {
 
 module.exports = {
   READY_DEBOUNCE_MS, BIND_MTIME_SLACK_MS, SCREEN_KEY_LEN, INJECTED_MIN, screenKey, pickByScreen,
-  projectSlug, parseEntries, blockTypes, entryText, lastMain, tsOf, isPastLife, classify, cwdOf, pickBinding, isInterrupt,
+  projectSlug, homeOfTranscript, parseEntries, blockTypes, entryText, lastMain, tsOf, isPastLife, classify, cwdOf, pickBinding, isInterrupt,
   belongsToTurn, turnText, currentTool, turnTokens,
   pickByInjected,
 };

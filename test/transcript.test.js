@@ -112,6 +112,32 @@ test('projectSlug flattens a Windows path with a drive letter', () => {
   assert.strictEqual(T.projectSlug('D:\\work\\my.app'), 'D--work-my-app');
 });
 
+// Конфиг Клода у вкладки не обязательно ~/.claude: `CLAUDE_CONFIG_DIR` (у человека алиас
+// `claude-my`) уводит и разговоры, и настройки в другую папку. Приложение складывало путь из
+// зашитого ~/.claude и файла такой вкладки не находило никогда — в телегу вместо ответа агента
+// уезжал соскоб с экрана, а при перезапуске вкладка открывалась пустой, потому что её разговор
+// считался мёртвым. Корень виден из самого адреса, который сообщает хук.
+test('homeOfTranscript достаёт конфиг из адреса стенограммы', () => {
+  assert.strictEqual(
+    T.homeOfTranscript('/Users/e/.claude-my/projects/-Users-e-proj/abc.jsonl'),
+    '/Users/e/.claude-my');
+  assert.strictEqual(
+    T.homeOfTranscript('/Users/e/.claude/projects/-Users-e-proj/abc.jsonl'),
+    '/Users/e/.claude');
+  assert.strictEqual(
+    T.homeOfTranscript('C:\\Users\\me\\.claude\\projects\\C--Users-me-p\\abc.jsonl'),
+    'C:/Users/me/.claude');
+});
+
+// А на непохожем адресе — пусто, и зовущий остаётся с домашним конфигом. Молча взять
+// «родителя родителя» было бы хуже: приложение искало бы разговоры в случайной папке.
+test('homeOfTranscript молчит там, где адрес не похож на стенограмму', () => {
+  assert.strictEqual(T.homeOfTranscript('/tmp/abc.jsonl'), '');
+  assert.strictEqual(T.homeOfTranscript('/Users/e/.claude/projects/abc.jsonl'), '');
+  assert.strictEqual(T.homeOfTranscript(''), '');
+  assert.strictEqual(T.homeOfTranscript(null), '');
+});
+
 // --- pickBinding: which file belongs to this tab ------------------------------
 
 const OPEN = 100_000;   // when the tab opened

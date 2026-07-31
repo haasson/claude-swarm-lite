@@ -435,6 +435,10 @@ function makeDetector(cols, rows) {
     typedAtKeyboard: false,
     cwd: '', startedAt: Date.now(), claudeSessionId: null,
     trFile: null, trMtime: 0, trEntries: null, trState: null, trText: '', trWhy: '', trTryAt: 0,
+    // trHint — адрес разговора, названный самим Клодом (хук). claudeHome — конфиг, в котором
+    // этот разговор лежит: у вкладки, запущенной с CLAUDE_CONFIG_DIR (алиас `claude-my`), он
+    // не ~/.claude, и вычислять его нельзя — только узнать. См. configRoots.
+    trHint: '', claudeHome: '',
   };
 }
 
@@ -533,6 +537,12 @@ function feedDetector(id, chunk) {
       // to refuse the interactive picker — rewrite the list now that we have one.
       if (d.tgMode) tgWriteModes();
     }
+    // А это АДРЕС разговора, названный самим Клодом. Точнее любых наших вычислений: путь
+    // складывался как ~/.claude/projects/<слаг>/<id>.jsonl, и у вкладки с другим
+    // CLAUDE_CONFIG_DIR (алиас вида `claude-my`) файл не находился никогда — статус держался
+    // на экране, а в телегу вместо ответа агента уезжали статуслайн, имя ветки и обрывок
+    // команды. Здесь только запоминаем; кому файл принадлежит, решает bindTranscript.
+    if (sig.transcript && sig.transcript !== d.trHint) d.trHint = sig.transcript;
     applyHook(d, sig.token, Date.now());
   }
   // A resize makes Claude repaint the whole screen — a burst of output that is
@@ -721,9 +731,53 @@ function tailText(file, bytes) {
   } finally { fs.closeSync(fd); }
 }
 
-function projectDir(cwd) {
-  return path.join(os.homedir(), '.claude', 'projects', transcript.projectSlug(cwd));
+// --- где Клод держит разговоры -------------------------------------------------------
+// Домашний конфиг — не один. `CLAUDE_CONFIG_DIR` уводит Клода в другую папку целиком, и
+// человек этим пользуется: у него алиасы `claude-my` и `claude-my2` под разные аккаунты. Пока
+// здесь стоял один зашитый ~/.claude, такая вкладка не находила своего разговора НИКОГДА — со
+// всеми последствиями: текста ответа в телеге нет (уезжает соскоб с экрана), а при
+// перезапуске приложение решало, что разговор мёртв, и открывало вкладку с нуля.
+//
+// Порядок надёжности: адрес от хука (точный, см. d.trHint) → корень, в котором разговор этой
+// вкладки уже находили (d.claudeHome) → все конфиги, какие есть в доме. Последнее — сеть
+// безопасности для вкладок без хуков; она безопасна ровно потому, что найденное всё равно
+// проверяется по папке, записанной ВНУТРИ файла.
+const CLAUDE_HOME = path.join(os.homedir(), '.claude');
+const CONFIG_ROOTS_TTL_MS = 60_000;
+let configRootsAt = 0;
+let configRootsCache = [CLAUDE_HOME];
+
+function configRoots() {
+  const now = Date.now();
+  if (now - configRootsAt < CONFIG_ROOTS_TTL_MS) return configRootsCache;
+  configRootsAt = now;
+  const out = [CLAUDE_HOME];
+  try {
+    for (const name of fs.readdirSync(os.homedir())) {
+      if (!/^\.claude([-.].*)?$/.test(name)) continue;
+      const root = path.join(os.homedir(), name);
+      if (root === CLAUDE_HOME) continue;
+      try { if (fs.statSync(path.join(root, 'projects')).isDirectory()) out.push(root); } catch (_) {}
+    }
+  } catch (_) { /* дома не прочитать — остаёмся с одним корнем */ }
+  configRootsCache = out;
+  return out;
 }
+
+function projectDir(cwd, home) {
+  return path.join(home || CLAUDE_HOME, 'projects', transcript.projectSlug(cwd));
+}
+
+// Папки этого проекта во ВСЕХ конфигах: сначала та, где разговор уже находили.
+function projectDirs(cwd, home) {
+  const dirs = [];
+  for (const root of [home || CLAUDE_HOME, ...configRoots()]) {
+    const dir = projectDir(cwd, root);
+    if (!dirs.includes(dir)) dirs.push(dir);
+  }
+  return dirs;
+}
+
 
 // Bind this tab to a transcript file. Two ways, and the difference matters:
 //
@@ -742,10 +796,18 @@ function projectDir(cwd) {
 const TR_PIN_GRACE_MS = 15_000;
 
 function bindTranscript(d, taken) {
-  const dir = projectDir(d.cwd);
+  const dirs = projectDirs(d.cwd, d.claudeHome);
+  // Адрес, названный самим Клодом (хук). Сильнее всего остального: он верен при любом
+  // CLAUDE_CONFIG_DIR, в worktree и при слаге папки, который мы бы не угадали. Проверяем
+  // только занятость и существование — остальное уже проверил тот, кто его прислал.
+  if (d.trHint && !taken.has(d.trHint)) {
+    try { if (fs.statSync(d.trHint).isFile()) return d.trHint; } catch (_) { /* ещё не создан */ }
+  }
   if (d.claudeSessionId) {
-    const file = path.join(dir, d.claudeSessionId + '.jsonl');
-    if (!taken.has(file) && fs.existsSync(file)) return file;
+    for (const dir of dirs) {
+      const file = path.join(dir, d.claudeSessionId + '.jsonl');
+      if (!taken.has(file) && fs.existsSync(file)) return file;
+    }
     // Файла с этим именем нет — и раньше здесь стоял return null, то есть вкладка
     // оставалась без стенограммы НАВСЕГДА. А id — подсказка, не контракт: `--resume`
     // форкает разговор в новый файл, `/clear` начинает новый, `claude` из терминала
@@ -762,11 +824,19 @@ function bindTranscript(d, taken) {
   // подходящий по признакам файл в папке — это чужой живой разговор соседней вкладки. Ровно
   // так пустая вкладка и начинала показывать чужой статус, а потом ещё и запоминала чужой id.
   if (!d.turnStartedAt) return null;
-  let names;
-  try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')); } catch (_) { return null; }
+  // Скан идёт по ВСЕМ конфигам (см. configRoots): вкладка без хуков своего корня не знает, а
+  // без этого её разговор из ~/.claude-my не нашёлся бы вообще. Лишние кандидаты не опасны:
+  // ниже каждый проверяется по папке, записанной внутри файла, и при двух подходящих не
+  // привязывается никто.
+  const names = [];
+  for (const dir of dirs) {
+    try {
+      for (const n of fs.readdirSync(dir)) if (n.endsWith('.jsonl')) names.push(path.join(dir, n));
+    } catch (_) { /* этого конфига нет — не беда */ }
+  }
+  if (!names.length) return null;
   const cands = [];
-  for (const n of names) {
-    const file = path.join(dir, n);
+  for (const file of names) {
     if (taken.has(file)) continue;
     let st;
     try { st = fs.statSync(file); } catch (_) { continue; }
@@ -810,13 +880,14 @@ function bindTranscript(d, taken) {
 // That's the signature of /clear: Claude started a fresh session (a new id, a new file)
 // and our file will never be written again.
 function newerTranscriptExists(d, taken) {
-  const dir = projectDir(d.cwd);
-  let names;
-  try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')); } catch (_) { return false; }
-  for (const n of names) {
-    const file = path.join(dir, n);
-    if (file === d.trFile || taken.has(file)) continue;
-    try { if (fs.statSync(file).mtimeMs > d.trMtime + 1000) return true; } catch (_) {}
+  for (const dir of projectDirs(d.cwd, d.claudeHome)) {
+    let names;
+    try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')); } catch (_) { continue; }
+    for (const n of names) {
+      const file = path.join(dir, n);
+      if (file === d.trFile || taken.has(file)) continue;
+      try { if (fs.statSync(file).mtimeMs > d.trMtime + 1000) return true; } catch (_) {}
+    }
   }
   return false;
 }
@@ -834,12 +905,15 @@ function newerTranscriptExists(d, taken) {
 // принадлежит этой вкладке — даже если его кто-то занял.
 function stealByInjected(id, d, taken) {
   if (!d.tgLastSent || d.trFile) return null;
-  const dir = projectDir(d.cwd);
-  let names;
-  try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')); } catch (_) { return null; }
+  const names = [];
+  for (const dir of projectDirs(d.cwd, d.claudeHome)) {
+    try {
+      for (const n of fs.readdirSync(dir)) if (n.endsWith('.jsonl')) names.push(path.join(dir, n));
+    } catch (_) { /* этого конфига нет */ }
+  }
+  if (!names.length) return null;
   const cands = [];
-  for (const n of names) {
-    const file = path.join(dir, n);
+  for (const file of names) {
     let userText = '';
     try {
       const entries = transcript.parseEntries(tailText(file, TR_TAIL_BYTES));
@@ -919,14 +993,24 @@ setInterval(scanTabProcesses, PROC_EVERY_MS);
 // кто пострадал, он размножен), право на файл разбирает `taken` — первый привязавшийся
 // забирает, остальные остаются на экранном détecteur'е. Показывать чужой статус хуже, чем
 // не показывать никакого.
+// Резерв считается по ВСЕМ конфигам: чей это разговор, определяет id, а в каком конфиге он
+// лежит — вкладка может ещё не знать (см. configRoots). Плюс адрес, названный хуком: он и есть
+// самое твёрдое право на файл.
 function reservedByOthers(self) {
   const out = new Set();
   for (const d of det.values()) {
-    if (d === self || d.dead || !d.claudeSessionId || !d.cwd) continue;
-    out.add(path.join(projectDir(d.cwd), d.claudeSessionId + '.jsonl'));
+    if (d === self || d.dead || !d.cwd) continue;
+    if (d.trHint) out.add(d.trHint);
+    if (!d.claudeSessionId) continue;
+    for (const dir of projectDirs(d.cwd, d.claudeHome)) {
+      out.add(path.join(dir, d.claudeSessionId + '.jsonl'));
+    }
   }
+  if (self.trHint) out.delete(self.trHint);
   if (self.claudeSessionId && self.cwd) {
-    out.delete(path.join(projectDir(self.cwd), self.claudeSessionId + '.jsonl'));
+    for (const dir of projectDirs(self.cwd, self.claudeHome)) {
+      out.delete(path.join(dir, self.claudeSessionId + '.jsonl'));
+    }
   }
   return out;
 }
@@ -959,6 +1043,9 @@ setInterval(() => {
         taken.delete(d.trFile);
         trForget(d);
         d.claudeSessionId = null;
+        // И адрес от хука тоже: он указывает на тот самый умолкший файл, и без сброса вкладка
+        // тут же привязалась бы к нему обратно. Новый адрес хук пришлёт с первым же событием.
+        d.trHint = '';
         applyTranscript(d, null);
       }
       if (!d.trFile) {
@@ -973,7 +1060,16 @@ setInterval(() => {
         taken.add(file);
         const stem = path.basename(file, '.jsonl');
         const byPin = stem === d.claudeSessionId;
-        trLog(`tab=${id} → ${path.basename(file)}${byPin ? ' (по session id)' : ' (сканом папки)'}`);
+        const byHint = file === d.trHint;
+        // Запоминаем КОНФИГ, в котором нашёлся разговор: дальше вкладка ищет сначала там —
+        // и там же приложение спрашивает, жив ли разговор перед `--resume`.
+        const home = transcript.homeOfTranscript(file);
+        if (home && home !== d.claudeHome) {
+          d.claudeHome = home;
+          if (home !== CLAUDE_HOME) trLog(`tab=${id} конфиг Клода: ${home}`);
+        }
+        trLog(`tab=${id} → ${path.basename(file)}`
+          + (byHint ? ' (адрес от хука)' : byPin ? ' (по session id)' : ' (сканом папки)'));
         // Привязались сканом, хотя id был прикреплён — значит разговор идёт под ДРУГИМ
         // именем (форк от --resume, /clear). Прикреплённый id с этого момента врёт: по нему
         // хук не узнает сессию в списке «отвечаем с телефона», а следующее восстановление
@@ -3441,14 +3537,29 @@ function readSkillsDir(baseDir, scope) {
   return out;
 }
 
+// Свои команды и скиллы Клод берёт из конфига, с которым запущен. У вкладки с
+// CLAUDE_CONFIG_DIR (алиас `claude-my`) это ~/.claude-my, и список из ~/.claude показывал ей
+// ровно то, чего у неё НЕТ. Спрашивают здесь по папке, поэтому конфиг берём у вкладок с этой
+// папкой — они его уже узнали от хука (см. d.claudeHome).
+function homesForCwd(cwd) {
+  const out = [];
+  for (const d of det.values()) {
+    if (d.dead || !d.cwd || d.cwd !== cwd || !d.claudeHome) continue;
+    if (!out.includes(d.claudeHome)) out.push(d.claudeHome);
+  }
+  return out.length ? out : [CLAUDE_HOME];
+}
+
 ipcMain.handle('commands:list', (_e, cwd) => {
   const list = [];
   if (cwd) {
     list.push(...readCommandsDir(path.join(cwd, '.claude', 'commands'), 'project'));
     list.push(...readSkillsDir(path.join(cwd, '.claude', 'skills'), 'project'));
   }
-  list.push(...readCommandsDir(path.join(os.homedir(), '.claude', 'commands'), 'global'));
-  list.push(...readSkillsDir(path.join(os.homedir(), '.claude', 'skills'), 'global'));
+  for (const home of homesForCwd(cwd)) {
+    list.push(...readCommandsDir(path.join(home, 'commands'), 'global'));
+    list.push(...readSkillsDir(path.join(home, 'skills'), 'global'));
+  }
   const seen = new Set();
 
   return list.filter((c) => (seen.has(c.name) ? false : seen.add(c.name))).sort((a, b) => a.name.localeCompare(b.name));
@@ -3548,20 +3659,31 @@ ipcMain.handle('session:create', (_event, opts = {}) => {
 // The folder slug is a guess (see transcript.projectSlug), so a miss falls back to a
 // scan of ~/.claude/projects — the file NAME is the session id and is unique, whatever
 // folder Claude filed it under.
+//
+// И конфигов тоже несколько: вкладка, запущенная с CLAUDE_CONFIG_DIR (алиас `claude-my`),
+// пишет разговор в ~/.claude-my, а здесь искали только в ~/.claude. Ответ был «разговора нет»,
+// и вкладка после каждого перезапуска приложения открывалась ПУСТОЙ вместо возобновления —
+// самая дорогая цена одного зашитого пути. См. configRoots.
 ipcMain.handle('session:canResume', (_e, cwd, sessionId) => {
   const id = String(sessionId || '');
   if (!/^[0-9a-fA-F-]{36}$/.test(id)) return false;
   const file = id + '.jsonl';
   try {
-    if (cwd && fs.existsSync(path.join(projectDir(cwd), file))) return true;
+    if (cwd) {
+      for (const dir of projectDirs(cwd)) if (fs.existsSync(path.join(dir, file))) return true;
+    }
     // Промах по слагу — ищем шире, но найденное ПРОВЕРЯЕМ по записанной внутри папке.
     // `--resume` разрешает разговор в пределах текущей папки, поэтому файл из чужого проекта
     // — это ложное «да»: вкладка снова упирается в «сессия не найдена», то есть ровно в тот
     // тупик, от которого эта проверка и поставлена.
-    const root = path.join(os.homedir(), '.claude', 'projects');
-    for (const dir of fs.readdirSync(root)) {
-      const full = path.join(root, dir, file);
-      if (fs.existsSync(full) && sessionCwdIs(full, cwd)) return true;
+    for (const root of configRoots()) {
+      const projects = path.join(root, 'projects');
+      let dirs = [];
+      try { dirs = fs.readdirSync(projects); } catch (_) { continue; }
+      for (const dir of dirs) {
+        const full = path.join(projects, dir, file);
+        if (fs.existsSync(full) && sessionCwdIs(full, cwd)) return true;
+      }
     }
   } catch (_) {}
   return false;
@@ -3612,16 +3734,29 @@ function sessionCwdIs(file, cwd) {
 //
 // Не нашли — вкладка просто стартует свежей. Это то же поведение, что и при ненайденном имени
 // раньше, и оно строго лучше, чем возобновление в тупик.
+// Папка эта — но во всех конфигах: вкладка с CLAUDE_CONFIG_DIR (алиас `claude-my`) держит свои
+// разговоры в другом (см. configRoots), и здесь её имя не находилось, то есть вкладка
+// открывалась пустой. Про цену помним: идём от САМЫХ СВЕЖИХ файлов и останавливаемся на первом
+// совпадении — разговор, который вкладка возобновляет, почти всегда среди последних, — а число
+// прочитанных начал ограничиваем, чтобы папка с сотнями разговоров не тормозила старт.
+const RESUME_HEADS_MAX = 120;
+
 ipcMain.handle('session:canResumeName', (_e, cwd, name) => {
   const want = String(name || '').trim();
   if (!/^swarm-[0-9a-z]{4,16}$/i.test(want)) return false;
   if (!cwd) return false;
-  let dir;
-  try { dir = projectDir(cwd); } catch (_) { return false; }
-  let names;
-  try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')); } catch (_) { return false; }
-  for (const n of names) {
-    if (sessionHead(path.join(dir, n)).includes(`"customTitle":"${want}"`)) return true;
+  const files = [];
+  for (const dir of projectDirs(cwd)) {
+    let names;
+    try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')); } catch (_) { continue; }
+    for (const n of names) {
+      const file = path.join(dir, n);
+      try { files.push({ file, mtimeMs: fs.statSync(file).mtimeMs }); } catch (_) {}
+    }
+  }
+  files.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  for (const f of files.slice(0, RESUME_HEADS_MAX)) {
+    if (sessionHead(f.file).includes(`"customTitle":"${want}"`)) return true;
   }
   return false;
 });
