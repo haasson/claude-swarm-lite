@@ -102,8 +102,8 @@ function tokenFor(p, matcher) {
 // приложение искало файл только в ~/.claude — и не находило никогда. Точку с запятой из
 // пути НЕ вырезаем: он идёт последним полем, а разбор режет по первой (см. osc.js).
 // Управляющие байты вырезаем — они порвали бы саму последовательность.
-function markerFor(payload, matcher) {
-  const token = tokenFor(payload, matcher);
+function markerFor(payload, matcher, override) {
+  const token = override || tokenFor(payload, matcher);
   if (!token) return null;
   const sid = String((payload && payload.session_id) || '').replace(/[\x07\x1b;]/g, '');
   const tr = String((payload && payload.transcript_path) || '').replace(/[\x07\x1b]/g, '');
@@ -113,21 +113,34 @@ function markerFor(payload, matcher) {
 // --- refusing the picker while the user is on a phone -------------------------
 // AskUserQuestion paints an interactive «choose 1/2/3» box in the terminal. Over Telegram
 // that's a dead end: there's no way to press a key in a box that only exists on a screen
-// nobody is looking at. So while a session is being driven from the phone (the app lists
-// those in swarm-tgmode.json beside this script) we DENY the tool. Claude gets the reason
-// and asks in prose instead — which the bridge can deliver and answer.
+// nobody is looking at. So we DENY the tool. Claude gets the reason and asks in prose
+// instead — which the bridge can deliver and answer.
 // The sign-off matters as much as the refusal: a prose question that ends the turn
 // WITHOUT the marker reads as «готов» to the app, so the bridge never says the agent is
 // waiting — the question would just sit in a terminal nobody is looking at. That's the
 // exact failure this mode exists to prevent, so we name the phrase right here.
-const denyReason = (marker) => 'Пользователь отвечает из Telegram: интерактивный выбор ему недоступен.'
+//
+// Запрещаем по ДВУМ признакам, и второй появился по живому тупику:
+//
+//   • сессия ведётся из телеги (приложение перечисляет такие в swarm-tgmode.json рядом с
+//     этим скриптом) — это узко: вкладка попадает в список, только когда человек УЖЕ ответил
+//     в неё с телефона;
+//   • человек сам сказал, что он за телефоном («где я» в приложении, /phone в чате) — тогда
+//     недоступен выбор в ЛЮБОЙ вкладке, и неважно, писал он в неё оттуда или нет.
+//
+// Второго и не хватило: человек спросил агента за компьютером, ушёл с телефоном, а агент к
+// тому времени открыл вопрос с вариантами. На телефоне выбирать нечем, а прозу в открытый
+// диалог мост не печатает — из этого не было выхода вообще. Признак ручной: человек
+// переключил «где я» сам и тем самым согласился, что интерактивный выбор ему сейчас не нужен.
+const denyReason = (marker) => 'Пользователь отвечает с телефона: интерактивный выбор ему недоступен.'
   + ' Задай тот же вопрос обычным текстом (варианты — списком в тексте) и заверши ход,'
   + ` закончив сообщение строкой «${marker}: …».`;
 const DENY_REASON = denyReason(FALLBACK.marker);
 
-function deniesPicker(payload, tgSessions) {
+function deniesPicker(payload, tgSessions, presence) {
   if (!payload || payload.hook_event_name !== 'PreToolUse') return false;
   if (payload.tool_name !== 'AskUserQuestion') return false;
+  if (presence === 'phone') return true;
   const sid = String((payload && payload.session_id) || '');
   return !!sid && Array.isArray(tgSessions) && tgSessions.includes(sid);
 }
@@ -136,9 +149,17 @@ function deniesPicker(payload, tgSessions) {
 // this hook has always put it) AND inside hookSpecificOutput, because which one a given
 // Claude Code version reads is not worth betting a status on — the token is idempotent,
 // so being read twice costs nothing, while being read zero times costs a wrong status.
-function outputFor(payload, matcher, tgSessions) {
-  const seq = markerFor(payload, matcher);
-  const deny = deniesPicker(payload, tgSessions);
+function outputFor(payload, matcher, tgSessions, presence) {
+  const deny = deniesPicker(payload, tgSessions, presence);
+  // Отказ значит «ход продолжается», а не «агент ждёт». Тот же PreToolUse на
+  // AskUserQuestion обычно и есть вопрос человеку — но не здесь: коробку с вариантами мы
+  // только что запретили, и агент сейчас пойдёт писать вопрос прозой.
+  //
+  // Пока отсюда уходило «ждёт», в тему улетал вопрос из ТЕКСТА ОТКАЗА: приложение считало
+  // вкладку ждущей, брало вопрос с экрана — а на экране в этот миг наше же объяснение,
+  // почему коробка запрещена. Настоящий вопрос приходил секунд через пятнадцать и не
+  // отправлялся вовсе: про эту вкладку мост уже отчитался.
+  const seq = markerFor(payload, matcher, deny ? 'busy' : null);
   if (!seq && !deny) return null;
   const out = {};
   if (seq) out.terminalSequence = seq;
@@ -163,14 +184,21 @@ async function main() {
   let phrases = null;
   try { phrases = await readJsonBeside('swarm-phrases.json'); } catch (_) { /* → FALLBACK */ }
   let tgSessions = [];
-  try { tgSessions = (await readJsonBeside('swarm-tgmode.json')).sessions || []; } catch (_) { /* none */ }
+  let presence = '';
+  try {
+    const tg = await readJsonBeside('swarm-tgmode.json');
+    tgSessions = tg.sessions || [];
+    // «Где я» лежит в том же файле: приложение переписывает его при каждом переключении.
+    // Нет поля (файл от прежней версии) — ведём себя как раньше, по списку сессий.
+    presence = String(tg.presence || '');
+  } catch (_) { /* none */ }
   const matcher = loadMatcher(() => phrases);
   let input = '';
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (c) => { input += c; });
   process.stdin.on('end', () => {
     try {
-      const out = outputFor(JSON.parse(input || '{}'), matcher, tgSessions);
+      const out = outputFor(JSON.parse(input || '{}'), matcher, tgSessions, presence);
       if (out) process.stdout.write(JSON.stringify(out));
     } catch (_) { /* malformed payload → emit nothing */ }
     process.exit(0);

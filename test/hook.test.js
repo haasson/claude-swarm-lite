@@ -198,13 +198,39 @@ test('deniesPicker only fires for AskUserQuestion in a listed session', () => {
   assert.strictEqual(H.deniesPicker({ ...ask, session_id: '' }, ['']), false, 'no session id, no deny');
 });
 
+// «Где я» — второй, более широкий признак. Список сессий узок: вкладка попадает в него,
+// только когда человек УЖЕ ответил в неё с телефона. Живой тупик был ровно в зазоре: человек
+// спросил агента за компьютером, ушёл с телефоном, а тот открыл вопрос с вариантами — выбрать
+// нечем, прозу в открытый диалог мост не печатает, выхода нет. Ручное «за телефоном» и есть
+// согласие человека обходиться без интерактивного выбора везде.
+test('за телефоном коробка запрещена в любой вкладке, а не только в списке', () => {
+  const ask = { hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', session_id: 's9' };
+  assert.strictEqual(H.deniesPicker(ask, [], 'phone'), true, 'вкладки нет в списке — всё равно запрет');
+  assert.strictEqual(H.deniesPicker({ ...ask, session_id: '' }, [], 'phone'), true, 'даже без id сессии');
+  assert.strictEqual(H.deniesPicker({ ...ask, tool_name: 'Bash' }, [], 'phone'), false, 'только коробка');
+  assert.strictEqual(H.deniesPicker(ask, [], 'desk'), false, 'за компом выбор остаётся');
+  assert.strictEqual(H.deniesPicker(ask, [], ''), false, 'поля нет (файл прежней версии) — как раньше');
+});
+
 test('the deny payload carries the status marker AND the decision', () => {
   const m = H.loadMatcher(() => null);
   const out = H.outputFor({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', session_id: 's1' }, m, ['s1']);
   assert.strictEqual(out.hookSpecificOutput.hookEventName, 'PreToolUse');
   assert.strictEqual(out.hookSpecificOutput.permissionDecision, 'deny');
-  assert.ok(/Telegram/.test(out.hookSpecificOutput.permissionDecisionReason));
+  assert.ok(/с телефона/.test(out.hookSpecificOutput.permissionDecisionReason));
   assert.ok(out.terminalSequence, 'status must still be reported while denying');
+});
+
+test('a denied picker reports «работает», not «ждёт»', () => {
+  // The same PreToolUse normally means «the agent is asking you something». Not when we
+  // refuse the box: the turn goes on, and the prose question is seconds away. Reporting
+  // «ждёт» here made the bridge send a question whose text was our own refusal — and the
+  // real question, when it came, was never sent: this tab had already been reported.
+  const m = H.loadMatcher(() => null);
+  const denied = H.outputFor({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', session_id: 's1' }, m, ['s1']);
+  assert.match(denied.terminalSequence, /;busy;/);
+  const allowed = H.outputFor({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', session_id: 's2' }, m, ['s1']);
+  assert.match(allowed.terminalSequence, /;ask;/);   // не запретили — коробка и есть вопрос
 });
 
 test('the deny reason names the marker, in the user\'s own wording', () => {
@@ -228,6 +254,21 @@ test('without Telegram mode the payload is exactly what it was before', () => {
 test('an event we do not care about still produces nothing', () => {
   const m = H.loadMatcher(() => null);
   assert.strictEqual(H.outputFor({ hook_event_name: 'SessionStart' }, m, ['s1']), null);
+});
+
+test('end to end: «за телефоном» на диске запрещает коробку любой вкладке', () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-hook-ph-')));
+  const staged = path.join(dir, 'swarm-signal.mjs');
+  fs.copyFileSync(SCRIPT, staged);
+  fs.writeFileSync(path.join(dir, 'swarm-tgmode.json'),
+    JSON.stringify({ sessions: [], presence: 'phone' }));
+  const out = JSON.parse(execFileSync(process.execPath, [staged], {
+    input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', session_id: 'кто-угодно' }),
+    encoding: 'utf8',
+  }));
+  assert.strictEqual(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(out.terminalSequence, /;busy;/, 'отказ — это продолжение хода, а не ожидание');
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('end to end: the script denies the picker for a session listed on disk', () => {
