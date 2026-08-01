@@ -214,6 +214,11 @@ function provisionStatusline() {
   HOOK_COMMAND = provisionNodeLauncher(dir, path.join('hooks', 'swarm-signal.mjs'), 'swarm-signal');
   writeSwarmSettings();
   applyAskPhrases();
+  // «Где я» на диск не сохраняется — каждый запуск начинается «за компом». А файл рядом с
+  // хуком переживает выключение, и без этой строчки в нём оставалось бы вчерашнее «за
+  // телефоном»: хук запрещал бы агентам коробку с вариантами, хотя человек сидит за маком и
+  // ничего такого не выбирал. Переписываем состояние под свежее — как и всё остальное здесь.
+  tgWriteModes();
   pruneUsage();
 }
 
@@ -412,7 +417,9 @@ function makeDetector(cols, rows) {
     // tgAckText — что в заготовке написано сейчас: Telegram отвергает правку, не меняющую
     // текст, поэтому одну и ту же строку второй раз не шлём (см. tgProgressTick). tgAckAt —
     // когда её правили в последний раз, tgAckWhy — почему не правят (для журнала).
-    tgNotifiedAt: 0, tgAck: null, tgAckText: '', tgAckAt: 0, tgAckWhy: '',
+    // tgOwes — ход начали из чата, а заготовки под него нет: её заведёт живая строка, если
+    // ход затянется (см. tgProgressTick).
+    tgNotifiedAt: 0, tgAck: null, tgAckText: '', tgAckAt: 0, tgAckWhy: '', tgOwes: false,
     tgLastSent: '', trFinal: '', mode: null,
     tgTopicLive: false, tgTopicName: '',
     // Текст с телефона, который ждёт закрытия диалога: напечатать его прямо в диалог нельзя,
@@ -646,6 +653,10 @@ setInterval(() => {
               + `, режим тлг=${d.tgMode ? 'да' : 'нет'}`
               + `, зеркало=${TG.mirrorAll ? 'да' : 'нет'}, где я=${tgPresence})`));
         }
+        // Ход кончился — долг перед чатом кончился вместе с ним. Иначе отметка от кнопки
+        // разрешения дожила бы до СЛЕДУЮЩЕГО хода, начатого за клавиатурой, и в теме без
+        // повода завелась бы живая строка.
+        if (next.status === 'ready') d.tgOwes = false;
         if (relay) tgOnDone(id, d);
       }
       // Уведомление могло не уйти — сеть рвётся ровно тогда, когда мак уснул или сменил
@@ -2164,6 +2175,11 @@ function tgAnswer(id, text) {
   const d = det.get(id);
   if (d) {
     markAnswered(d, Date.now());
+    // Ход начат из чата — значит чат вправе видеть, как он идёт. Отметка нужна кнопкам:
+    // текст и голосовое заводят заготовку сразу, а нажатие кнопки разрешения — нет, и
+    // дальше агент работает молча ровно тогда, когда работает дольше всего. Снимает её
+    // либо появившаяся заготовка, либо конец хода.
+    d.tgOwes = true;
     // From now on this tab is being driven from a phone: the agent gets told to answer
     // accordingly, and its finished turn is relayed back. Cleared the moment you touch
     // the keyboard here (see the session:input handler) — the mode tracks where YOU are.
@@ -2182,7 +2198,12 @@ function tgWriteModes() {
   for (const d of det.values()) {
     if (d.tgMode && !d.dead && d.claudeSessionId) ids.push(d.claudeSessionId);
   }
-  const body = JSON.stringify({ sessions: ids.sort() });
+  // Вместе со списком — «где я». Хук по нему запрещает агенту коробку с вариантами, пока
+  // человек за телефоном: выбрать её оттуда нечем, а прозу в открытый диалог мост не печатает.
+  // Список сессий этого не покрывает — вкладка попадает в него, только когда в неё УЖЕ
+  // ответили с телефона, а вопрос с вариантами агент открывает и в той, куда не отвечали.
+  // См. deniesPicker в hooks/swarm-signal.mjs.
+  const body = JSON.stringify({ sessions: ids.sort(), presence: tgPresence });
   if (body === tgModesWritten) return;         // nothing changed — don't touch the disk
   try {
     fs.writeFileSync(path.join(app.getPath('userData'), 'swarm-tgmode.json'), body);
@@ -2297,7 +2318,7 @@ async function tgAckSend(id, d, u) {
   tgRemember(msgId, id);          // ответом на него тоже можно продолжать разговор
   if (d && msgId) {
     d.tgAck = { messageId: msgId, chatId: TG.chatId };
-    d.tgAckText = ''; d.tgAckAt = 0; d.tgAckWhy = '';
+    d.tgAckText = ''; d.tgAckAt = 0; d.tgAckWhy = ''; d.tgOwes = false;
   }
 }
 
@@ -2306,6 +2327,11 @@ async function tgAckSend(id, d, u) {
 // каким инструментом занят, сколько написал, насколько полон контекст (см.
 // telegram.thinkingLine). С телефона это единственный способ отличить работающего агента от
 // уснувшего мака — до вкладки не дотянуться.
+//
+// Заготовка есть не у каждого хода из чата. Написал текстом — она появляется сразу; нажал
+// кнопку разрешения — нет, а прежняя к этому моменту уже стала указателем на кнопки. Такие
+// ходы и тянутся дольше всех, поэтому для них заготовка заводится ЛЕНИВО: первой же живой
+// строкой, если ход не кончился за пятнадцать секунд.
 //
 // Цена — один запрос на правку в полминуты на КАЖДУЮ висящую заготовку, а висят они только
 // у вкладок, которым человек сам написал с телефона. Все числа уже прочитаны для других
@@ -2318,6 +2344,10 @@ const TG_PROGRESS_MS = 30_000;
 // получал первую живую строку через минуту, а ход короче минуты — никогда. Часики, которые
 // не сменились ни разу, — это ровно та жалоба, с которой всё началось.
 const TG_PROGRESS_STEP_MS = 5_000;
+// Первые числа — через пятнадцать секунд, а не через полминуты. Полминуты выбирались из
+// «часиков и так достаточно», но с телефона именно первые полминуты и есть вся тревога:
+// дошло ли, взялся ли. Пятнадцать секунд — та граница, за которой ход уже не мгновенный.
+const TG_PROGRESS_FIRST_MS = 15_000;
 
 function tgClock(now) {
   return new Date(now).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
@@ -2350,19 +2380,20 @@ async function tgProgressTick() {
   if (TG.chatId == null || !TG.token) return;
   const now = Date.now();
   for (const [id, d] of det) {
-    if (!d.tgAck) continue;                      // заготовки нет — и переписывать нечего
+    if (!d.tgAck && !d.tgOwes) continue;         // ход не из чата — и показывать нечего
     // В журнал пишем ПЕРЕМЕНУ причины, а не каждый такт: иначе одна забытая заготовка
     // засыпала бы журнал одной и той же строкой раз в пять секунд и стёрла бы собой всю
-    // остальную диагностику моста.
+    // остальную диагностику моста. И только про висящую заготовку: человек смотрит на
+    // неподвижные часики именно там, а «пока нечего показывать» — не событие.
     const why = tgProgressWhy(d);
     if (why) {
-      if (why !== d.tgAckWhy) { d.tgAckWhy = why; tgLog(`  ⏳ вкладка ${id}: живой строки нет — ${why}`); }
+      if (d.tgAck && why !== d.tgAckWhy) { d.tgAckWhy = why; tgLog(`  ⏳ вкладка ${id}: живой строки нет — ${why}`); }
       continue;
     }
     d.tgAckWhy = '';
     const elapsed = now - d.turnStartedAt;
-    if (elapsed < TG_PROGRESS_MS) continue;      // первые полминуты и часиков достаточно
-    if (now - (d.tgAckAt || 0) < TG_PROGRESS_MS) continue;   // правим не чаще раза в полминуты
+    if (elapsed < TG_PROGRESS_FIRST_MS) continue;            // мгновенный ход обойдётся часиками
+    if (d.tgAck && now - (d.tgAckAt || 0) < TG_PROGRESS_MS) continue;   // правим не чаще раза в полминуты
     const text = telegram.thinkingLine({
       elapsedMs: elapsed,
       tool: transcript.currentTool(d.trEntries),
@@ -2371,6 +2402,23 @@ async function tgProgressTick() {
       clock: tgClock(now),
     });
     if (text === d.tgAckText) continue;
+    // Заготовки нет, а долг перед чатом есть: ход начали кнопкой оттуда (разрешение, «закрыть
+    // диалог»), и заготовку с «получил, думаю…» никто не заводил — при первом же запросе
+    // разрешения прежняя превратилась в указатель на кнопки. Именно эти ходы и тянутся
+    // минутами, и именно в них в чате не было ничего живого. Заводим её ЛЕНИВО, первой живой
+    // строкой: цепочка разрешений (жмёшь — секунда работы — снова спрашивает) до пятнадцати
+    // секунд не доживает и лишних сообщений не плодит, а долгая работа получает и счётчик, и
+    // итог в том же сообщении.
+    if (!d.tgAck) {
+      d.tgAckAt = now;                           // попытка была: не долбимся каждые пять секунд
+      const msgId = await tgSend({ threadId: await tgTopicFor(id), text, silent: true });
+      if (!msgId) continue;                      // не ушло — журнал уже написал почему
+      tgRemember(msgId, id);                     // ответом на неё тоже можно продолжать разговор
+      d.tgAck = { messageId: msgId, chatId: TG.chatId };
+      d.tgAckText = text;
+      d.tgOwes = false;                          // долг теперь несёт сама заготовка
+      continue;
+    }
     const ack = d.tgAck;
     d.tgAckAt = now;                             // попытка была — считаем её за такт правки
     const res = await tgFetchJson(telegram.apiUrl(TG.token, 'editMessageText'),
@@ -3249,6 +3297,7 @@ ipcMain.handle('telegram:forget', async () => {
   // втихую: кнопка без привязанной группы не показывается, и следующая привязка
   // начиналась бы с уже работающего зеркала, которого никто не просил.
   tgPresence = 'desk';
+  tgWriteModes();            // и запрет коробки с вариантами снимается вместе с ним
   try { fs.unlinkSync(tgPath()); } catch (_) { /* already gone */ }
   tgApplyKeepAwake();
   return tgState();
@@ -3341,6 +3390,9 @@ function tgSetPresence(raw, from) {
   if (next === tgPresence) return false;
   tgPresence = next;
   tgLog(`где я (${from}): ${TG_PRESENCE_SAID[next]}`);
+  // Хук читает это с диска (см. tgWriteModes): пока человек за телефоном, агент не открывает
+  // вопрос с вариантами, а спрашивает прозой — на неё с телефона можно ответить.
+  tgWriteModes();
   tgApplyKeepAwake();
   tgPush();             // иконка в строке состояния рисуется по этому же состоянию
   return true;
@@ -3354,6 +3406,7 @@ ipcMain.handle('telegram:setPresence', (_e, raw) => {
 ipcMain.handle('telegram:unpair', async () => {
   TG.chatId = null; TG.isForum = false; TG.topics = {}; tgCheck = null;
   tgPresence = 'desk';        // как и в forget: некуда зеркалить — нет и выбора
+  tgWriteModes();
   tgResetRouting();
   try { tgSave(); } catch (e) { reportMainError(e); }
   tgApplyKeepAwake();
