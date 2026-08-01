@@ -106,7 +106,25 @@ function readUpdate(u) {
       text: String(m.text || ''),
     };
   }
-  const msg = u.message || u.edited_message || null;
+  // Бота выгнали из группы или разжаловали. Узнать об этом иначе нечем: пока никто не
+  // напишет, мост считает себя живым — и панель настроек показывает зелёное «в эфире» уже
+  // после того, как в группе его нет.
+  if (u.my_chat_member) {
+    const m = u.my_chat_member;
+    return {
+      updateId: u.update_id,
+      kind: 'membership',
+      chatId: (m.chat || {}).id,
+      status: String((m.new_chat_member || {}).status || ''),
+      fromId: (m.from || {}).id,
+      fromName: [(m.from || {}).first_name, (m.from || {}).last_name].filter(Boolean).join(' ')
+        || (m.from || {}).username || '',
+    };
+  }
+  // Только `message`. Правки чужих сообщений мы у Telegram не запрашиваем (allowed_updates
+  // в createPoller), и это осознанно: текст, уже напечатанный в живую сессию, отредактировать
+  // задним числом нельзя, а прислать его вторым — значит выполнить задачу дважды.
+  const msg = u.message || null;
   if (!msg) return { updateId: u.update_id, kind: 'other', msg: null };
   const from = msg.from || {};
   const chat = msg.chat || {};
@@ -114,6 +132,7 @@ function readUpdate(u) {
   const text = typeof msg.text === 'string' ? msg.text
     : typeof msg.caption === 'string' ? msg.caption : '';
   const cmd = text.match(/^\/([A-Za-z0-9_]+)(?:@\S+)?(?:\s+([\s\S]*))?$/);
+  const photo = readPhoto(msg);
   return {
     updateId: u.update_id,
     kind: 'message',
@@ -136,8 +155,59 @@ function readUpdate(u) {
     // A voice note / audio: phase two transcribes it. Carried through now so the
     // bridge can answer «голос пока не умею» instead of silently ignoring it.
     voice: msg.voice ? { fileId: msg.voice.file_id, seconds: msg.voice.duration || 0 } : null,
+    photo,
+    // Всё остальное вложенное — чтобы ответить «этого пока не умею» вместо тишины. Про
+    // картинку тут молчим: она уже разобрана выше и уйдёт агенту файлом.
+    media: photo ? null : mediaKind(msg),
     raw: msg,
   };
+}
+
+// --- картинки ------------------------------------------------------------------
+// Скриншот с телефона — самый естественный способ показать агенту, что стряслось: набирать
+// текст ошибки пальцем никто не станет. Claude Code читает картинки с диска, поэтому мосту
+// нужен только файл: он его скачивает и отдаёт агенту путь (см. tgOnPhoto в main.js).
+//
+// Два вида, и оба настоящие: `photo` — обычная отправка (Telegram пережимает и отдаёт
+// лесенку размеров, берём самый крупный, он последний), `document` с картиночным mime —
+// отправка «как файл», которой пользуются, когда важны пиксели, а не вес. Второй случай не
+// экзотика: на iOS «сохранить качество» шлёт именно так, и без него скриншот кода приходил
+// бы замыленным до нечитаемости.
+function readPhoto(msg) {
+  const sizes = Array.isArray(msg.photo) ? msg.photo.filter(Boolean) : [];
+  if (sizes.length) {
+    const best = sizes[sizes.length - 1];
+    return { fileId: best.file_id, name: '', bytes: Number(best.file_size) || 0 };
+  }
+  const doc = msg.document;
+  if (doc && /^image\//i.test(String(doc.mime_type || ''))) {
+    return { fileId: doc.file_id, name: String(doc.file_name || ''), bytes: Number(doc.file_size) || 0 };
+  }
+  return null;
+}
+
+// Вложение, с которым мост ничего сделать не может. Название нужно в винительном падеже:
+// оно подставляется в «прислал(а) …, а я такое пока не умею» — фраза читается человеком, и
+// «прислал видео» против «прислал видеокружок» здесь важнее краткости кода.
+const MEDIA_LABELS = {
+  document: 'файл',
+  video: 'видео',
+  video_note: 'видеокружок',
+  audio: 'аудиофайл',
+  animation: 'гифку',
+  sticker: 'стикер',
+  location: 'геометку',
+  contact: 'контакт',
+  poll: 'опрос',
+};
+
+function mediaKind(msg) {
+  for (const k of Object.keys(MEDIA_LABELS)) if (msg && msg[k]) return k;
+  return null;
+}
+
+function mediaLabel(kind) {
+  return MEDIA_LABELS[kind] || 'это';
 }
 
 // --- служебные записи форума ---------------------------------------------------
@@ -532,6 +602,28 @@ function inlineKeyboard(options, tab, fingerprint) {
   return rows.length ? { inline_keyboard: rows } : null;
 }
 
+// --- ссылка на тему ------------------------------------------------------------
+// `/tabs` в общей теме — это список вкладок, и из него надо ПОПАСТЬ в нужную. Списком имён
+// он отвечал только на «кто чем занят»: дальше человек закрывал чат и искал тему пальцем
+// среди двух десятков. Тема адресуется ссылкой `t.me/c/<чат>/<тема>` — тап, и ты в ней.
+//
+// Внутренний номер супергруппы — это её id без приставки `-100`, которую Bot API добавляет
+// снаружи. Не супергруппа или нет темы — ссылки нет, и вызывающий пишет просто имя: строка
+// без ссылки лучше ссылки, ведущей в никуда.
+function topicLink(chatId, threadId) {
+  const id = String(chatId == null ? '' : chatId);
+  if (!/^-100\d+$/.test(id) || !threadId) return null;
+  return `https://t.me/c/${id.slice(4)}/${Number(threadId)}`;
+}
+
+// Экранирование для parse_mode: 'HTML'. Нужно ровно там, где мы сами строим разметку
+// (ссылки на темы), и НИГДЕ больше: ответ агента уходит без parse_mode, потому что в коде
+// полно `<`, и любая разметка превратила бы его в отказ Telegram или в кашу.
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 // --- outbound text -----------------------------------------------------------
 // Telegram rejects anything over 4096 chars. Split on paragraph, then line, then hard
 // — a question from an agent is prose, so breaking mid-word is the last resort.
@@ -609,8 +701,10 @@ function createPoller(deps) {
   let failures = 0;
 
   async function once() {
+    // `my_chat_member` — единственный способ узнать, что бота выгнали или разжаловали:
+    // просить его дороже не стало, а без него мост врёт про себя «в эфире».
     const res = await fetchJson(apiUrl(token, 'getUpdates'), {
-      offset, timeout: timeoutS, allowed_updates: ['message', 'callback_query'],
+      offset, timeout: timeoutS, allowed_updates: ['message', 'callback_query', 'my_chat_member'],
     });
     if (!res || !res.ok || !res.body || res.body.ok !== true) {
       const err = classifyError(res && res.status, res && res.body);
@@ -656,7 +750,9 @@ module.exports = {
   thinkingLine, fmtSpan, fmtTokens,
   apiUrl, looksLikeToken, maskToken,
   pairCode, deepLink, pairingMatch,
-  readUpdate, readService, senderLabel, routeMessage, chunkText, inlineKeyboard, buttonLabel, optionsList, BTN_MAX, callbackData, parseCallbackData, callbackTab, CB_MAX, backoffMs, retryAfterMs, classifyError,
+  readUpdate, readService, readPhoto, mediaKind, mediaLabel, MEDIA_LABELS,
+  topicLink, escapeHtml,
+  senderLabel, routeMessage, chunkText, inlineKeyboard, buttonLabel, optionsList, BTN_MAX, callbackData, parseCallbackData, callbackTab, CB_MAX, backoffMs, retryAfterMs, classifyError,
   inputWrites, PASTE_ON, PASTE_OFF, ENTER, BACK_TAB, ESC, routeFailure,
   COMMANDS, QA_ACTIONS, HEADER_ACTIONS, actionData, parseAction, actionKeyboard,
   createPoller,

@@ -105,6 +105,81 @@ test('readUpdate survives junk and non-message updates', () => {
   assert.strictEqual(T.readUpdate({ update_id: 1, poll: {} }).kind, 'other');
 });
 
+// --- картинки ------------------------------------------------------------------
+// Скриншот — то, чем с телефона показывают беду. До этого он молча пропадал: ни ответа, ни
+// следа, и это неотличимо от сломанного моста.
+
+test('readUpdate берёт самый крупный размер картинки', () => {
+  const u = T.readUpdate(msgUpdate({
+    text: undefined,
+    photo: [
+      { file_id: 'small', file_size: 900 },
+      { file_id: 'big', file_size: 90000 },
+    ],
+  }));
+  assert.deepStrictEqual(u.photo, { fileId: 'big', name: '', bytes: 90000 });
+  assert.strictEqual(u.media, null, 'картинка разобрана — отказывать не в чем');
+});
+
+test('картинка «как файл» — тоже картинка, и имя сохраняется', () => {
+  const u = T.readUpdate(msgUpdate({
+    text: undefined,
+    document: { file_id: 'd1', file_name: 'ошибка.png', mime_type: 'image/png', file_size: 12 },
+  }));
+  assert.deepStrictEqual(u.photo, { fileId: 'd1', name: 'ошибка.png', bytes: 12 });
+});
+
+test('подпись к картинке становится текстом задачи', () => {
+  const u = T.readUpdate(msgUpdate({
+    text: undefined, caption: 'почему тут пусто?', photo: [{ file_id: 'p' }],
+  }));
+  assert.strictEqual(u.text, 'почему тут пусто?');
+  assert.strictEqual(u.photo.fileId, 'p');
+});
+
+test('прочие вложения названы, чтобы отказ был человеческим', () => {
+  const kinds = {
+    document: { file_id: 'x', mime_type: 'application/pdf' },
+    video: { file_id: 'x' },
+    sticker: { file_id: 'x' },
+  };
+  for (const [k, v] of Object.entries(kinds)) {
+    assert.strictEqual(T.readUpdate(msgUpdate({ text: undefined, [k]: v })).media, k);
+  }
+  assert.strictEqual(T.mediaLabel('video_note'), 'видеокружок');
+  assert.strictEqual(T.mediaLabel('нечто'), 'это', 'незнакомое не должно ломать фразу');
+  assert.strictEqual(T.readUpdate(msgUpdate({})).media, null, 'у обычного текста вложений нет');
+});
+
+// --- бота выгнали или разжаловали ------------------------------------------------
+
+test('readUpdate разбирает смену членства бота', () => {
+  const u = T.readUpdate({
+    update_id: 3,
+    my_chat_member: {
+      chat: { id: -100123 },
+      from: { id: 42, first_name: 'Женя' },
+      new_chat_member: { status: 'kicked' },
+    },
+  });
+  assert.strictEqual(u.kind, 'membership');
+  assert.strictEqual(u.chatId, -100123);
+  assert.strictEqual(u.status, 'kicked');
+  assert.strictEqual(T.senderLabel(u), 'Женя (42)');
+});
+
+// --- ссылка на тему ---------------------------------------------------------------
+
+test('topicLink адресует тему супергруппы', () => {
+  assert.strictEqual(T.topicLink(-1001234567890, 9), 'https://t.me/c/1234567890/9');
+  assert.strictEqual(T.topicLink(-1001234567890, null), null, 'нет темы — нет ссылки');
+  assert.strictEqual(T.topicLink(12345, 9), null, 'личный чат так не адресуется');
+});
+
+test('escapeHtml бережёт имя вкладки от разметки', () => {
+  assert.strictEqual(T.escapeHtml('<b> & api'), '&lt;b&gt; &amp; api');
+});
+
 // --- служебные записи форума ---------------------------------------------------
 // Единственный канал, по которому телега сообщает «тему переименовали/закрыли». Без их
 // разбора синхронизация возможна только в одну сторону — из сворма в телегу; ровно так и
@@ -572,7 +647,9 @@ test('readUpdate turns a tapped button into a routable callback', () => {
 test('the poller subscribes to button taps, not just messages', async () => {
   const h = harness([okUpdates([])]);
   await h.poller.start();
-  assert.deepStrictEqual(h.calls[0].body.allowed_updates, ['message', 'callback_query']);
+  // my_chat_member — чтобы «бота выгнали из группы» не выглядело как «мост в эфире».
+  assert.deepStrictEqual(h.calls[0].body.allowed_updates,
+    ['message', 'callback_query', 'my_chat_member']);
 });
 
 // --- outbound text -----------------------------------------------------------

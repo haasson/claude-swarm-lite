@@ -1459,6 +1459,9 @@ function showSettingsModal(tab) {
               <br>Запрос разрешения приходит <b>кнопками с вариантами самого Клода</b>: нажали —
               приложение напечатало этот номер. Словами разрешение не даётся, одобрить можно
               только то, что видно на кнопке.
+              <br>В тему можно прислать <b>скриншот</b> — сворм положит его файлом на этот
+              компьютер и отдаст агенту путь, тот посмотрит сам. Подпись к картинке станет
+              задачей. Голосовые тоже принимаются, если включить их ниже.
               <br>Команды: <span class="set-mono">/tabs</span> — кто чем занят,
               <span class="set-mono">/new</span> — ещё один агент в папке этой темы,
               <span class="set-mono">/mode edits</span> — разрешить агенту правки без спроса,
@@ -1522,11 +1525,10 @@ function showSettingsModal(tab) {
           </div>
 
           <span class="set-label set-label-gap">Когда писать в телегу</span>
-          <label class="set-check">
-            <input type="checkbox" id="set-tg-mirror" />
-            <span class="set-check-tx">Писать всегда, даже когда я за компом
-              <span class="set-check-sub">по умолчанию мост сам пишет, только пока вы «за телефоном» (иконка справа внизу): за компом вы видите вкладки и без него. Ответы на ваши сообщения и команды приходят всегда. С этой галкой иконка не нужна и прячется, а «я ушёл» говорится боту: /phone</span></span>
-          </label>
+          <span class="set-hint set-hint-top">Сам мост пишет, пока вы «за телефоном» — это
+            иконка в правом нижнем углу или команда боту <span class="set-mono">/phone</span>.
+            За компом он молчит: вкладки перед вами. Ответы на ваши сообщения и команды
+            приходят всегда, где бы вы ни были.</span>
           <label class="set-check">
             <input type="checkbox" id="set-tg-awake" />
             <span class="set-check-tx">Не давать компьютеру засыпать, пока вас нет
@@ -1670,7 +1672,6 @@ function showSettingsModal(tab) {
   const tgPromptBox = overlay.querySelector('#set-tg-prompt-box');
   const tgPromptI = overlay.querySelector('#set-tg-prompt');
   const tgAwakeI = overlay.querySelector('#set-tg-awake');
-  const tgMirrorI = overlay.querySelector('#set-tg-mirror');
   const tgWBinI = overlay.querySelector('#set-tg-wbin');
   const tgWModelI = overlay.querySelector('#set-tg-wmodel');
   const tgVoiceHintEl = overlay.querySelector('#set-tg-voice-hint');
@@ -1842,7 +1843,6 @@ function showSettingsModal(tab) {
     // переключатель «кратко/полностью» ни на что не влияет.
     if (st.prompt && tgPromptBox.hidden) togglePromptBox(true);
     tgAwakeI.checked = !!st.keepAwake;
-    tgMirrorI.checked = !!st.mirrorAll;
     // Панель и кнопка в строке состояния показывают одно и то же состояние моста. Отвязка
     // группы отвечает только сюда (main её не рассылает), а кнопка при этом должна исчезнуть.
     renderPresencePill(st);
@@ -1942,9 +1942,6 @@ function showSettingsModal(tab) {
   };
   tgWBinI.addEventListener('change', saveWhisper);
   tgWModelI.addEventListener('change', saveWhisper);
-  tgMirrorI.addEventListener('change', async () => {
-    renderTg(await window.swarm.telegram.mirrorAll(tgMirrorI.checked));
-  });
   tgAwakeI.addEventListener('change', async () => {
     renderTg(await window.swarm.telegram.keepAwake(tgAwakeI.checked));
   });
@@ -3854,11 +3851,15 @@ function paintPresence() {
 }
 
 function renderPresencePill(st) {
-  // Кнопки нет в двух случаях. Без привязанной группы — обещать «всё уйдёт в телегу» там,
-  // где телеги ещё нет, значит обещать несуществующее. И при включённой галке «присылать
-  // итоги всех ходов всегда» — человек и так получает всё, выбирать ему нечего; уходя, он
-  // скажет /phone с телефона, и мак не уснёт.
-  const ready = !!(st && st.chatId != null) && !(st && st.mirrorAll);
+  // Кнопки нет ровно в одном случае: группа не привязана — обещать «всё уйдёт в телегу»
+  // там, где телеги ещё нет, значит обещать несуществующее.
+  //
+  // Прятали её ещё и при галке «писать всегда», и это было ошибкой: положение при этом
+  // продолжало жить и переключаться командой /phone, а показать его было негде. Человек
+  // возвращался за стол, а мак не спал и агенты во всех вкладках отказывались показывать
+  // варианты выбора — вернуть можно было только с телефона. Галки больше нет, положение
+  // одно, и видно его всегда.
+  const ready = !!(st && st.chatId != null);
   presencePill.hidden = !ready;
   if (!ready) { presenceNow = 'desk'; paintPresence(); closePresenceMenu(); return; }
   presenceNow = st.presence || 'desk';

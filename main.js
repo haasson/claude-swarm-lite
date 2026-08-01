@@ -650,8 +650,7 @@ setInterval(() => {
           tgLog(`  вкладка ${id}: ${prev} → ${next.status}${kind ? ':' + kind : ''}`
             + ` · итог ${relay ? 'отправляю' : 'нет'}`
             + (relay ? '' : ` (нужен переход работает→готов; долг=${owed ? 'да' : 'нет'}`
-              + `, режим тлг=${d.tgMode ? 'да' : 'нет'}`
-              + `, зеркало=${TG.mirrorAll ? 'да' : 'нет'}, где я=${tgPresence})`));
+              + `, режим тлг=${d.tgMode ? 'да' : 'нет'}, где я=${tgPresence})`));
         }
         // Ход кончился — долг перед чатом кончился вместе с ним. Иначе отметка от кнопки
         // разрешения дожила бы до СЛЕДУЮЩЕГО хода, начатого за клавиатурой, и в теме без
@@ -1204,16 +1203,21 @@ const TG_PAIR_RENEW_MAX = 2;
 // выключилось, и узнаёшь об этом по тишине в телеге, когда уже поздно.
 //
 // На диске НЕ хранится: приложение запустилось — значит ты за компьютером. Иначе «включил
-// вчера, забыл выключить» встречало бы утром жужжащим телефоном. Кому зеркало нужно всегда,
-// у того есть галка в настройках — она как раз настройка и хранится.
+// вчера, забыл выключить» встречало бы утром жужжащим телефоном.
+//
+// Единственный выключатель, и это стоило отдельного решения. Рядом жила галка «писать
+// всегда, даже когда я за компом» — тот же вопрос, заданный второй раз, и с ней вышло
+// хуже, чем без неё: галка ПРЯТАЛА иконку (выбирать, мол, нечего), а положение при этом
+// продолжало жить и переключаться с телефона. Сказал в дороге /phone, вернулся за стол — и
+// мак не спит, а агенты во всех вкладках отказываются показывать варианты выбора (хук
+// смотрит именно сюда), причём в приложении об этом ни следа. Одно состояние, одна кнопка.
 const TG_PRESENCE = ['desk', 'phone'];
 let tgPresence = 'desk';
 
-// Пишет ли мост в группу ПО СВОЕЙ ИНИЦИАТИВЕ — вопросы, разрешения, итоги ходов. Два
-// источника, и они складываются: «где я» на сегодня и галка «писать в телегу всегда»
-// навсегда. Ответы на спрошенное из чата этим правилом не гасятся (см. tgPresence).
+// Пишет ли мост в группу ПО СВОЕЙ ИНИЦИАТИВЕ — вопросы, разрешения, итоги ходов. Ответы на
+// спрошенное из чата этим правилом не гасятся (см. tgPresence).
 function tgMirrors() {
-  return !!TG.mirrorAll || tgPresence === 'phone';
+  return tgPresence === 'phone';
 }
 // Журнал моста: каждое входящее сообщение и что мы с ним сделали — в
 // <userData>/telegram.log. Пишется ВСЕГДА, и это осознанно: раньше он включался
@@ -1268,7 +1272,7 @@ let tgError = null;    // last error, verbatim for the settings panel
 
 function tgPath() { return path.join(app.getPath('userData'), 'telegram.dat'); }
 
-function tgBlank() { return { token: '', chatId: null, isForum: false, topics: {}, prompt: '', detail: 'short', keepAwake: true, mirrorAll: false, whisperBin: '', whisperModel: '' }; }
+function tgBlank() { return { token: '', chatId: null, isForum: false, topics: {}, prompt: '', detail: 'short', keepAwake: true, whisperBin: '', whisperModel: '' }; }
 
 // The last result of tgCheckChat(), so the settings panel can show «бот администратор,
 // темы доступны» without re-asking Telegram on every render.
@@ -1309,7 +1313,9 @@ function tgLoad() {
       // Файл прошлой версии подробности не знает — и это ровно то, чем мост жил до сих пор.
       detail: telegram.DETAILS.includes(d.detail) ? d.detail : 'short',
       keepAwake: d.keepAwake !== false,
-      mirrorAll: !!d.mirrorAll,
+      // `mirrorAll` из файлов прежних версий сюда не переносится и нигде не читается: галку
+      // «писать всегда» заменило одно положение «где я» (см. TG_PRESENCE). Поле в старом
+      // файле останется лежать до первого сохранения и исчезнет само.
       whisperBin: String(d.whisperBin || ''),
       whisperModel: String(d.whisperModel || ''),
     };
@@ -1379,6 +1385,10 @@ async function tgSend(opts) {
   const parts = telegram.chunkText(o.text, telegram.MAX_TEXT);
   for (const part of parts) {
     const body = { chat_id: chatId, text: part, disable_notification: !!o.silent };
+    // Разметка — только по явной просьбе, и просит её ровно одно место (/tabs со ссылками
+    // на темы). По умолчанию её нет намеренно: в ответе агента полно `<`, `_` и `*`, и
+    // любой parse_mode превратил бы его либо в отказ Telegram, либо в кашу из курсива.
+    if (o.parseMode) body.parse_mode = o.parseMode;
     if (o.threadId) body.message_thread_id = o.threadId;
     if (o.replyTo) body.reply_to_message_id = o.replyTo;
     // Buttons go on the LAST chunk: that's the one the answer hangs off.
@@ -1645,7 +1655,8 @@ const TG_WHISPER_TIMEOUT_MS = 180000;
 async function tgVoiceToText(fileId) {
   const bin = tgWhisperBin();
   if (!bin || !TG.whisperModel) {
-    return { error: 'Голос не настроен: укажи путь к whisper.cpp и модели в «Настройки → Телеграм».' };
+    return { error: 'Голос не настроен: «Настройки → Телеграм» → «Включить голосовые» (одна кнопка,'
+      + ' распознаватель скачается сам).' };
   }
   let wav = null;
   try {
@@ -1798,7 +1809,6 @@ function tgState() {
     promptDefault: tgPromptDefault(),
     detail: TG.detail || 'short',
     keepAwake: !!TG.keepAwake,
-    mirrorAll: !!TG.mirrorAll,
     // «Где я» — не настройка, а положение дел прямо сейчас; кнопка в строке состояния
     // рисуется по нему же, поэтому едет вместе с остальным состоянием моста.
     presence: tgPresence,
@@ -2862,12 +2872,39 @@ async function tgBindChat(chatId, threadId) {
   return true;
 }
 
+// Бота выгнали из группы или разжаловали из администраторов. До этой ветки узнать о таком
+// было нечем: мост считал себя живым, «Мост в эфире» в настройках горел зелёным, а группа
+// его уже не слышала — и разбираться человек начинал с того, что «сворм молчит».
+//
+// Ничего не отвязываем: восстановить права — дело одного касания в телеге, а стереть карту
+// тем из-за случайного нажатия нельзя. Только называем беду в панели и в журнале.
+function tgOnMembership(u) {
+  if (TG.chatId == null || u.chatId !== TG.chatId) return;
+  tgLog(`← бот в группе: ${u.status || '?'} (${telegram.senderLabel(u)})`);
+  if (u.status === 'left' || u.status === 'kicked') {
+    tgError = 'Бота убрали из группы — вернуть его и снова сделать администратором';
+  } else if (u.status === 'administrator') {
+    // Права вернули: старая жалоба на экране была бы ложью. Заодно забываем прошлый разбор
+    // — он про то, как было, а не про то, как стало.
+    tgError = null;
+    tgCheck = null;
+  } else {
+    // «member» после «administrator» — это разжалование. Без админства Telegram (режим
+    // приватности ботов) не отдаёт обычные сообщения в темах: мост оглох, хотя формально в
+    // группе. Пишем прямо, потому что симптом («не отвечает на сообщения») сам себя не
+    // объясняет.
+    tgError = 'Бот больше не администратор — без этого он не видит сообщения в темах';
+  }
+  tgPush();
+}
+
 function tgOnUpdate(u) {
   if (!u) return;
   if (u.kind === 'callback') {
     if (TG.chatId != null && u.chatId === TG.chatId) tgOnCallback(u).catch(reportMainError);
     return;
   }
+  if (u.kind === 'membership') { tgOnMembership(u); return; }
   if (u.kind !== 'message') return;
   tgLog(`← от ${telegram.senderLabel(u)} · chat=${u.chatId}`
     + ` thread=${u.threadId == null ? '-' : u.threadId}`
@@ -2908,24 +2945,33 @@ function tgOnUpdate(u) {
   if (u.command === 'phone') { tgWhereAmI(u, 'phone').catch(reportMainError); return; }
   if (u.command === 'comp') { tgWhereAmI(u, 'desk').catch(reportMainError); return; }
   if (u.command === 'last') { tgLastWord(u).catch(reportMainError); return; }
+  // Помощь собирается из ТОГО ЖЕ списка, что и меню у поля ввода (telegram.COMMANDS).
+  // Списка было два, набранных руками, и они уже разошлись формулировками: человек читал в
+  // меню одно, а в /help про ту же команду другое.
   if (u.command === 'start' || u.command === 'help') {
     tgSend({ threadId: u.threadId, text: [
       'Уже на связи. Каждая вкладка живёт в своей теме — пиши в тему, попадёшь в её агента.',
+      'Можно голосом и картинкой: скриншот уйдёт агенту файлом.',
       '',
-      '/tabs — вкладки и что у них сейчас',
-      '/last — что агент сказал последним (в теме вкладки)',
-      '/phone — я с телефоном: писать сюда обо всём, маку не спать',
-      '/comp — я вернулся за компьютер: молчать, пока не спрошу',
-      '/usage — расход: контекст вкладки, 5 часов, неделя',
-      '/sync — подтянуть темы под открытые вкладки',
-      '/new — ещё один агент в папке этой темы',
-      '/mode — режим разрешений вкладки: manual, edits, plan, auto',
+      ...telegram.COMMANDS.map((c) => `/${c.command} — ${c.description}`),
     ].join('\n') }).catch(reportMainError);
     return;
   }
   if (u.voice) { tgOnVoice(u).catch(reportMainError); return; }
+  if (u.photo) { tgOnPhoto(u).catch(reportMainError); return; }
   const text = String(u.text || '').trim();
-  if (!text) return;
+  // Вложение, с которым мы ничего не сделаем. Раньше здесь была ТИШИНА: файл или кружок,
+  // отправленный в тему, не вызывал вообще ничего — ни ответа, ни строчки в журнале, и это
+  // неотличимо от сломанного моста. Сказать «не умею» стоит одного сообщения.
+  if (!text) {
+    if (u.media) {
+      tgLog(`  вложение «${u.media}» — не умею`);
+      tgSend({ threadId: u.threadId, replyTo: u.messageId,
+        text: `Не умею брать ${telegram.mediaLabel(u.media)}. Пиши текстом, наговори голосовое`
+          + ' или пришли картинку — её я отдам агенту файлом.' }).catch(reportMainError);
+    }
+    return;
+  }
 
   const id = tgRoute(u);
   tgLog(`  адресат: ${id == null ? 'не определён' : 'вкладка ' + id + ' (' + tgTabName(id) + ')'}`);
@@ -2949,6 +2995,13 @@ function tgOnUpdate(u) {
   // Tag the text so the agent knows it's answering into a phone (short answers, no
   // interactive pickers). The first message of a session carries the whole convention.
   const tagged = telegram.tagInput({ text, instruction: TG_PROMPT, primed: !!(d && d.tgPrimed) });
+  tgDeliver(id, d, u, tagged).catch(reportMainError);
+}
+
+// Отдать вкладке готовую строку. Общий хвост для сообщения и для картинки: они отличаются
+// только тем, ЧТО получилось из присланного, а правила дальше одни — диалог на экране,
+// закрытая вкладка, заготовка «получил, думаю…».
+async function tgDeliver(id, d, u, tagged) {
   // The one thing that never travels from a phone: approving a command. See tgNotifyWaiting.
   //
   // Но отказать можно только тому, у кого ЕСТЬ чем ответить, — кнопкам с вариантами Клода.
@@ -2960,30 +3013,30 @@ function tgOnUpdate(u) {
   if (d && d.status === 'waiting' && d.waitingKind === 'permission') {
     const open = parsePrompt(promptSnapshot(d));
     if (open && open.options.length) {
-      tgSend({
+      await tgSend({
         threadId: u.threadId, replyTo: u.messageId,
         text: `${tgTabName(id)} ждёт разрешения: выбери вариант кнопкой под запросом.`
           + ' Словами разрешение не даётся — одобрять можно только то, что предложил Клод.',
-      }).catch(reportMainError);
+      });
       return;
     }
     d.tgPending = tagged;
     tgLog(`  текст отложен: вкладка ${id} держит диалог, вариантов в нём не разобрал`);
-    tgSend({
+    await tgSend({
       threadId: u.threadId, replyTo: u.messageId,
       text: `${tgTabName(id)} держит диалог на экране, а вариантов в нём я не разобрал —`
         + ' напечатать словами прямо в него нельзя. Нажми «закрыть диалог»: я закрою его'
         + ' и отправлю это сообщение.',
       replyMarkup: telegram.actionKeyboard(String(id), ['esc']),
-    }).catch(reportMainError);
+    });
     return;
   }
   if (!tgAnswer(id, tagged)) {
-    tgSend({ threadId: u.threadId, replyTo: u.messageId, text: 'Эта вкладка уже закрыта.' }).catch(reportMainError);
+    await tgSend({ threadId: u.threadId, replyTo: u.messageId, text: 'Эта вкладка уже закрыта.' });
     return;
   }
   if (d) d.tgPrimed = true;
-  tgAckSend(id, d, u).catch(reportMainError);
+  await tgAckSend(id, d, u);
 }
 
 // Голосовое: сначала адресат (иначе незачем и распознавать), потом эхо распознанного и
@@ -3037,6 +3090,94 @@ async function tgOnVoice(u) {
     return;
   }
   if (d) d.tgPrimed = true;
+}
+
+// --- картинка из чата ----------------------------------------------------------
+// Скриншот — самый быстрый способ показать агенту, что случилось: пересказывать пальцами
+// красную простыню из терминала никто не будет. Claude Code читает картинки с диска, так
+// что мосту достаточно положить файл и назвать путь — дальше агент смотрит сам.
+//
+// Кладём во временную папку системы, а не в userData: на маке userData — это «Application
+// Support», путь с пробелами, и он поедет в строку задачи, где пробел разделяет слова.
+// В tmpdir пробелов нет ни на одной из систем, а живёт файл ровно столько, сколько нужно.
+const TG_IMG_MAX_BYTES = 20 << 20;      // столько же, сколько отдаёт сам Bot API
+const TG_IMG_TTL_MS = 24 * 3600_000;    // сутки: за это время по картинке уже отработали
+
+function tgImageDir() { return path.join(os.tmpdir(), 'swarm-tg-images'); }
+
+// Старые снимки прибираем при каждом новом: без этого папка растёт молча и вечно, а
+// напоминать о себе такому мусору нечем — человек про него никогда не узнает.
+function tgSweepImages() {
+  const dir = tgImageDir();
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch (_) { return; }
+  const dead = Date.now() - TG_IMG_TTL_MS;
+  for (const n of names) {
+    const p = path.join(dir, n);
+    try { if (fs.statSync(p).mtimeMs < dead) fs.unlinkSync(p); } catch (_) {}
+  }
+}
+
+// Имя файла из того, что прислали. Всё чужое отсюда выкидывается: имя приходит из телеги, а
+// склеивается с путём — «../» в нём означал бы запись куда угодно. Пробелы тоже: путь идёт
+// в строку задачи, где пробел разделяет слова.
+function tgImageName(photo, filePath) {
+  const given = path.basename(String((photo && photo.name) || '')).replace(/[^A-Za-z0-9._-]+/g, '_');
+  const ext = (path.extname(given) || path.extname(String(filePath || '')) || '.jpg').toLowerCase();
+  const stem = path.basename(given, path.extname(given)).slice(0, 40) || 'shot';
+  return `${stem}-${Date.now().toString(36)}${ext}`;
+}
+
+// Скачать картинку в файл. Возвращает { file } или { error } — текст ошибки уходит в чат как
+// есть: человек с телефоном должен понимать, что случилось, а не смотреть в тишину.
+async function tgSaveImage(photo) {
+  try {
+    const info = await tgFetchJson(telegram.apiUrl(TG.token, 'getFile'), { file_id: photo.fileId });
+    const fpath = info.ok && info.body && info.body.ok === true && info.body.result && info.body.result.file_path;
+    if (!fpath) return { error: 'Не смог забрать картинку у Telegram.' };
+    const res = await fetch(`${telegram.API_HOST}/file/bot${TG.token}/${fpath}`);
+    if (!res.ok) return { error: `Не смог скачать картинку (HTTP ${res.status}).` };
+    const bytes = Buffer.from(await res.arrayBuffer());
+    if (!bytes.length) return { error: 'Картинка пришла пустой.' };
+    tgSweepImages();
+    fs.mkdirSync(tgImageDir(), { recursive: true });
+    const file = path.join(tgImageDir(), tgImageName(photo, fpath));
+    fs.writeFileSync(file, bytes);
+    return { file };
+  } catch (e) {
+    // Сеть тут рвётся штатно (телефон в метро, мак ушёл в сон), и fetch в этом случае
+    // БРОСАЕТ. Без перехвата вся реакция на картинку свелась бы к записи в лог main.
+    return { error: 'Картинка не дошла: ' + ((e && e.message) || e) };
+  }
+}
+
+async function tgOnPhoto(u) {
+  const id = tgRoute(u);
+  if (id == null) {
+    await tgSend({ threadId: u.threadId, replyTo: u.messageId,
+      text: 'Не понял, кому эта картинка. Пришли её в тему нужной вкладки (список — /tabs).' });
+    return;
+  }
+  if (u.photo.bytes > TG_IMG_MAX_BYTES) {
+    await tgSend({ threadId: u.threadId, replyTo: u.messageId,
+      text: `Это ${Math.round(u.photo.bytes / (1 << 20))} МБ — беру картинки до ${TG_IMG_MAX_BYTES >> 20} МБ.` });
+    return;
+  }
+  const saved = await tgSaveImage(u.photo);
+  if (saved.error) {
+    await tgSend({ threadId: u.threadId, replyTo: u.messageId, text: saved.error });
+    return;
+  }
+  tgLog(`  картинка → вкладка ${id}: ${saved.file}`);
+  const d = det.get(id);
+  // Подпись — это и есть задача («почему тут пусто?»), картинка к ней приложена. Без подписи
+  // говорим прямо, что от агента нужно: иначе путь к файлу в пустой строке выглядит как
+  // обрывок, и агент начинает спрашивать, что с ним делать.
+  const caption = String(u.text || '').trim();
+  const body = caption ? `${caption}\n\nКартинка: ${saved.file}` : `Посмотри картинку: ${saved.file}`;
+  await tgDeliver(id, d, u, telegram.tagInput({
+    text: body, instruction: TG_PROMPT, primed: !!(d && d.tgPrimed),
+  }));
 }
 
 // /new в теме — ещё один агент в ТОЙ ЖЕ папке. Папку называть не надо: тема = вкладка =
@@ -3162,15 +3303,30 @@ async function tgSync(threadId) {
 
 // /tabs — what every agent is doing right now, so you can orient from the phone without
 // waiting for someone to call you.
+//
+// Имя вкладки — ССЫЛКОЙ на её тему. Список из одних имён отвечал только на «кто чем занят»:
+// дальше человек закрывал чат и искал нужную тему пальцем среди двух десятков, хотя адрес
+// у неё есть и мы его знаем. Тап по строке — и ты в теме, где можно сразу писать.
 async function tgSendTabs(threadId) {
   const marks = { running: '🟠 работает', waiting: '🟡 ждёт', ready: '🟢 готов' };
-  const lines = [];
+  const rich = [];
+  const plain = [];
   for (const [id, d] of det) {
     if (d.dead) continue;
     const kind = d.status === 'waiting' && d.waitingKind ? ` (${d.waitingKind === 'permission' ? 'разрешение' : 'вопрос'})` : '';
-    lines.push(`${marks[d.status] || '⚪'}${kind} · ${tgTabName(id)}`);
+    const head = `${marks[d.status] || '⚪'}${kind} · `;
+    const name = tgTabName(id);
+    const link = telegram.topicLink(TG.chatId, tgTopicOf(d));
+    plain.push(head + name);
+    rich.push(head + (link ? `<a href="${link}">${telegram.escapeHtml(name)}</a>` : telegram.escapeHtml(name)));
   }
-  await tgSend({ threadId, text: lines.length ? lines.join('\n') : 'Открытых вкладок нет.' });
+  if (!plain.length) { await tgSend({ threadId, text: 'Открытых вкладок нет.' }); return; }
+  // Разметка живёт только пока сообщение уходит ЦЕЛИКОМ: chunkText режет по длине и не знает
+  // про теги, а разрезанная посередине ссылка — это отказ Telegram и /tabs без ответа. На
+  // такой (очень людной) машине отдаём простой список: он хуже, но он приходит.
+  const html = rich.join('\n');
+  if (html.length <= telegram.MAX_TEXT) { await tgSend({ threadId, parseMode: 'HTML', text: html }); return; }
+  await tgSend({ threadId, text: plain.join('\n') });
 }
 
 // /usage — расход: контекст и два окна подписки. В теме вкладки отвечаем про неё, в
@@ -3205,9 +3361,7 @@ async function tgWhereAmI(u, presence) {
   const what = phone
     ? 'Вопросы, разрешения и итоги ходов идут сюда, маку спать не даю.'
       + (TG.keepAwake ? '' : ' Сон, правда, выключен галкой в настройках — там его и включать.')
-    : TG.mirrorAll
-      ? 'Сам я всё равно продолжу писать: включена галка «писать в телегу всегда».'
-      : 'Молчу. Спросишь — отвечу: /tabs, /last, /usage и обычное сообщение в тему работают как всегда.';
+    : 'Молчу. Спросишь — отвечу: /tabs, /last, /usage и обычное сообщение в тему работают как всегда.';
   // Пропущенные итоги — самое нужное сразу после «я ушёл»: ходы кончались, пока ты шёл к
   // машине, а в чате о них ни строчки, потому что тебя здесь ещё «не было». Поэтому не
   // отдельной командой по желанию, а сразу и само.
@@ -3341,16 +3495,6 @@ ipcMain.handle('telegram:setDetail', (_e, raw) => {
   const detail = telegram.DETAILS.includes(raw) ? raw : 'short';
   TG.detail = detail;
   tgApplyPrompt();
-  try { tgSave(); } catch (e) { reportMainError(e); }
-  return tgState();
-});
-
-// Зеркалить итоги ВСЕГДА, а не только пока тебя нет за столом: для тех, кому телега — полный
-// журнал работы, а не связь на время отсутствия. Настройка, поэтому живёт на диске — в
-// отличие от выбора «где я» (см. tgPresence). Включена — «за компом» в том списке выбрать
-// нельзя: человек и так получает всё, и обещать ему тишину было бы неправдой.
-ipcMain.handle('telegram:setMirrorAll', (_e, on) => {
-  TG.mirrorAll = !!on;
   try { tgSave(); } catch (e) { reportMainError(e); }
   return tgState();
 });
