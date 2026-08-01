@@ -9,10 +9,10 @@ Swarm держит несколько сессий Claude Code в одном о�
 ## Скачать
 
 <!--DL-->
-**Последняя версия: 0.26.3** · [все релизы](https://github.com/raul-cortez/claude-swarm/releases)
+**Последняя версия: 0.27.0** · [все релизы](https://github.com/raul-cortez/claude-swarm/releases)
 
-- **macOS** (Apple Silicon): [`swarm-0.26.3-arm64.dmg`](https://github.com/raul-cortez/claude-swarm/releases/download/v0.26.3/swarm-0.26.3-arm64.dmg)
-- **Windows**: [`swarm-0.26.3-x64.exe`](https://github.com/raul-cortez/claude-swarm/releases/download/v0.26.3/swarm-0.26.3-x64.exe) — собирается в CI после тега
+- **macOS** (Apple Silicon): [`swarm-0.27.0-arm64.dmg`](https://github.com/raul-cortez/claude-swarm/releases/download/v0.27.0/swarm-0.27.0-arm64.dmg)
+- **Windows**: [`swarm-0.27.0-x64.exe`](https://github.com/raul-cortez/claude-swarm/releases/download/v0.27.0/swarm-0.27.0-x64.exe) — собирается в CI после тега
 <!--/DL-->
 
 Сборка для macOS подписана ad-hoc, поэтому первый запуск система блокирует. Снять карантин с перетащенного в «Программы» приложения:
