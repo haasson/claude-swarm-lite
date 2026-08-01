@@ -2826,6 +2826,14 @@ function axisOf() {
   return document.body.classList.contains('layout-top') ? 'x' : 'y';
 }
 
+// Что в ленте вкладок идёт ПОСЛЕ всех папок. Сейчас это кнопка «＋»: она не «в конце
+// списка», она часть списка и всегда его хвост. Возвращаем её как точку вставки, чтобы
+// «положить папку последней» значило «перед кнопкой», а не «после неё».
+// null (кнопки в ленте почему-то нет) insertBefore понимает как обычный append.
+function tailAnchor() {
+  return newTabBtn.parentNode === tabsEl ? newTabBtn : null;
+}
+
 // The element the dragged item should be inserted before (null => append).
 function dropBefore(els, x, y) {
   const axis = axisOf();
@@ -3587,8 +3595,11 @@ tabsEl.addEventListener('dragover', (e) => {
   if (!dragged) return;
   const others = [...tabsEl.children].filter((el) => el.dataset.cwd && el !== dragged);
   const before = dropBefore(others, e.clientX, e.clientY);
-  if (before) tabsEl.insertBefore(dragged, before);
-  else tabsEl.appendChild(dragged);
+  // Кнопка «＋» живёт в этой же ленте последним ребёнком (см. relayoutTabs), поэтому
+  // «за последнюю папку» — это НЕ конец ленты, а место перед кнопкой. Пока здесь стоял
+  // appendChild, папка уезжала за кнопку, и, перетащив так все папки по очереди, человек
+  // получал «＋» слева от всего списка — там, где он ничего не открывает, а мешает.
+  tabsEl.insertBefore(dragged, before || tailAnchor());
 });
 tabsEl.addEventListener('drop', (e) => {
   if (!drag || drag.kind !== 'unit') return;
