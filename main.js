@@ -958,7 +958,19 @@ function stealByInjected(id, d, taken) {
 // Здесь мы не угадываем, а смотрим: один `ps` на всё приложение, дети шеллов наших pty — это
 // ровно те команды («claude --resume …», «agent»). Что из этого считать агентом, решает
 // рендерер: список агентов ведёт он.
+//
+// НО про НАШ СОБСТВЕННЫЙ запуск смотреть нечего: вкладка и так знает, чем её запустили, а `ps`
+// показывает не имя команды, а то, во что её развернул шелл. Алиас `claude-my` (это
+// `CLAUDE_CONFIG_DIR=… command claude`, то есть другой аккаунт) виден в `ps` как обычный
+// `claude` — и вкладка молча переписывала себе команду запуска на «claude». Дальше это стоило
+// двух вещей: следующая вкладка в папке наследовала уже не тот алиас, а после перезапуска и
+// сама вкладка возвращалась чужим аккаунтом. Поэтому первый процесс, поднятый нашей же строкой
+// запуска, пропускаем — и сообщаем только о том, что человек запустил в шелле сам.
 const PROC_EVERY_MS = 5000;
+// Не верить первому потомку сразу после нашей строки: в ней есть `clear; `, и он тоже потомок —
+// просто живёт миллисекунды. Успеть попасть тиком ровно в него шанс мал, но цена — запомнить
+// вкладке «clear» вместо агента.
+const PROC_SETTLE_MS = 2000;
 
 function scanTabProcesses() {
   execFile('ps', ['-eo', 'pid=,ppid=,args='], { maxBuffer: 4 << 20 }, (err, out) => {
@@ -978,9 +990,18 @@ function scanTabProcesses() {
       // будет своими node-процессами, а нам нужно имя, которым его зовут.
       const run = (kids.get(shellPid) || [])[0];
       if (!run) continue;                // в шелле пусто — вкладка помнит прежнее
-      const word = path.basename((run.args.trim().split(/\s+/)[0] || ''));
       const d = det.get(id);
-      if (!word || !d || d.runCmd === word) continue;
+      if (!d) continue;
+      // Процесс нашего запуска узнаём по pid: он поднялся первым и никуда не девался. Всё, что
+      // человек запустит в этой вкладке потом (`agent`, `codex`), — это уже другой pid.
+      if (d.launchAt) {
+        if (Date.now() - d.launchAt < PROC_SETTLE_MS) continue;
+        if (d.launchPid == null) d.launchPid = run.pid;
+        if (d.launchPid === run.pid) continue;
+        d.launchAt = 0;                  // наш запуск отжил своё — дальше смотрим как обычно
+      }
+      const word = path.basename((run.args.trim().split(/\s+/)[0] || ''));
+      if (!word || d.runCmd === word) continue;
       d.runCmd = word;
       safeSend('session:proc', { id, cmd: word });
     }
@@ -3840,7 +3861,12 @@ ipcMain.handle('session:create', (_event, opts = {}) => {
   if (cmd) {
     setTimeout(() => {
       const p = sessions.get(id);
-      if (p) p.write(clearPrefix(shell) + cmd + '\r');
+      if (!p) return;
+      p.write(clearPrefix(shell) + cmd + '\r');
+      // С этой секунды в шелле крутится НАШ запуск (см. scanTabProcesses): чем он развернулся,
+      // вкладке знать незачем — она помнит команду, которую выбрал человек.
+      d0.launchAt = Date.now();
+      d0.launchPid = null;
     }, 350);
   }
 
