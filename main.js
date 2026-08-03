@@ -2293,10 +2293,12 @@ async function tgDeskHold(id, d, u, tagged) {
   const had = tgHeldFresh(d, Date.now());
   if (d) d.tgHeld = { text: tagged, at: Date.now(), threadId: u.threadId, messageId: u.messageId };
   tgLog(`  режим компа: в вкладку ${id} не пишу`
-    + (d ? `, держу ${had ? 'это вместо прежнего' : 'текст'} ${Math.round(TG_HELD_TTL_MS / 60000)} мин` : ''));
+    + (d ? `, держу ${had ? 'это вместо прежнего' : 'текст'} ${Math.round(TG_HELD_TTL_MS / 60000)} мин`
+      : ' и держать нечем — вкладки нет'));
+  const mins = Math.round(TG_HELD_TTL_MS / 60000);
   const held = d
-    ? `${had ? 'Держу последнее — прежнее отпустил' : 'Твоё сообщение держу'} и отправлю`
-      + ` «${name}» сразу, как включишь режим телефона (полчаса, дальше отпущу).`
+    ? `${had ? 'Держу последнее (прежнее забыл)' : 'Сообщение держу'} ${mins} мин: включишь`
+      + ` режим телефона — отправлю «${name}» сразу. Не включишь — забуду, напишешь заново.`
     : `Отправить «${name}» мне уже нечем — вкладки нет. Включи режим телефона и напиши снова.`;
   await tgSend({
     threadId: u.threadId, replyTo: u.messageId,
