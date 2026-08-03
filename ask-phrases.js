@@ -31,7 +31,13 @@ const DEFAULT_ASK_PHRASES = ['Сейчас от тебя'];
 // OPPOSITE — the agent says it needs nothing. So every phrase gets this tail check,
 // and a hit here cancels the call. Not user-editable: it's about Russian wording,
 // not about the marker, and getting it wrong would silently kill the signal.
-const NONE_TAIL = '\\s*[:.\\u2014-]*\\s*(?:ничего|жд[иёе]|ждать|ждите|подожди(?:те)?|дождись|дождитесь|не\\s+(?:нужно|требуется|надо))';
+//
+// Между фразой и словом «ничего» пропускаем и пробелы, и знаки, и РАЗМЕТКУ: агент выделяет
+// зов жирным, и в стенограмме это `**Сейчас от тебя:** ничего`. Экран такого не видел —
+// терминалу разметка достаётся уже разобранной, звёздочек в нём нет, — а стенограмма и хук
+// читают исходный текст, и на звёздочках проверка обрывалась: «ничего» переставало
+// находиться, и вкладка честного «мне ничего не нужно» красилась как «ждёт ответа».
+const NONE_TAIL = '[\\s:.\\u2014*_`~-]*(?:ничего|жд[иёе]|ждать|ждите|подожди(?:те)?|дождись|дождитесь|не\\s+(?:нужно|требуется|надо))';
 
 const MAX_PHRASES = 12;   // a sane ceiling; the regex is run on every tick
 const MAX_LEN = 60;       // one phrase, not a paragraph
