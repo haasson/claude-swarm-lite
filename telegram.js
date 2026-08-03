@@ -674,6 +674,16 @@ function retryAfterMs(body) {
 
 // How a failed call should be treated. Wrong token and «someone else is polling» are
 // terminal: retrying can't fix them and the user has to see them.
+// Отказ ИМЕННО из-за разметки. Нужен, чтобы мост мог переслать то же сообщение без неё:
+// разметка — украшение, а текст ответа агента — то, ради чего мост существует, и терять его
+// из-за одного кривого тэга нельзя. Telegram формулирует это по-разному от версии к версии
+// («can't parse entities: …», «Unsupported start tag», «Unmatched end tag»), поэтому смотрим
+// на все известные формулировки, а не на одну.
+function entityError(body) {
+  const desc = (body && body.description) || '';
+  return /can't parse entities|can't find end|unsupported start tag|unmatched end tag|unclosed/i.test(desc);
+}
+
 function classifyError(status, body) {
   const code = Number(status) || 0;
   const desc = (body && body.description) || '';
@@ -756,7 +766,7 @@ module.exports = {
   apiUrl, looksLikeToken, maskToken,
   pairCode, deepLink, pairingMatch,
   readUpdate, readService, readPhoto, mediaKind, mediaLabel, MEDIA_LABELS,
-  topicLink, escapeHtml,
+  topicLink, escapeHtml, entityError,
   senderLabel, routeMessage, chunkText, inlineKeyboard, buttonLabel, optionsList, BTN_MAX, callbackData, parseCallbackData, callbackTab, CB_MAX, backoffMs, retryAfterMs, classifyError,
   inputWrites, PASTE_ON, PASTE_OFF, ENTER, BACK_TAB, ESC, routeFailure,
   COMMANDS, QA_ACTIONS, HEADER_ACTIONS, actionData, parseAction, actionKeyboard,

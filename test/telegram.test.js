@@ -709,6 +709,19 @@ test('classifyError: a bad token and a rival poller are terminal, network is not
   assert.strictEqual(T.classifyError(429, {}).fatal, false);
 });
 
+// Отказ из-за разметки надо отличать от любого другого: на него мост переотправляет то же
+// сообщение без разметки (см. tgSend), а на «нет такого чата» переотправлять нечего и незачем.
+// Формулировок у телеги несколько, и промах здесь означает потерянный ответ агента.
+test('entityError узнаёт отказ именно про разметку', () => {
+  assert.strictEqual(T.entityError({ description: "Bad Request: can't parse entities: Unsupported start tag \"b\" at byte offset 10" }), true);
+  assert.strictEqual(T.entityError({ description: 'Bad Request: can\'t find end of the entity starting at byte offset 42' }), true);
+  assert.strictEqual(T.entityError({ description: 'Bad Request: Unmatched end tag at byte offset 7' }), true);
+  assert.strictEqual(T.entityError({ description: 'Bad Request: chat not found' }), false);
+  assert.strictEqual(T.entityError({ description: 'Bad Request: message thread not found' }), false);
+  assert.strictEqual(T.entityError({}), false);
+  assert.strictEqual(T.entityError(null), false);
+});
+
 // --- the poll loop -----------------------------------------------------------
 // A fake fetch replays scripted responses; `sleep` records what the loop asked to wait
 // instead of actually waiting, and stops the loop once the script runs out.

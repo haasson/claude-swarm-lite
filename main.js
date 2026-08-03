@@ -1180,6 +1180,8 @@ setInterval(() => {
 // part that has to touch Electron, the disk and the sessions.
 const telegram = require('./telegram');
 const voice = require('./voice');
+// Markdown агента → разметка телеги. Отдельным модулем и со своими тестами: см. md.js.
+const md = require('./md');
 const { execFile } = require('child_process');
 const qrcode = require('qrcode-generator');   // one file, no deps: the pairing QR
 
@@ -1411,18 +1413,34 @@ async function tgSend(opts) {
   const chatId = o.chatId != null ? o.chatId : TG.chatId;
   if (!TG.token || chatId == null) return null;
   let last = null;
+  // Режем ДО разметки, по исходному тексту: предел телеги — 4096 символов готового
+  // сообщения, а тэги в него не считаются, так что кусок исходника заведомо влезет.
   const parts = telegram.chunkText(o.text, telegram.MAX_TEXT);
   for (const part of parts) {
-    const body = { chat_id: chatId, text: part, disable_notification: !!o.silent };
-    // Разметка — только по явной просьбе, и просит её ровно одно место (/tabs со ссылками
-    // на темы). По умолчанию её нет намеренно: в ответе агента полно `<`, `_` и `*`, и
-    // любой parse_mode превратил бы его либо в отказ Telegram, либо в кашу из курсива.
+    // `rich` — текст агента: markdown в нём превращается в разметку телеги (см. md.js).
+    // Возвращаться к нему приходится дважды, поэтому исходный кусок держим рядом: если
+    // телега разметку не примет, тот же текст уйдёт без неё.
+    const rich = o.rich ? md.toHtml(part) : null;
+    const body = { chat_id: chatId, text: rich == null ? part : rich, disable_notification: !!o.silent };
+    // Разметка — по явной просьбе: `parseMode` там, где мы строим её сами (/tabs со
+    // ссылками на темы), `rich` — где её принёс агент. Без просьбы разметки нет: в чужом
+    // тексте полно `<`, и parse_mode превратил бы его в отказ Telegram.
     if (o.parseMode) body.parse_mode = o.parseMode;
+    else if (rich != null) body.parse_mode = 'HTML';
     if (o.threadId) body.message_thread_id = o.threadId;
     if (o.replyTo) body.reply_to_message_id = o.replyTo;
     // Buttons go on the LAST chunk: that's the one the answer hangs off.
     if (o.replyMarkup && part === parts[parts.length - 1]) body.reply_markup = o.replyMarkup;
     let res = await tgFetchWithRetry(telegram.apiUrl(TG.token, 'sendMessage'), body);
+    // Разметка не понравилась — отправляем тот же текст как есть. Ответ агента важнее его
+    // оформления: молчание в чате нельзя объяснить ничем, а звёздочки вместо жирного —
+    // можно. Один заход, и только на отказ ИМЕННО про разметку (telegram.entityError).
+    if (!res.ok && rich != null && !o.parseMode && telegram.entityError(res.body)) {
+      tgLog(`  ⚠ разметку телега не приняла (${(res.body && res.body.description) || ''}) — отправляю без неё`);
+      delete body.parse_mode;
+      body.text = part;
+      res = await tgFetchWithRetry(telegram.apiUrl(TG.token, 'sendMessage'), body);
+    }
     // The user deleted the topic we remembered. Don't swallow the message: forget the
     // mapping (a fresh topic gets made next time) and deliver this one to General.
     if (!res.ok && body.message_thread_id && /thread not found/i.test(
@@ -2548,13 +2566,29 @@ async function tgProgressTick() {
 
 setInterval(() => { tgProgressTick().catch(reportMainError); }, TG_PROGRESS_STEP_MS);
 
+// Переписать сообщение текстом агента — с разметкой и с тем же откатом, что у отправки: не
+// приняли разметку, значит идёт тот же текст как есть (см. tgSend). Правка — отдельный метод
+// API, поэтому и страховка нужна своя: без неё ответ, вписываемый в заготовку, терялся бы
+// целиком из-за одного кривого тэга.
+async function tgEditRich(chatId, messageId, text) {
+  const url = telegram.apiUrl(TG.token, 'editMessageText');
+  const plain = String(text);
+  const body = { chat_id: chatId, message_id: messageId, text: md.toHtml(plain), parse_mode: 'HTML' };
+  let res = await tgFetchJson(url, body);
+  if (!res.ok && telegram.entityError(res.body)) {
+    tgLog(`  ⚠ разметку в правке ${messageId} телега не приняла — вписываю без неё`);
+    res = await tgFetchJson(url, { chat_id: chatId, message_id: messageId, text: plain });
+  }
+  return res;
+}
+
 // Переписать заготовку. Не вышло (сообщение удалили, прошли сутки, чат сменился) — отправим
 // обычным сообщением: тишина вместо ответа хуже лишней записи в ленте.
 async function tgAckResolve(id, d, text) {
   const ack = d && d.tgAck;
   const body = String(text);
   if (!ack || ack.chatId !== TG.chatId) {
-    const msgId = await tgSend({ threadId: await tgTopicFor(id), text: body });
+    const msgId = await tgSend({ threadId: await tgTopicFor(id), text: body, rich: true });
     tgRemember(msgId, id);
     return;
   }
@@ -2565,18 +2599,17 @@ async function tgAckResolve(id, d, text) {
   if (body.length > telegram.MAX_TEXT - 64) {
     await tgFetchJson(telegram.apiUrl(TG.token, 'editMessageText'),
       { chat_id: ack.chatId, message_id: ack.messageId, text: '✅ ответил — ниже' });
-    const longId = await tgSend({ threadId: await tgTopicFor(id), text: body });
+    const longId = await tgSend({ threadId: await tgTopicFor(id), text: body, rich: true });
     tgRemember(longId, id);
     return;
   }
-  const res = await tgFetchJson(telegram.apiUrl(TG.token, 'editMessageText'),
-    { chat_id: ack.chatId, message_id: ack.messageId, text: body });
+  const res = await tgEditRich(ack.chatId, ack.messageId, body);
   if (res.ok && res.body && res.body.ok === true) {
     tgLog(`  → ответ вписан в сообщение ${ack.messageId}`);
     return;
   }
   tgLog(`  ✗ не смог переписать ${ack.messageId}: ${(res.body && res.body.description) || res.status}`);
-  const msgId = await tgSend({ threadId: await tgTopicFor(id), text: body });
+  const msgId = await tgSend({ threadId: await tgTopicFor(id), text: body, rich: true });
   tgRemember(msgId, id);
 }
 
@@ -2682,6 +2715,9 @@ async function tgNotifyWaiting(id, d) {
         text: `🔐 ${tgTabName(id)} просит разрешение\n\n${prompt.title.split(' · ').join('\n')}`
           + `\n\n${telegram.optionsList(prompt.options)}`,
         replyMarkup: kb,
+        // Текст запроса — это экран Клода: там и пути с подчёркиваниями, и команды с `<`.
+        // Разметку он несёт редко, а вот экранирование ему нужно всегда, и rich его даёт.
+        rich: true,
       });
       tgRemember(msgId, id);
       // Не приняли (сеть) — снимаем отметку с отколом, и такт попробует снова. Ставится она
@@ -2724,7 +2760,7 @@ async function tgNotifyWaiting(id, d) {
     if (!kb) { await tgAckResolve(id, d, full); return; }
     await tgAckResolve(id, d, `🔐 ${tgTabName(id)} держит диалог — что делать, ниже`);
   }
-  const msgId = await tgSend({ threadId, text: full, replyMarkup: kb });
+  const msgId = await tgSend({ threadId, text: full, replyMarkup: kb, rich: true });
   tgRemember(msgId, id);
   if (!msgId) tgNotifyFailed(d); else { d.tgFails = 0; d.tgRetryAt = 0; }
 }
@@ -3591,7 +3627,7 @@ async function tgLastWord(u) {
   tgLog(`  → последний ответ вкладки ${id} по команде: ${text.length} симв.`
     + ` (${fromTr ? 'стенограмма' : 'экран'})`);
   d.tgSentKey = fromTr ? `tr:${d.trReplyAt}` : `screen:${text}`;
-  await tgSend({ threadId: u.threadId,
+  await tgSend({ threadId: u.threadId, rich: true,
     text: `${working ? '⏳' : '✅'} ${tgTabName(id)}${working ? ' (ещё работает)' : ''}\n\n${text}` });
 }
 
