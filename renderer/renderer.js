@@ -3842,7 +3842,7 @@ document.getElementById('update-pill').addEventListener('click', openUpdateModal
 // Положение живёт в main и приезжает оттуда же, чем бы его ни поменяли — этим списком,
 // отвязкой группы в настройках или привязкой новой с телефона.
 const PRESENCE = [
-  { id: 'desk', icon: 'monitor', name: 'за компом', hint: 'телега молчит, вы и так всё видите' },
+  { id: 'desk', icon: 'monitor', name: 'за компом', hint: 'телега молчит и в вкладки не пишет' },
   { id: 'phone', icon: 'phone', name: 'за телефоном', hint: 'вопросы и итоги в телегу, мак не спит' },
 ];
 const presencePill = document.getElementById('presence-pill');
