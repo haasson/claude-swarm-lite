@@ -91,6 +91,9 @@
   <script src="./keybinds.js"></script>
   <!-- Claude session pin/resume helpers (window.SWARM_RESUME). -->
   <script src="./resume.js"></script>
+  <!-- «Это запуск агента?» + разворачивание алиасов (window.SWARM_LAUNCH).
+       Читает SWARM_RESUME, поэтому строго после resume.js. -->
+  <script src="./launch-word.js"></script>
   <!-- In-app log ring buffer (window.SWARM_LOGSTORE). Before renderer.js. -->
   <script src="./logstore.js"></script>
   <!-- Tab card style: density presets + pure helpers (window.SWARM_TABSTYLE). -->

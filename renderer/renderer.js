@@ -786,39 +786,29 @@ function sessionLaunchCommand({ cmd, flags, sessionKey, sessionId, resume } = {}
 // that cmd, so a restore relaunches the same alias/account. The global agent list
 // is now curated in Settings, so we no longer silently adopt a typed cmd as the
 // default for new tabs — that would mutate a user-managed list behind their back.
-// Match a known launcher STEM (not any word) so `ls`/`git commit` aren't mistaken
-// for a launch. `cursor-agent`/`agent` — это Cursor; одним словом в строке терминала
-// «agent» ничем другим и не бывает.
-const AGENT_CMD_RE = /^\s*(?:claude|cld|glm|deepseek|codex|gemini|aider|qwen|kimi|opencode|crush|amp|droid|cursor|cursor-agent|agent)[\w-]*(?:\s+--?[\w-]+(?:=\S+)?)*\s*$/i;
-// Хвост из одних флагов — чтобы «agent --resume» считалось запуском, а «agent smith» нет.
-const AGENT_FLAGS_RE = /^(?:\s+--?[\w-]+(?:=\S+)?)*\s*$/;
-
-// Команды из СПИСКА АГЕНТОВ пользователя (Настройки → Запуск) — тоже маркеры запуска, и
-// это главный из двух путей: список ведёт он сам, а зашитый набор имён неизбежно отстаёт
-// от того, чем человек пользуется.
 //
-// Из-за этого и появился баг: вкладку открыли Клодом, внутри неё сделали /clear и запустили
-// Cursor командой `agent`, а вкладка так и осталась записанной как claude — с прежним
-// разговором. После перезапуска она честно восстановила то, что помнила: Клода с
-// --resume вместо Cursor.
+// Разбор строки живёт в launch-word.js (свой модуль, свой тест — цена ошибки здесь
+// видна только после перезапуска, когда вкладка вернулась не тем аккаунтом).
+const LAUNCH_API = window.SWARM_LAUNCH;
+
 function launchWordFrom(line) {
-  const t = String(line || '').trim();
-  const word = t.split(/\s+/)[0] || '';
-  if (!word) return null;
-  const listed = launchList.some((a) => String((a && a.cmd) || '').trim() === word)
-    && AGENT_FLAGS_RE.test(t.slice(word.length));
-  return (listed || AGENT_CMD_RE.test(t)) ? word : null;
+  return LAUNCH_API.launchWordFrom(line, launchList);
 }
 
 // Главный путь: main говорит, ЧТО крутится в шелле вкладки прямо сейчас (session:proc), а
-// мы решаем, агент ли это. Надёжнее любых догадок по набранному: ловит и алиас, и запуск из
+// мы решаем, агент ли это. Надёжнее любых догадок по набранному: ловит и запуск из
 // скрипта, и смену агента внутри вкладки — то есть случай «открыли Клодом, потом запустили
 // Cursor командой agent», после которого вкладка возвращалась Клодом.
+//
+// Чего этот путь НЕ видит — обёртку: шелл разворачивает алиас до exec, и от `claude-my`
+// в процессах остаётся `claude`. Такое «уточнение» вкладке во вред (см. isAliasExpansion),
+// поэтому оно единственное, которое мы отклоняем.
 window.swarm.onTabProcess(({ id, cmd }) => {
   const word = launchWordFrom(cmd);
   if (!word) return;                    // ls, vim, npm — вкладка не про них
   const s = sessions.get(id);
   if (!s || s.blank || s.cmd === word) return;
+  if (LAUNCH_API.isAliasExpansion(s.cmd, word)) return;
   s.cmd = word;
   persistTabs();
 });
