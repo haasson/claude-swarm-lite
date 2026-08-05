@@ -132,8 +132,10 @@ function fmtTok(n) {
 // --- the same numbers as DATA, for the Telegram bridge ------------------------
 // The line above is for the eye; the bridge has to ANSWER with these numbers when
 // somebody asks «/usage» from a phone. Re-reading them off the rendered line would be
-// the wrong source: it rounds, it hides the reset countdown below LIMIT_TIGHT to save
-// width, and the app only sees it at all when the tab happens to be on screen.
+// the wrong source: it rounds, and it hides the reset countdown below LIMIT_TIGHT to
+// save width. (Reading it is not the problem — the app keeps its own invisible copy of
+// every tab's terminal, so it sees the line whether or not you're looking at that tab.
+// The problem is that a rendered line is all it would have: rounded, countdown hidden.)
 //
 // So the statusline also drops the raw numbers beside itself as JSON, one file per
 // session, and main reads them (see readUsage). Same trick as the hook's
