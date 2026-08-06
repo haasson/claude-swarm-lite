@@ -452,6 +452,41 @@ const COMMANDS = [
   { command: 'help', description: 'что я умею' },
 ];
 
+// --- команды самого Клода ------------------------------------------------------
+// Свои команды у моста наперечёт — всё остальное со слэшем принадлежит Клоду, и мост тут не
+// исполнитель, а пальцы: печатает строку в живую вкладку и жмёт Enter. Для Claude Code это
+// неотличимо от набора за клавиатурой, поэтому с телефона работает и /clear, и /compact, и
+// личная команда из ~/.claude/commands, о существовании которой мост знать не может.
+//
+// Значит этот список обязан быть ПОЛНЫМ: своя команда, забытая в нём, уедет в вкладку и
+// откроется там меню Клода вместо того, что человек просил.
+const OWN_COMMANDS = new Set(COMMANDS.map((c) => c.command).concat(['start']));
+
+function isOwnCommand(name) { return OWN_COMMANDS.has(String(name == null ? '' : name).toLowerCase()); }
+
+// Три штуки в меню у поля ввода — те, за которыми с телефона тянутся чаще всего. Остальные
+// пробрасываются и без меню: список здесь для одного касания, а не для разрешения.
+const CLAUDE_COMMANDS = [
+  { command: 'clear', description: 'Клоду: стереть разговор вкладки и начать с чистого' },
+  { command: 'compact', description: 'Клоду: сжать контекст (можно сказать, что сохранить)' },
+  { command: 'context', description: 'Клоду: чем занят контекст' },
+];
+
+const MENU_COMMANDS = COMMANDS.concat(CLAUDE_COMMANDS);
+
+// Строка, которую напечатаем в вкладку. Собирается ЗАНОВО, а не берётся текстом сообщения:
+// в группе Telegram дописывает к команде из меню «@имя_бота» («/clear@swarm_bot»), и такую
+// строку Claude Code командой уже не считает.
+//
+// Пометка «[из телеги]» к ней не приписывается, в отличие от прозы (см. tagInput): строка
+// обязана начинаться со слэша, иначе это не команда, а слова о команде.
+function claudeLine(u) {
+  const name = String((u && u.command) || '').toLowerCase();
+  if (!name) return '';
+  const args = String((u && u.args) || '').trim();
+  return args ? `/${name} ${args}` : `/${name}`;
+}
+
 // Кнопки под шапкой темы. ПРЕФИКС ДРУГОЙ, чем у разрешений («p»), и это главное здесь:
 // разбор строго раздельный, поэтому нажатие быстрой кнопки не может быть истолковано как
 // выбор варианта в диалоге разрешения — там номер печатается в живую сессию, и спутать эти
@@ -486,6 +521,12 @@ const QA_ACTIONS = {
   // которая эту дверь и открывает: набирать /phone руками, чтобы отправить то, что уже
   // написано, — работа, придуманная приложением для человека.
   phone: '📱 включить режим телефона',
+  // Подтверждение /clear. Стереть разговор — необратимо, а слэш с телефона слишком легко
+  // нажать промахом по меню у поля ввода: там команды идут списком в один палец шириной, и
+  // «/clear» стоит рядом с «/comp». Поэтому команда сама ничего не стирает — она спрашивает,
+  // а стирает вот эта кнопка. Живёт она недолго (см. TG_CLEAR_TTL_MS в main.js): кнопка из
+  // вчерашней ленты не должна доставать до сегодняшнего разговора.
+  clear: '🧹 да, стереть разговор',
   // Две последние — только для сообщения «тему закрыли, а вкладка жива» (см. main.js).
   // В шапку темы они не попадают: там свой список, HEADER_ACTIONS.
   reopen: '↩️ вернуть тему',
@@ -769,6 +810,7 @@ module.exports = {
   topicLink, escapeHtml, entityError,
   senderLabel, routeMessage, chunkText, inlineKeyboard, buttonLabel, optionsList, BTN_MAX, callbackData, parseCallbackData, callbackTab, CB_MAX, backoffMs, retryAfterMs, classifyError,
   inputWrites, PASTE_ON, PASTE_OFF, ENTER, BACK_TAB, ESC, routeFailure,
-  COMMANDS, QA_ACTIONS, HEADER_ACTIONS, actionData, parseAction, actionKeyboard,
+  COMMANDS, CLAUDE_COMMANDS, MENU_COMMANDS, isOwnCommand, claudeLine,
+  QA_ACTIONS, HEADER_ACTIONS, actionData, parseAction, actionKeyboard,
   createPoller,
 };

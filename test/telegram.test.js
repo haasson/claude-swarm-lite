@@ -494,12 +494,55 @@ test('в меню бота есть «где я» и «последний отв
 });
 
 test('список команд для меню бота непустой и с описаниями', () => {
-  assert.ok(T.COMMANDS.length >= 4);
-  for (const c of T.COMMANDS) {
+  assert.ok(T.MENU_COMMANDS.length >= 4);
+  for (const c of T.MENU_COMMANDS) {
     assert.match(c.command, /^[a-z]+$/, 'Telegram принимает только латиницу в имени команды');
     assert.ok(c.description && c.description.length > 5, c.command + ': нужно описание');
     assert.ok(c.description.length <= 256);
   }
+});
+
+// --- команды самого Клода ------------------------------------------------------
+// Развилка одна и она здесь: своя команда исполняется мостом, чужая печатается в вкладку.
+// Ошибка в любую сторону громкая — «/clear» уедет агенту прозой либо «/tabs» откроет в
+// вкладке меню Клода вместо списка вкладок.
+
+test('свои команды мост забирает себе, остальные — Клоду', () => {
+  for (const c of T.COMMANDS) assert.strictEqual(T.isOwnCommand(c.command), true, '/' + c.command);
+  assert.strictEqual(T.isOwnCommand('start'), true, 'привязка чата тоже наша');
+  for (const c of ['clear', 'compact', 'model', 'agents', 'resume', 'review']) {
+    assert.strictEqual(T.isOwnCommand(c), false, '/' + c + ' — команда Клода');
+  }
+});
+
+// Telegram дописывает «@имя_бота» к команде, выбранной в меню группы. Строка с хвостом
+// командой уже не считается — в вкладку должно уйти голое «/clear».
+test('claudeLine собирает строку заново, без хвоста @бота', () => {
+  assert.strictEqual(T.claudeLine({ command: 'clear', args: '' }), '/clear');
+  assert.strictEqual(T.claudeLine({ command: 'compact', args: 'итоги по багу' }),
+    '/compact итоги по багу');
+  assert.strictEqual(T.claudeLine(T.readUpdate({
+    update_id: 1,
+    message: { message_id: 2, chat: { id: 5 }, from: { id: 7 }, text: '/clear@swarm_bot' },
+  })), '/clear');
+  assert.strictEqual(T.claudeLine({ command: '', args: 'x' }), '', 'нет команды — нечего печатать');
+});
+
+// Путь к «стереть» обязан идти через кнопку: своей команды у моста нет, а слэш в меню у поля
+// ввода нажимается пальцем мимо соседнего.
+test('у подтверждения /clear есть своя кнопка и она называет цену', () => {
+  const flat = T.actionKeyboard('4', ['clear']).inline_keyboard.flat();
+  assert.strictEqual(flat.length, 1);
+  assert.deepStrictEqual(T.parseAction(flat[0].callback_data), { tab: '4', action: 'clear' });
+  assert.match(T.QA_ACTIONS.clear, /стереть/i);
+});
+
+// В шапке темы её быть не должно — по той же причине, что и у «закрыть вкладку»: панель
+// висит там всегда, и промах пальцем стоил бы всего разговора.
+test('«стереть разговор» не попадает в постоянную панель темы', () => {
+  assert.ok(!T.HEADER_ACTIONS.includes('clear'));
+  assert.ok(!T.actionKeyboard('4').inline_keyboard.flat()
+    .some((b) => /стереть/i.test(b.text)));
 });
 
 // --- живое «думаю…» -----------------------------------------------------------
