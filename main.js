@@ -4438,9 +4438,17 @@ ipcMain.on('shell:openExternal', (_event, url) => {
 
 // --- IPC: auto-update ---------------------------------------------------------
 ipcMain.handle('app:version', () => app.getVersion());
+// Обрыв связи — не ошибка приложения: проверка идёт по таймеру и в фоне, а гитхаб
+// бывает недоступен ровно потому, что интернета нет. Раньше такой таймаут падал в «Логи
+// ошибок» стеком из updater.js и выглядел как поломка. Отвечаем 'offline' — вызывающая
+// сторона сама решит, промолчать (фон) или сказать вслух (проверка по кнопке).
 ipcMain.handle('update:check', async () => {
   try { return await updater.checkForUpdate(); }
-  catch (e) { reportMainError(e); return { kind: 'none' }; }
+  catch (e) {
+    if (updater.isNetworkError(e)) return { kind: 'offline' };
+    reportMainError(e);
+    return { kind: 'none' };
+  }
 });
 ipcMain.handle('update:apply', async (_e, { url, sha256 }) => {
   try {

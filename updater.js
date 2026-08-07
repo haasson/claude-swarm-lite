@@ -359,6 +359,7 @@ function maybeRelocate() {
 
 module.exports = {
   checkForUpdate,
+  isNetworkError: core.isNetworkError,
   applyAsar,
   downloadInstaller,
   maybeRelocate,

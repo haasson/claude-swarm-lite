@@ -85,7 +85,24 @@ function decideUpdate(installedVersion, installedRuntimeId, manifest) {
   return { kind, version: m.version, notes: m.notes, asar: m.asar, installers: m.installers };
 }
 
+// «Не дозвонились» против «что-то сломано». Проверка обновлений ходит в сеть по
+// таймеру, в том числе когда ноутбук только проснулся или вайфая нет вовсе, — и такой
+// обрыв не событие для человека: следующая проверка пройдёт сама. А вот битый манифест
+// или HTTP 404 на ассете — наша поломка, её надо показать в логе ошибок.
+//
+// Различаем по тому, дошли ли мы до ответа: коды сокета и наш собственный 'timeout'
+// (см. req.setTimeout в updater.js) — сеть; всё остальное — нет.
+const NET_CODES = new Set([
+  'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED',
+  'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH', 'ENETDOWN', 'EPIPE', 'EPROTO',
+]);
+function isNetworkError(err) {
+  if (!err) return false;
+  if (err.code && NET_CODES.has(String(err.code))) return true;
+  return String(err.message || err) === 'timeout';
+}
+
 module.exports = {
   compareVersions, computeRuntimeId, validateManifest, decideUpdate, nextHop, MAX_REDIRECTS,
-  ghSlug,
+  ghSlug, isNetworkError,
 };

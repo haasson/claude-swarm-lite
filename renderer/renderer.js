@@ -2342,7 +2342,10 @@ function showSettingsModal(tab) {
     updGoBtn.hidden = true;
     updStatus.textContent = 'Проверяю…';
     const res = await checkForUpdate(false);
-    if (res && res.kind !== 'none') {
+    if (res && res.kind === 'offline') {
+      updStatus.textContent = 'Не удалось проверить — нет связи.';
+      syncUpdGoBtn(updateState); // про уже найденное обновление, если оно было, не забываем
+    } else if (res && res.kind !== 'none') {
       updStatus.textContent = 'Доступно обновление ' + res.version;
       syncUpdGoBtn(res);
     } else {
@@ -3654,7 +3657,14 @@ function renderUpdatePill() {
 
 async function checkForUpdate(manual) {
   let res = null;
-  try { res = await window.swarm.updateCheck(); } catch (_) { res = { kind: 'none' }; }
+  try { res = await window.swarm.updateCheck(); } catch (_) { res = { kind: 'offline' }; }
+  // Связи не было — мы ничего не узнали. Ни плашку не трогаем (обновление, про которое
+  // уже знали, никуда не делось), ни отметку о проверке (иначе следующая попытка
+  // отложится на весь период опроса). Молчим, если проверку никто не просил.
+  if (res && res.kind === 'offline') {
+    if (manual) confirmModalInfo('Не удалось проверить обновления — нет связи. Попробую ещё раз позже.');
+    return res;
+  }
   localStorage.setItem('swarm.update.lastCheck', String(Date.now()));
   if (res && res.kind !== 'none') {
     const prev = updateState && updateState.kind !== 'none' ? updateState.version : '';
@@ -3697,7 +3707,11 @@ async function openUpdateModal() {
   if (document.querySelector('.modal-overlay .modal.update')) return;
   // Always re-fetch so the pill/modal track latest, not a stale check.
   let res = null;
-  try { res = await window.swarm.updateCheck(); } catch (_) { res = { kind: 'none' }; }
+  try { res = await window.swarm.updateCheck(); } catch (_) { res = { kind: 'offline' }; }
+  if (res && res.kind === 'offline') {
+    confirmModalInfo('Не удалось проверить обновления — нет связи. Попробую ещё раз позже.');
+    return;
+  }
   localStorage.setItem('swarm.update.lastCheck', String(Date.now()));
   if (!res || res.kind === 'none') {
     updateState = res;
@@ -3743,7 +3757,10 @@ async function openUpdateModal() {
     let fresh = st;
     try {
       const latest = await window.swarm.updateCheck();
-      if (latest && latest.kind !== 'none') {
+      if (latest && latest.kind === 'offline') {
+        // Перепроверить не вышло — качаем то, про что уже знаем; если сети правда нет,
+        // об этом честно скажет сама загрузка.
+      } else if (latest && latest.kind !== 'none') {
         if (latest.version !== st.version) {
           confirmModalInfo('Пока решали — вышла ' + latest.version + '. Скачиваю её.');
         }

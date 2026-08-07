@@ -123,6 +123,16 @@ test('nextHop: прочие статусы — ошибка с кодом в т�
   assert.match(h.message, /404/);
 });
 
+test('isNetworkError: обрыв связи отделён от нашей поломки', () => {
+  const withCode = (code) => Object.assign(new Error('boom'), { code });
+  assert.strictEqual(core.isNetworkError(new Error('timeout')), true); // req.setTimeout в updater.js
+  assert.strictEqual(core.isNetworkError(withCode('ENOTFOUND')), true);
+  assert.strictEqual(core.isNetworkError(withCode('ECONNRESET')), true);
+  assert.strictEqual(core.isNetworkError(new Error('HTTP 404')), false); // нет манифеста в релизе
+  assert.strictEqual(core.isNetworkError(new Error('bad version')), false);
+  assert.strictEqual(core.isNetworkError(null), false);
+});
+
 (async () => {
   for (const [name, fn] of tests) {
     try { await fn(); passed++; console.log('  ok  ' + name); }
