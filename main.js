@@ -3951,6 +3951,17 @@ function createWindow() {
 
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
+  // Если загрузчик не смог запустить скачанное обновление и откатился на код из
+  // установленного приложения, человек должен об этом узнать: иначе он видит старую
+  // версию там, где ждал новую, и считает, что обновление просто не работает.
+  // Ждём готовности окна — до неё лог ошибок ещё некому принять (см. bootstrap.js).
+  win.webContents.once('did-finish-load', () => {
+    const boot = global.SWARM_BOOT;
+    if (boot && boot.kind === 'bundle' && /не запустилось/.test(boot.reason || '')) {
+      reportMainError(new Error(boot.reason));
+    }
+  });
+
   // Harden against accidental navigation. If a file is dropped anywhere on the
   // window that the renderer didn't preventDefault (e.g. onto the terminal/stage,
   // not the tab strip), Chromium navigates the webContents to that file:// URL and

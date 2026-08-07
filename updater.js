@@ -39,7 +39,10 @@ function consumeDeferredRelaunch() {
 // runtimeId. Absent in dev → updater is off. (Раньше здесь же лежал read-only токен
 // реестра — с публичными релизами качать можно без учётных данных вовсе.)
 function readBuildInfo() {
-  try { return JSON.parse(fs.readFileSync(path.join(app.getAppPath(), 'build-info.json'), 'utf8')); }
+  // От __dirname, а не от app.getAppPath(): сегодня это одно и то же, но когда код
+  // переедет из бандла в обновляемый файл рядом с настройками (см. boot-core.js),
+  // getAppPath() продолжит указывать на бандл и вернёт версию, которую не запускали.
+  try { return JSON.parse(fs.readFileSync(path.join(__dirname, 'build-info.json'), 'utf8')); }
   catch (_) { return null; }
 }
 function enabled() { return app.isPackaged && !!readBuildInfo(); }
