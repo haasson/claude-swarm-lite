@@ -138,7 +138,7 @@ const { DEFAULT_ASK_PHRASES, normalizePhrases, phraseSources, buildAskMatcher, a
 const { systemPromptRule } = require('./agent-rules');
 // Keeps our own flags from filling a fresh tab's screen: long values go through the
 // shell's environment, and a `clear` wipes the typed line. See launch-line.js.
-const { envPassing, clearPrefix } = require('./launch-line');
+const { envPassing, clearPrefix, tabEnv } = require('./launch-line');
 const statusline = require('./swarm-statusline');   // числа расхода + текст для /usage
 let STATUSLINE_COMMAND = null; // the provisioned statusline launcher command
 let HOOK_COMMAND = null;       // the provisioned hook launcher command
@@ -4160,8 +4160,9 @@ ipcMain.handle('session:create', (_event, opts = {}) => {
     rows: opts.rows || 24,
     cwd,
     // <-- inherits your Claude Code auth. Do not strip. Our own SWARM_* additions carry
-    // the flag values that would otherwise be echoed across half the screen.
-    env: { ...process.env, ...pass.env },
+    // the flag values that would otherwise be echoed across half the screen. Вычищаются
+    // только метки Клод-сессии, из которой запустили сам сворм: см. tabEnv.
+    env: { ...tabEnv(process.env), ...pass.env },
   });
 
   sessions.set(id, child);

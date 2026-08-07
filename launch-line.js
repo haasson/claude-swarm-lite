@@ -60,6 +60,38 @@ function envPassing(shellPath) {
   };
 }
 
+// Метки Клод-сессии, ЗАПУСТИВШЕЙ сам сворм. Их нельзя передавать вкладкам.
+//
+// Сворм отдаёт вкладке своё окружение целиком — так вкладка получает вашу авторизацию и
+// ваши настройки. Но если сворм запустили из сессии Клода (из терминала под агентом или
+// руками агента), в этом окружении лежат метки той сессии. Дальше начинается странное:
+//
+//   • CLAUDE_CODE_CHILD_SESSION заставляет Клода считать себя дочерней сессией и НЕ
+//     сохранять журнал. Журнал — главный источник статуса вкладки и дословного текста
+//     вопроса, так что вкладка тихо теряет цвет, уведомления и вопросы в телеграме.
+//     Видно это только по строчке «Transcript saving is off» в самой вкладке;
+//   • CLAUDE_CODE_SESSION_ID и CLAUDE_PID — это чужая сессия и чужой процесс.
+//
+// Стираем именно перечисленное, а не всё по префиксу CLAUDE_: CLAUDE_CONFIG_DIR задаёт
+// аккаунт (на нём держится алиас личного аккаунта), а ANTHROPIC_* — авторизация. Их
+// потерять нельзя. Оболочка вкладки логин-овая, поэтому всё, что человек прописал себе в
+// профиле, вернётся само.
+const INHERITED_SESSION_VARS = [
+  'CLAUDECODE',
+  'CLAUDE_CODE_ENTRYPOINT',
+  'CLAUDE_CODE_EXECPATH',
+  'CLAUDE_CODE_SESSION_ID',
+  'CLAUDE_CODE_CHILD_SESSION',
+  'CLAUDE_PID',
+  'CLAUDE_EFFORT',
+];
+
+function tabEnv(parentEnv) {
+  const env = Object.assign({}, parentEnv || {});
+  for (const name of INHERITED_SESSION_VARS) delete env[name];
+  return env;
+}
+
 // Run `clear` before the command. On an xterm `clear` also drops the scrollback
 // (ESC[3J), so scrolling up in a fresh tab shows the conversation and nothing else.
 // cmd.exe has its own name for it and its own separator; every other shell we can land
@@ -70,4 +102,4 @@ function clearPrefix(shellPath) {
   return shellFamily(shellPath) === 'cmd' ? 'cls&' : 'clear; ';
 }
 
-module.exports = { shellFamily, envPassing, clearPrefix };
+module.exports = { shellFamily, envPassing, clearPrefix, tabEnv, INHERITED_SESSION_VARS };

@@ -73,6 +73,36 @@ test('the screen wipe speaks each shell own way and still runs the command', () 
   }
 });
 
+test('tabEnv стирает метки Клод-сессии, запустившей сворм', () => {
+  const parent = {
+    PATH: '/usr/bin',
+    CLAUDE_CODE_CHILD_SESSION: '1',      // из-за неё Клод не пишет журнал
+    CLAUDE_CODE_SESSION_ID: 'abc',
+    CLAUDECODE: '1',
+    CLAUDE_PID: '123',
+  };
+  const env = LL.tabEnv(parent);
+  for (const k of ['CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_SESSION_ID', 'CLAUDECODE', 'CLAUDE_PID']) {
+    assert.ok(!(k in env), k + ' должна быть стёрта');
+  }
+  assert.strictEqual(env.PATH, '/usr/bin');
+  // Родительское окружение не трогаем: process.env принадлежит не нам.
+  assert.strictEqual(parent.CLAUDE_CODE_CHILD_SESSION, '1');
+});
+
+test('tabEnv не трогает авторизацию и выбор аккаунта', () => {
+  const env = LL.tabEnv({
+    CLAUDE_CONFIG_DIR: '/Users/x/.claude-my',   // на этом держится алиас личного аккаунта
+    ANTHROPIC_API_KEY: 'sk-xxx',
+    ANTHROPIC_BASE_URL: 'https://example',
+    SHELL: '/bin/zsh',
+  });
+  assert.strictEqual(env.CLAUDE_CONFIG_DIR, '/Users/x/.claude-my');
+  assert.strictEqual(env.ANTHROPIC_API_KEY, 'sk-xxx');
+  assert.strictEqual(env.ANTHROPIC_BASE_URL, 'https://example');
+  assert.strictEqual(env.SHELL, '/bin/zsh');
+});
+
 for (const [name, fn] of tests) {
   try { fn(); passed++; }
   catch (e) { console.error('FAIL: ' + name + '\n  ' + e.message); process.exitCode = 1; }
