@@ -21,10 +21,16 @@ const { compareVersions } = require('./updater-core');
 const PAYLOAD_DIR = 'payload';
 // Указатель: { version, file } — какой файл считать актуальным.
 const POINTER = 'current.json';
-// Метка попытки: { version }. Пишется перед загрузкой обновлённого кода и снимается,
-// когда приложение доживает до рабочего состояния. Осталась на месте — значит прошлый
-// запуск этой версии не дошёл до окна, и второй раз наступать на те же грабли незачем.
+// Метка попыток: { version, attempts }. Растёт перед каждой загрузкой обновлённого кода
+// и обнуляется, когда приложение дожило до рабочего состояния.
 const MARKER = 'loading.json';
+// Со скольких подряд неудачных попыток версия считается негодной.
+//
+// Не с одной: приложение выходит сразу после старта не только падая. Вторая копия сворма
+// закрывается сама (одна копия на машину, см. main.js), и она не успевает снять метку —
+// а по одной попытке это было бы неотличимо от падения, и исправное обновление
+// выбрасывалось бы после того, как человек случайно кликнул по иконке дважды.
+const ATTEMPT_LIMIT = 3;
 
 // Имя файла и есть имя файла: указатель не должен уметь увести загрузку из своей папки.
 function safeName(name) {
@@ -49,14 +55,42 @@ function decideBoot(state) {
   if (compareVersions(p.version, bundleVersion) <= 0) {
     return { kind: 'bundle', reason: 'в бандле версия не старее' };
   }
-  if (marker && marker.version === p.version) {
+  if (marker && marker.version === p.version && attemptsOf(marker) >= ATTEMPT_LIMIT) {
     return {
       kind: 'bundle',
-      reason: 'прошлый запуск этой версии не дошёл до окна',
+      reason: `эта версия ${ATTEMPT_LIMIT} раза подряд не дошла до рабочего состояния`,
       bad: p.file,
     };
   }
-  return { kind: 'payload', file: p.file, version: p.version };
+  return { kind: 'payload', file: p.file, version: p.version, attempt: nextAttempt(marker, p.version) };
 }
 
-module.exports = { decideBoot, safeName, PAYLOAD_DIR, POINTER, MARKER };
+function attemptsOf(marker) {
+  const n = marker && Number(marker.attempts);
+  return Number.isFinite(n) && n > 0 ? n : 1;   // метка без счётчика — одна попытка
+}
+
+// Какой по счёту будет попытка, которую мы сейчас предпримем.
+function nextAttempt(marker, version) {
+  if (!marker || marker.version !== version) return 1;
+  return attemptsOf(marker) + 1;
+}
+
+// Что в папке обновлений лишнее — при том, что запускаем мы `keep` (или ничего, если
+// идём из бандла). Прошлые версии не нужны: запасной вариант всегда есть в самом
+// приложении, и держать рядом ещё по пять мегабайт на каждую былую версию незачем.
+// Недокачанные .part — тем более мусор.
+//
+// Файлы .broken не трогаем: это улика. Их появление означает, что обновление не
+// запустилось, и по нему потом можно понять почему.
+function stalePayloads(names, keep) {
+  return (names || []).filter((n) => {
+    if (n === keep) return false;
+    return n.endsWith('.asar') || n.endsWith('.asar.part');
+  });
+}
+
+module.exports = {
+  decideBoot, safeName, stalePayloads,
+  PAYLOAD_DIR, POINTER, MARKER, ATTEMPT_LIMIT,
+};

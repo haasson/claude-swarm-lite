@@ -227,7 +227,7 @@ contextBridge.exposeInMainWorld('swarm', {
   // --- auto-update ---
   getVersion: () => ipcRenderer.invoke('app:version'),
   updateCheck: () => ipcRenderer.invoke('update:check'),
-  updateApply: (url, sha256) => ipcRenderer.invoke('update:apply', { url, sha256 }),
+  updateApply: (url, sha256, version) => ipcRenderer.invoke('update:apply', { url, sha256, version }),
   updateDownloadInstaller: (url, filename) => ipcRenderer.invoke('update:installer', { url, filename }),
   updateRelaunch: () => ipcRenderer.send('update:relaunch'),
   onUpdateProgress: (cb) => {

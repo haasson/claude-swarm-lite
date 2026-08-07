@@ -43,15 +43,33 @@ function boot() {
   // Что бы ни случилось дальше, main.js увидит это в global и покажет в логе ошибок.
   global.SWARM_BOOT = { kind: 'bundle', version: null, reason: d.reason || '' };
 
+  // Прошлые версии убираем ДО загрузки: сейчас они точно никем не заняты (на винде это
+  // единственный момент, когда файл предыдущей версии не открыт работающим приложением).
+  try {
+    for (const name of core.stalePayloads(fs.readdirSync(root), d.kind === 'payload' ? d.file : null)) {
+      try { fs.unlinkSync(path.join(root, name)); } catch (_) {}
+    }
+  } catch (_) { /* папки нет — обновлений и не было */ }
+
   if (d.kind === 'payload') {
     const file = path.join(root, d.file);
     try {
-      // Метка ставится ДО загрузки: если код обновления окажется битым и приложение
-      // умрёт по дороге, снять её будет некому — и следующий запуск пойдёт из бандла.
-      fs.writeFileSync(markerPath, JSON.stringify({ version: d.version }));
-      require(path.join(file, 'main.js'));
+      // Счётчик попыток растёт ДО загрузки: если код обновления окажется битым и
+      // приложение умрёт по дороге, обнулить его будет некому. Несколько неудач подряд —
+      // и следующий запуск уйдёт в бандл (см. ATTEMPT_LIMIT в boot-core).
+      fs.writeFileSync(markerPath, JSON.stringify({ version: d.version, attempts: d.attempt }));
+      // Ставим ДО require: загруженный код читает это на старте, и он должен видеть
+      // правду о том, откуда его запустили.
       global.SWARM_BOOT = { kind: 'payload', version: d.version, reason: '' };
-      watchStartup(markerPath);
+      const stopWatch = watchStartup(markerPath);
+      try {
+        require(path.join(file, 'main.js'));
+      } catch (e) {
+        // Откатываемся на бандл — и слежение надо отменить. Иначе удачный запуск бандла
+        // обнулит счётчик попыток, и битое обновление будет пробоваться заново вечно.
+        stopWatch();
+        throw e;
+      }
       return;
     } catch (e) {
       // Обновление не завелось — метка остаётся, и следующий запуск уйдёт в бандл сам.
@@ -67,16 +85,22 @@ function boot() {
   require('./main.js');
 }
 
-// Метку снимаем, когда стало ясно, что запуск удался: приложение поднялось и прожило
-// несколько секунд после готовности. И отдельно — при обычном выходе: вторая копия
-// сворма закрывается сама сразу после старта (см. одиночную блокировку в main.js), и
-// без этого её мирный выход выглядел бы как падение.
+// Счётчик попыток обнуляем, когда стало ясно, что запуск удался: приложение поднялось и
+// прожило несколько секунд после готовности. Второй сигнал — обычный выход: вторая копия
+// сворма закрывается сама сразу после старта (см. одиночную блокировку в main.js). На
+// него полагаться нельзя (при выходе до готовности события может и не быть — так это
+// выглядело на проверке), поэтому он не единственный, а страховка сверху к счётчику.
 function watchStartup(markerPath) {
-  const clear = () => { try { fs.unlinkSync(markerPath); } catch (_) {} };
+  let cancelled = false;
+  const clear = () => {
+    if (cancelled) return;
+    try { fs.unlinkSync(markerPath); } catch (_) {}
+  };
   try {
     app.whenReady().then(() => setTimeout(clear, 8000).unref?.());
     app.on('quit', clear);
   } catch (_) {}
+  return () => { cancelled = true; };
 }
 
 boot();

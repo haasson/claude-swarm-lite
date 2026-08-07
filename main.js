@@ -4454,7 +4454,8 @@ ipcMain.on('shell:openExternal', (_event, url) => {
 });
 
 // --- IPC: auto-update ---------------------------------------------------------
-ipcMain.handle('app:version', () => app.getVersion());
+// Версия ВЫПОЛНЯЕМОГО кода, а не бандла: после обновления они расходятся (updater.js).
+ipcMain.handle('app:version', () => updater.runningVersion());
 // Обрыв связи — не ошибка приложения: проверка идёт по таймеру и в фоне, а гитхаб
 // бывает недоступен ровно потому, что интернета нет. Раньше такой таймаут падал в «Логи
 // ошибок» стеком из updater.js и выглядел как поломка. Отвечаем 'offline' — вызывающая
@@ -4467,9 +4468,9 @@ ipcMain.handle('update:check', async () => {
     return { kind: 'none' };
   }
 });
-ipcMain.handle('update:apply', async (_e, { url, sha256 }) => {
+ipcMain.handle('update:apply', async (_e, { url, sha256, version }) => {
   try {
-    const res = await updater.applyAsar(url, sha256, (pct) => safeSend('update:progress', pct));
+    const res = await updater.applyPayload({ url, sha256, version }, (pct) => safeSend('update:progress', pct));
     return res && typeof res === 'object' ? res : { ok: true };
   } catch (e) { reportMainError(e); return { ok: false, error: String(e && e.message || e) }; }
 });
@@ -4530,10 +4531,12 @@ ipcMain.on('settings:askPhrases', (_e, list) => {
 });
 
 ipcMain.on('update:relaunch', () => {
-  // Skip the "close app?" confirm so deferred asar-swap can exit cleanly.
+  // Skip the "close app?" confirm — уходим намеренно.
   allowClose = true;
-  // Deferred asar-swap (Windows / macOS): helper relaunches us after exit.
-  if (updater.consumeDeferredRelaunch()) { app.exit(0); return; }
+  // Обычный перезапуск на обеих системах: обновление лежит отдельным файлом в папке
+  // настроек, установленное приложение не тронуто, занятых файлов нет. Раньше здесь был
+  // выход без relaunch, потому что приложение поднимал внешний хелпер после подмены
+  // app.asar (см. историю updater.js).
   app.relaunch();
   app.exit(0);
 });

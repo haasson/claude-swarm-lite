@@ -6,8 +6,11 @@ const fs = require('fs');
 const os = require('os');
 const https = require('https');
 const crypto = require('crypto');
-const { execFileSync, spawn } = require('child_process');
+const { execFileSync } = require('child_process');
 const core = require('./updater-core');
+// Имена папки обновления и её служебных файлов — общие с загрузчиком, чтобы не
+// разъехались: одно место пишет, другое читает.
+const boot = require('./boot-core');
 
 // `releases/latest/download/…` сам разрешается в свежий релиз, поэтому отдельной
 // мутабельной точки входа (путь `apps/latest/` в реестре гитлаба) больше не нужно:
@@ -25,14 +28,15 @@ function manifestUrl() {
   return `https://github.com/${slug}/releases/latest/download/manifest.json`;
 }
 
-// After a deferred asar-swap (Windows / macOS), relaunch must NOT call
-// app.relaunch() — a helper script starts the app once this process has fully
-// exited and unlocked app.asar. See applyAsar / schedule*AsarSwap.
-let deferredRelaunch = false;
-function consumeDeferredRelaunch() {
-  const v = deferredRelaunch;
-  deferredRelaunch = false;
-  return v;
+// Версия, которая СЕЙЧАС выполняется.
+//
+// Не app.getVersion(): тот читает package.json из бандла, а бандл после переезда кода
+// наружу навсегда остаётся на версии, с которой приложение установили. По нему обновлялка
+// сравнивала бы манифест со старым числом и предлагала бы одно и то же обновление вечно.
+// __dirname ведёт туда, откуда нас на самом деле запустили (см. bootstrap.js).
+function runningVersion() {
+  try { return require('./package.json').version; }
+  catch (_) { return app.getVersion(); }
 }
 
 // build-info.json is bundled at the app root (inside app.asar); holds this build's
@@ -118,202 +122,47 @@ async function checkForUpdate() {
   const info = readBuildInfo();
   const buf = await httpGet(manifestUrl());
   const manifest = JSON.parse(buf.toString('utf8'));
-  return core.decideUpdate(app.getVersion(), info.runtimeId, manifest);
+  return core.decideUpdate(runningVersion(), info.runtimeId, manifest);
 }
 
-function resourcesAsarPath() { return path.join(process.resourcesPath, 'app.asar'); }
-
-function psLiteral(s) {
-  // Single-quoted PowerShell string; escape embedded single quotes by doubling.
-  return "'" + String(s).replace(/'/g, "''") + "'";
-}
-
-function shLiteral(s) {
-  // Single-quoted POSIX string; escape embedded single quotes as '\'' .
-  return "'" + String(s).replace(/'/g, "'\\''") + "'";
-}
-
-// On Windows the running Electron process locks app.asar, so rename fails with
-// EBUSY. Download the new file, then hand off to a PowerShell helper that waits
-// for our PID to exit, swaps files, and starts the exe again.
+// --- установка обновления ------------------------------------------------------
 //
-// Critical: Chromium puts children in a Job Object with KILL_ON_JOB_CLOSE.
-// `spawn(..., { detached: true })` does NOT break out of that job, so a plain
-// detached powershell dies the moment we `app.exit` — app closes, never
-// relaunches, version stays old. Launch via `cmd /c start "" /b ...` so the
-// helper is a job-breakaway process that outlives us.
+// Обновление НЕ трогает установленное приложение. Новый код кладётся отдельным файлом
+// в папку настроек, и переставляется указатель — дальше его подхватывает загрузчик
+// (bootstrap.js). Почему так, а не подменой app.asar внутри бандла, подробно написано
+// в boot-core.js; коротко: подмена ломала подпись, требовала переподписи на машине
+// пользователя, а с ней у приложения менялся отпечаток — и macOS заново спрашивала все
+// разрешения. На винде она же упиралась в заблокированный работающим приложением файл.
 //
-// UTF-8 BOM on the .ps1 so PowerShell 5.1 reads Cyrillic install paths.
-// Retries the rename: Chromium child processes can hold the lock after main exits.
-function scheduleWinAsarSwap({ asarPath, tmpPath, bakPath }) {
-  const exePath = process.execPath;
-  const pid = process.pid;
-  const logPath = path.join(os.tmpdir(), `swarm-update-${pid}.log`);
-  const ps1 = path.join(os.tmpdir(), `swarm-update-${pid}.ps1`);
-  const cmd = path.join(os.tmpdir(), `swarm-update-${pid}.cmd`);
-  const script = [
-    `$targetPid = ${pid}`,
-    `while (Get-Process -Id $targetPid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 400 }`,
-    `Start-Sleep -Milliseconds 1000`,
-    `$asar = ${psLiteral(asarPath)}`,
-    `$tmp  = ${psLiteral(tmpPath)}`,
-    `$bak  = ${psLiteral(bakPath)}`,
-    `$exe  = ${psLiteral(exePath)}`,
-    `$log  = ${psLiteral(logPath)}`,
-    `$cmd  = ${psLiteral(cmd)}`,
-    `$ok = $false`,
-    `$lastErr = ''`,
-    `for ($i = 0; $i -lt 120; $i++) {`,
-    `  try {`,
-    `    if (Test-Path -LiteralPath $bak) { Remove-Item -LiteralPath $bak -Force }`,
-    `    Move-Item -LiteralPath $asar -Destination $bak -Force`,
-    `    Move-Item -LiteralPath $tmp  -Destination $asar -Force`,
-    `    $ok = $true`,
-    `    break`,
-    `  } catch {`,
-    `    $lastErr = $_.Exception.Message`,
-    `    Start-Sleep -Milliseconds 500`,
-    `  }`,
-    `}`,
-    `try { ("ok=$ok err=$lastErr") | Out-File -FilePath $log -Encoding utf8 } catch {}`,
-    `if (-not $ok) {`,
-    `  try {`,
-    `    if (-not (Test-Path -LiteralPath $asar) -and (Test-Path -LiteralPath $bak)) {`,
-    `      Move-Item -LiteralPath $bak -Destination $asar -Force`,
-    `    }`,
-    `  } catch {}`,
-    `}`,
-    `Start-Process -FilePath $exe`,
-    `Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue`,
-    `Remove-Item -LiteralPath $cmd -Force -ErrorAction SilentlyContinue`,
-    '',
-  ].join('\r\n');
-  fs.writeFileSync(ps1, '\uFEFF' + script, 'utf8');
+// Отсюда исчезли: хелпер на PowerShell с обходом job object, шелл-скрипт с codesign,
+// резервная копия app.asar.bak и отложенный перезапуск. Запуск нового файла — обычный
+// app.relaunch(), потому что ничего занятого мы не трогаем.
+function payloadDir() { return path.join(app.getPath('userData'), boot.PAYLOAD_DIR); }
 
-  const psExe = path.join(
-    process.env.SystemRoot || 'C:\\Windows',
-    'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'
-  );
-  // Tiny trampoline: `start` creates a process outside Electron's job object.
-  // Always end with exit /b 0 — cmd's ERRORLEVEL is unrelated to whether PS
-  // actually started (and a failed self-del used to abort the whole update).
-  const bat = [
-    '@echo off',
-    `start "" /b "${psExe}" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "${ps1}"`,
-    'exit /b 0',
-    '',
-  ].join('\r\n');
-  fs.writeFileSync(cmd, bat, 'utf8');
-
-  return new Promise((resolve, reject) => {
-    // Fire the trampoline; resolve as soon as cmd has returned (or after a short
-    // grace if spawn is slow). Never fail the update on cmd's exit code — by the
-    // time start returns, the helper is already running and waiting for our exit.
-    let settled = false;
-    const done = () => { if (!settled) { settled = true; resolve(); } };
-    const child = spawn(
-      process.env.ComSpec || 'cmd.exe',
-      ['/d', '/c', cmd],
-      { stdio: 'ignore', windowsHide: true }
-    );
-    child.once('error', (err) => {
-      if (!settled) { settled = true; reject(err); }
-    });
-    child.once('exit', () => done());
-    setTimeout(done, 1500);
-  });
-}
-
-// On macOS, renaming app.asar under a live Electron process invalidates its
-// memory mapping and often SIGBUS's during quit — macOS then shows
-// "unexpectedly quit" even though relaunch succeeds. Defer the swap until
-// after a clean exit, same idea as Windows.
-// Имя бандла нигде не зашито, и это не случайность: у тех, кто установил приложение до
-// переименования в Swarm, оно так и осталось «Claude Swarm Lite.app» — подмена app.asar
-// меняет содержимое бандла, а не его имя. Поэтому путь всегда берётся от исполняемого
-// файла, а не собирается из имени продукта.
-function scheduleDarwinAsarSwap({ asarPath, tmpPath, bakPath }) {
-  const exePath = process.execPath;
-  const bundle = exePath.split('/Contents/')[0]; // .../Swarm.app
-  const pid = process.pid;
-  const scriptPath = path.join(os.tmpdir(), `swarm-update-${pid}.sh`);
-  const script = [
-    '#!/bin/sh',
-    `pid=${pid}`,
-    `asar=${shLiteral(asarPath)}`,
-    `tmp=${shLiteral(tmpPath)}`,
-    `bak=${shLiteral(bakPath)}`,
-    `bundle=${shLiteral(bundle)}`,
-    `exe=${shLiteral(exePath)}`,
-    `self=${shLiteral(scriptPath)}`,
-    'while kill -0 "$pid" 2>/dev/null; do sleep 0.4; done',
-    'sleep 1',
-    'rm -f "$bak"',
-    'if mv "$asar" "$bak" && mv "$tmp" "$asar"; then',
-    '  # Подпись бандла покрывает и Resources, поэтому подмена app.asar её ЛОМАЕТ:',
-    '  # `codesign --verify` после обновления говорил «a sealed resource is missing or',
-    '  # invalid». Для macOS это уже не наше приложение, а изменённое — отсюда и вопросы',
-    '  # про связку ключей при каждом старте, и повод для придирок Gatekeeper. Подписываем',
-    '  # заново тем же ad-hoc, что и сборка (build/afterPack.cjs).',
-    '  #',
-    '  # Только если есть инструменты разработчика: без них /usr/bin/codesign — заглушка,',
-    '  # которая показывает диалог «установите command line developer tools». Пугать этим',
-    '  # человека, который всего лишь обновил приложение, нельзя, поэтому тихо пропускаем.',
-    '  if /usr/bin/xcode-select -p >/dev/null 2>&1; then',
-    '    /usr/bin/codesign --force --deep --sign - "$bundle" >/dev/null 2>&1 || true',
-    '  fi',
-    'else',
-    '  # Best-effort restore if we moved asar away but failed to put the new one.',
-    '  if [ ! -e "$asar" ] && [ -e "$bak" ]; then mv "$bak" "$asar"; fi',
-    'fi',
-    'if [ -d "$bundle" ]; then',
-    '  /usr/bin/open "$bundle"',
-    'else',
-    '  "$exe" &',
-    'fi',
-    'rm -f "$self"',
-    '',
-  ].join('\n');
-  fs.writeFileSync(scriptPath, script, { mode: 0o755 });
-  return new Promise((resolve, reject) => {
-    const child = spawn('/bin/sh', [scriptPath], { detached: true, stdio: 'ignore' });
-    child.once('error', reject);
-    child.once('spawn', () => {
-      child.unref();
-      resolve();
-    });
-  });
-}
-
-// Download the new asar (verified), then swap it in with a .bak backup. Throws if
-// the app dir isn't writable or the hash mismatches → renderer offers the installer.
-// On Windows / macOS the swap is deferred until process exit (see schedule*AsarSwap);
-// caller must then exit without app.relaunch() so the helper can start us.
-async function applyAsar(asarUrl, sha256, onProgress) {
+// Скачать проверенный по sha256 файл, положить рядом с настройками и переставить
+// указатель. Указатель пишется ПОСЛЕДНИМ: пока его нет, недокачанного обновления как бы
+// и не существует, и прерванная на середине установка ничего не меняет.
+async function applyPayload({ url, sha256, version }, onProgress) {
   if (!enabled()) throw new Error('updater disabled');
-  const asarPath = resourcesAsarPath();
-  const dir = path.dirname(asarPath);
-  fs.accessSync(dir, fs.constants.W_OK); // throws if not writable
-  const tmp = path.join(dir, 'app.asar.new');
+  if (!/^\d+\.\d+\.\d+$/.test(String(version || ''))) {
+    throw new Error('в обновлении нет внятной версии: ' + version);
+  }
+  const dir = payloadDir();
+  fs.mkdirSync(dir, { recursive: true });
+
+  const name = `${version}.asar`;
+  const tmp = path.join(dir, name + '.part');
+  const dest = path.join(dir, name);
   try { fs.rmSync(tmp, { force: true }); } catch (_) {}
-  await download(asarUrl, tmp, sha256, onProgress);
-  const bak = path.join(dir, 'app.asar.bak');
+  // download сам сверяет sha256 и удаляет файл, если он не сошёлся.
+  await download(url, tmp, sha256, onProgress);
+  try { fs.rmSync(dest, { force: true }); } catch (_) {}
+  fs.renameSync(tmp, dest);
 
-  if (process.platform === 'win32') {
-    await scheduleWinAsarSwap({ asarPath, tmpPath: tmp, bakPath: bak });
-    deferredRelaunch = true;
-    return { ok: true, deferred: true };
-  }
-
-  if (process.platform === 'darwin') {
-    await scheduleDarwinAsarSwap({ asarPath, tmpPath: tmp, bakPath: bak });
-    deferredRelaunch = true;
-    return { ok: true, deferred: true };
-  }
-
-  try { fs.rmSync(bak, { force: true }); } catch (_) {}
-  fs.renameSync(asarPath, bak);   // keep old for manual rollback
-  fs.renameSync(tmp, asarPath);
+  fs.writeFileSync(path.join(dir, boot.POINTER), JSON.stringify({ version, file: name }));
+  // Метка неудачного запуска прошлой версии новой не мешает (она сверяется по версии),
+  // но и лежать ей теперь незачем.
+  try { fs.rmSync(path.join(dir, boot.MARKER), { force: true }); } catch (_) {}
   return { ok: true };
 }
 
@@ -325,16 +174,18 @@ async function downloadInstaller(url, filename, onProgress) {
   return { ok: true, path: dest };
 }
 
-// --- self-relocation (macOS): ensure the app lives somewhere user-writable so a
-// later asar-swap works. Returns true if it kicked off relocation (caller must NOT
-// open a window — we exit after copying).
-function isWritable(p) { try { fs.accessSync(p, fs.constants.W_OK); return true; } catch (_) { return false; } }
-
+// --- self-relocation (macOS): приложение, запущенное прямо из смонтированного dmg,
+// предлагает переехать в «Программы». Returns true if it kicked off relocation (caller
+// must NOT open a window — we exit after copying).
+//
+// Раньше сюда же приходили те, у кого папка приложения оказалась недоступна для записи:
+// без этого не работала подмена app.asar. Теперь обновление пишет только в папку
+// настроек, поэтому права на сам бандл никого не волнуют — остаётся единственный
+// настоящий повод, диск-образ. Он размонтируется, и приложение исчезнет вместе с ним.
 function maybeRelocate() {
   if (!app.isPackaged || process.platform !== 'darwin') return false;
   const bundle = app.getPath('exe').split('/Contents/')[0]; // .../Swarm.app
-  const fromDmg = bundle.startsWith('/Volumes/');
-  if (!fromDmg && isWritable(process.resourcesPath)) return false; // already fine
+  if (!bundle.startsWith('/Volumes/')) return false;
   const declinedFlag = path.join(app.getPath('userData'), 'relocate-declined');
   if (fs.existsSync(declinedFlag)) return false;
   const dest = path.join(os.homedir(), 'Applications', path.basename(bundle));
@@ -344,7 +195,7 @@ function maybeRelocate() {
     defaultId: 1, cancelId: 0,
     title: 'Установка',
     message: 'Переместить Claude Swarm в «Программы» (~/Applications)?',
-    detail: 'Нужно для обновлений по кнопке. Приложение перезапустится из новой папки.',
+    detail: 'Сейчас приложение запущено с диск-образа — он размонтируется, и приложение пропадёт. Оно перезапустится из новой папки.',
   });
   if (choice !== 1) { try { fs.writeFileSync(declinedFlag, '1'); } catch (_) {} return false; }
   try {
@@ -363,9 +214,9 @@ function maybeRelocate() {
 module.exports = {
   checkForUpdate,
   isNetworkError: core.isNetworkError,
-  applyAsar,
+  applyPayload,
   downloadInstaller,
   maybeRelocate,
   enabled,
-  consumeDeferredRelaunch,
+  runningVersion,
 };

@@ -42,18 +42,50 @@ test('указатель не уводит загрузку из своей па
   }
 });
 
-test('версия, уже уронившая запуск, второй раз не пробуется', () => {
-  const d = core.decideBoot(state({ pointer: pointer(), marker: { version: '0.31.0' } }));
-  assert.strictEqual(d.kind, 'bundle');
-  assert.strictEqual(d.bad, '0.31.0.asar');   // файл убирается с дороги
-  assert.match(d.reason, /не дошёл/);
+test('одна неудачная попытка версию не хоронит — так выходит вторая копия сворма', () => {
+  const d = core.decideBoot(state({ pointer: pointer(), marker: { version: '0.31.0', attempts: 1 } }));
+  assert.strictEqual(d.kind, 'payload');
+  assert.strictEqual(d.attempt, 2);           // считаем дальше
 });
 
-test('метка от другой версии не мешает новому обновлению', () => {
+test('после предела неудач подряд версия бракуется', () => {
+  const marker = { version: '0.31.0', attempts: core.ATTEMPT_LIMIT };
+  const d = core.decideBoot(state({ pointer: pointer(), marker }));
+  assert.strictEqual(d.kind, 'bundle');
+  assert.strictEqual(d.bad, '0.31.0.asar');   // файл убирается с дороги
+  assert.match(d.reason, /не дошла/);
+});
+
+test('счётчик попыток начинается заново для каждой версии', () => {
   // Прошлое обновление падало, следующее приехало с исправлением — оно должно поехать.
-  const d = core.decideBoot(state({ pointer: pointer({ version: '0.32.0', file: '0.32.0.asar' }), marker: { version: '0.31.0' } }));
+  const marker = { version: '0.31.0', attempts: 9 };
+  const d = core.decideBoot(state({ pointer: pointer({ version: '0.32.0', file: '0.32.0.asar' }), marker }));
   assert.strictEqual(d.kind, 'payload');
+  assert.strictEqual(d.attempt, 1);
   assert.strictEqual(d.bad, undefined);
+});
+
+test('метка без счётчика читается как одна попытка', () => {
+  // Файл от версии, которая писала метку без счётчика.
+  const d = core.decideBoot(state({ pointer: pointer(), marker: { version: '0.31.0' } }));
+  assert.strictEqual(d.kind, 'payload');
+  assert.strictEqual(d.attempt, 2);
+});
+
+test('в папке остаётся только запускаемая версия и улики', () => {
+  const names = ['0.30.0.asar', '0.31.0.asar', '0.31.0.asar.part', '0.29.0.asar.broken', 'current.json', 'loading.json'];
+  assert.deepStrictEqual(
+    core.stalePayloads(names, '0.31.0.asar').sort(),
+    ['0.30.0.asar', '0.31.0.asar.part']
+  );
+});
+
+test('идём из бандла — обновлений рядом держать незачем', () => {
+  const names = ['0.30.0.asar', '0.31.0.asar.part', '0.29.0.asar.broken', 'current.json'];
+  assert.deepStrictEqual(
+    core.stalePayloads(names, null).sort(),
+    ['0.30.0.asar', '0.31.0.asar.part']
+  );
 });
 
 test('safeName пропускает только простые имена', () => {

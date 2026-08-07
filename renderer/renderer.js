@@ -3800,7 +3800,7 @@ async function openUpdateModal() {
       const bar = overlay.querySelector('.upd-bar');
       prog.hidden = false;
       const off = window.swarm.onUpdateProgress((pct) => { bar.style.width = pct + '%'; });
-      const res = await window.swarm.updateApply(fresh.asar.url, fresh.asar.sha256);
+      const res = await window.swarm.updateApply(fresh.asar.url, fresh.asar.sha256, fresh.version);
       off();
       if (res && res.ok) {
         bar.style.width = '100%';
