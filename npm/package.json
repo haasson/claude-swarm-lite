@@ -1,0 +1,24 @@
+{
+  "name": "claude-swarm",
+  "version": "1.0.0",
+  "description": "Установщик Swarm — пульта для нескольких сессий Claude Code сразу.",
+  "bin": {
+    "claude-swarm": "bin/cli.mjs"
+  },
+  "type": "module",
+  "files": [
+    "bin/cli.mjs",
+    "install.sh",
+    "README.md"
+  ],
+  "scripts": {
+    "prepack": "cp ../scripts/install.sh ./install.sh"
+  },
+  "repository": "github:raul-cortez/claude-swarm",
+  "homepage": "https://github.com/raul-cortez/claude-swarm",
+  "keywords": ["claude", "claude-code", "swarm", "agents", "electron"],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}
