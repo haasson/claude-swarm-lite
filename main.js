@@ -146,6 +146,13 @@ let HOOK_COMMAND = null;       // the provisioned hook launcher command
 // user's saved pref on startup (settings:hooks) and rewrites swarm-settings.json.
 // Scoped to swarm sessions via --settings — never the user's global config.
 let HOOKS_ENABLED = false;
+// «Своя строка статуса Swarm» (Settings → Запуск). ON by default: she is where the context
+// bar on the card and the numbers behind /usage come from, and a fresh user has no way to
+// guess that. But she REPLACES the user's own statusLine in swarm tabs — --settings outranks
+// their config — and somebody's own line may carry things we know nothing about. So it's a
+// checkbox, not a fact of life: off, we stop writing the key, and with nothing left to say
+// we stop passing --settings at all (see writeSwarmSettings), leaving their line untouched.
+let STATUSLINE_ENABLED = true;
 // «Просить агента звать вас» — the launch-time rule (agent-rules.js) that teaches the
 // agent to ask through AskUserQuestion and to sign a prose question off with the
 // phrase. ON by default, unlike the hooks: without it the «ждёт ответа» status only
@@ -178,13 +185,21 @@ function provisionNodeLauncher(dir, srcName, base) {
   return `sh "${launcher}"`;
 }
 
-// (Re)write swarm-settings.json: always the statusline; the hooks block only when
-// the user opted in. Called at startup and whenever the hooks pref changes — new
-// Claude sessions read the flag at launch, so a change takes effect on the next one.
+// (Re)write swarm-settings.json: the statusline and the hooks block, each only when the
+// user left it on. Called at startup and whenever either pref changes — new Claude sessions
+// read the file at launch, so a change takes effect on the next one.
+//
+// With both off the file has nothing to say, and STATUSLINE_SETTINGS goes back to null:
+// injectStatusline then stops appending --settings entirely. That's the point — a user who
+// turned off our statusline wants HIS line in swarm tabs, and an empty --settings would
+// still outrank his config.
 function writeSwarmSettings() {
-  if (!STATUSLINE_COMMAND) return;
-  const settings = { statusLine: { type: 'command', command: STATUSLINE_COMMAND, padding: 0 } };
+  const settings = {};
+  if (STATUSLINE_ENABLED && STATUSLINE_COMMAND) {
+    settings.statusLine = { type: 'command', command: STATUSLINE_COMMAND, padding: 0 };
+  }
   if (HOOKS_ENABLED && HOOK_COMMAND) settings.hooks = hookSettings(HOOK_COMMAND);
+  if (!Object.keys(settings).length) { STATUSLINE_SETTINGS = null; return; }
   const settingsPath = path.join(app.getPath('userData'), 'swarm-settings.json');
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
   STATUSLINE_SETTINGS = settingsPath;
@@ -4484,6 +4499,13 @@ ipcMain.handle('update:installer', async (_e, { url, filename }) => {
 // applies to sessions started after the change.
 ipcMain.on('settings:hooks', (_e, enabled) => {
   HOOKS_ENABLED = !!enabled;
+  try { writeSwarmSettings(); } catch (e) { reportMainError(e); }
+});
+// И «своя строка статуса Swarm» — тем же порядком. Выключенная снимает --settings с новых
+// вкладок, то есть возвращает человеку его собственную строку; цена — полоска контекста на
+// карточке и цифры в /usage, других источников у них нет.
+ipcMain.on('settings:statusline', (_e, enabled) => {
+  STATUSLINE_ENABLED = !!enabled;
   try { writeSwarmSettings(); } catch (e) { reportMainError(e); }
 });
 // Same shape for «просить агента звать вас»: a pref pushed on startup and on toggle.
