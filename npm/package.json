@@ -14,7 +14,10 @@
   "scripts": {
     "prepack": "cp ../scripts/install.sh ./install.sh"
   },
-  "repository": "github:raul-cortez/claude-swarm",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/raul-cortez/claude-swarm.git"
+  },
   "homepage": "https://github.com/raul-cortez/claude-swarm",
   "keywords": ["claude", "claude-code", "swarm", "agents", "electron"],
   "license": "MIT",
