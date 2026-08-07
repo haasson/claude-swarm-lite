@@ -37,10 +37,10 @@ curl -fsSL https://raw.githubusercontent.com/raul-cortez/claude-swarm/main/scrip
 **Скачать файлом.**
 
 <!--DL-->
-**Последняя версия: 0.30.0** · [все релизы](https://github.com/raul-cortez/claude-swarm/releases)
+**Последняя версия: 0.31.0** · [все релизы](https://github.com/raul-cortez/claude-swarm/releases)
 
-- **macOS** (Apple Silicon): [`swarm-0.30.0-arm64.dmg`](https://github.com/raul-cortez/claude-swarm/releases/download/v0.30.0/swarm-0.30.0-arm64.dmg)
-- **Windows**: [`swarm-0.30.0-x64.exe`](https://github.com/raul-cortez/claude-swarm/releases/download/v0.30.0/swarm-0.30.0-x64.exe) — собирается в CI после тега
+- **macOS** (Apple Silicon): [`swarm-0.31.0-arm64.dmg`](https://github.com/raul-cortez/claude-swarm/releases/download/v0.31.0/swarm-0.31.0-arm64.dmg)
+- **Windows**: [`swarm-0.31.0-x64.exe`](https://github.com/raul-cortez/claude-swarm/releases/download/v0.31.0/swarm-0.31.0-x64.exe) — собирается в CI после тега
 <!--/DL-->
 
 Это единственный способ, после которого нужен лишний шаг. Предупреждение «не удалось проверить разработчика» достаётся файлам, помеченным карантином, а помечает их то приложение, которое скачивало, то есть браузер. Установщики выше не помечают, поэтому у них этого шага и нет.
