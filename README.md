@@ -4,10 +4,16 @@
 Вкладка на агента, цвет на состояние, ответ с телефона.</p>
 
 <p align="center">
-  <!-- label=релиз в процентах не для красоты: кириллица в строке запроса — это 400 от shields -->
-  <a href="https://github.com/raul-cortez/claude-swarm/releases/latest"><img alt="Последний релиз" src="https://img.shields.io/github/v/release/raul-cortez/claude-swarm?label=%D1%80%D0%B5%D0%BB%D0%B8%D0%B7"></a>
-  <img alt="Платформы" src="https://img.shields.io/badge/macOS%20(Apple%20Silicon)%20%7C%20Windows-lightgrey">
-  <a href="LICENSE"><img alt="Лицензия" src="https://img.shields.io/badge/лицензия-MIT-blue"></a>
+  <!-- Ссылки обновляет scripts/release.mjs, вместе с блоком DL в разделе «Установка».
+       Руками не править: разъехавшись, шапка предложит с первого экрана версию,
+       которой уже нет. -->
+  <!--DLTOP-->
+  <a href="https://github.com/raul-cortez/claude-swarm/releases/download/v0.31.0/swarm-0.31.0-arm64.dmg"><b>⬇&nbsp;&nbsp;Скачать для macOS</b></a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/raul-cortez/claude-swarm/releases/download/v0.31.0/swarm-0.31.0-x64.exe"><b>⬇&nbsp;&nbsp;Скачать для Windows</b></a>
+  <br>
+  <sub>v0.31.0 · Apple Silicon · <a href="#установка">macOS: один шаг после скачивания</a></sub>
+  <!--/DLTOP-->
 </p>
 
 <!-- ФОТО 1 · docs/img/01-main.png · главное окно целиком, во всю ширину.

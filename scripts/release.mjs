@@ -132,10 +132,25 @@ const dl = [
   `- **Windows**: [\`${exeFile}\`](${base}/${exeFile}) — собирается в CI после тега`,
   '<!--/DL-->',
 ].join('\n');
+// Кнопки скачивания в самой шапке — второе место с теми же файлами. Держать его руками
+// нельзя: разъехавшись, оно предложит с первого экрана версию, которой уже нет.
+const dlTop = [
+  '<!--DLTOP-->',
+  `  <a href="${base}/${dmgFile}"><b>⬇&nbsp;&nbsp;Скачать для macOS</b></a>`,
+  '  &nbsp;·&nbsp;',
+  `  <a href="${base}/${exeFile}"><b>⬇&nbsp;&nbsp;Скачать для Windows</b></a>`,
+  '  <br>',
+  `  <sub>v${version} · Apple Silicon · <a href="#установка">macOS: один шаг после скачивания</a></sub>`,
+  '  <!--/DLTOP-->',
+].join('\n');
 let readme = readFileSync('README.md', 'utf8');
 readme = readme.includes('<!--DL-->')
   ? readme.replace(/<!--DL-->[\s\S]*?<!--\/DL-->/, dl)
   : readme.replace(/\n## /, `\n## Скачать\n\n${dl}\n\n## `); // insert before the first section
+if (!/<!--DLTOP-->[\s\S]*?<!--\/DLTOP-->/.test(readme)) {
+  fail('в README.md нет блока <!--DLTOP--> — кнопки скачивания в шапке остались бы от прошлой версии');
+}
+readme = readme.replace(/<!--DLTOP-->[\s\S]*?<!--\/DLTOP-->/, dlTop);
 writeFileSync('README.md', readme);
 step('README.md download links updated');
 
