@@ -54,11 +54,10 @@ if (!app.requestSingleInstanceLock()) {
 // `name: claude-swarm-lite` в package.json и appId `io.swarm.claude-swarm-lite`. Это не
 // недоделанное переименование, а условие сохранности данных, и менять их нельзя:
 //
-//   • `name` задаёт и папку настроек (~/Library/Application Support/claude-swarm-lite),
-//     и — что важнее — имя ключа в связке ключей, которым safeStorage шифрует
-//     telegram.dat. Ключ ищется по имени приложения, поэтому под новым именем он просто
-//     не найдётся: файл с токеном останется, а расшифровать его будет нечем никогда.
-//     Папку перенести можно, ключ — нет.
+//   • `name` задаёт папку настроек (~/Library/Application Support/claude-swarm-lite) —
+//     под новым именем приложение открылось бы пустым, без вкладок и настроенного моста.
+//     Пока у кого-то остался незамигрированный telegram.dat, то же имя нужно и для того,
+//     чтобы найти в связке ключей ключ от него (см. tgReadStored).
 //   • appId — то, по чему установщик Windows узнаёт прежнюю установку. Новый appId даёт
 //     вторую запись в «Установленных программах» вместо обновления.
 //
@@ -1176,9 +1175,9 @@ setInterval(() => {
 // install talks to its own bot and nothing goes through anyone else's server.
 //
 // The token is a secret, so it does NOT live in the renderer's localStorage next to the
-// theme and the layout. main owns it, encrypted with the OS keychain (safeStorage), in a
-// file only this account can read. The UI gets back a MASKED form and never the token
-// itself — so it can't leak through a log, a devtools session or a settings export.
+// theme and the layout. main owns it, in a file only this account can read (0600 — см.
+// tgPath). The UI gets back a MASKED form and never the token itself — so it can't leak
+// through a log, a devtools session or a settings export.
 //
 // telegram.js holds everything protocol-shaped (and is unit-tested); this block is the
 // part that has to touch Electron, the disk and the sessions.
@@ -1305,7 +1304,22 @@ let tgBot = '';        // bot username from getMe — shown in settings, used in
 let tgPair = null;     // { code, at } while a pairing window is open
 let tgError = null;    // last error, verbatim for the settings panel
 
-function tgPath() { return path.join(app.getPath('userData'), 'telegram.dat'); }
+// Настройки моста (вместе с токеном бота) лежат в файле, который читает только этот
+// аккаунт, — не в связке ключей.
+//
+// Раньше файл шифровался через safeStorage, а тот держит ключ в связке. Связка привязывает
+// разрешение к отпечатку подписи приложения; Swarm подписан ad-hoc (без Developer ID —
+// осознанное решение), отпечаток меняется с каждой сборкой, и «Разрешить всегда» не
+// запоминается. Итог: у всех, кто настроил мост, macOS спрашивала пароль от учётной записи
+// при КАЖДОМ запуске — за защиту, которой на деле не было.
+//
+// Плата за обычный файл: токен видит любой процесс, запущенный от этого пользователя.
+// Для токена бота, который умеет только переписываться с вашей же группой, размен честный —
+// примерно так же живут конфиги консольных утилит.
+function tgPath() { return path.join(app.getPath('userData'), 'telegram.json'); }
+// Файл прежнего формата. Расшифровывается ровно один раз — при первом запуске новой
+// версии, — и заменяется обычным.
+function tgLegacyPath() { return path.join(app.getPath('userData'), 'telegram.dat'); }
 
 function tgBlank() { return { token: '', chatId: null, isForum: false, topics: {}, prompt: '', detail: 'short', keepAwake: true, whisperBin: '', whisperModel: '' }; }
 
@@ -1313,56 +1327,50 @@ function tgBlank() { return { token: '', chatId: null, isForum: false, topics: {
 // темы доступны» without re-asking Telegram on every render.
 let tgCheck = null;
 
-// Доступность шифрования — С КЭШЕМ и только по нужде.
-//
-// На macOS каждое обращение к safeStorage лезет в связку ключей, а приложение подписано
-// ad-hoc (без Developer ID — решение пользователя). Для системы каждая пересборка это НОВОЕ
-// приложение, поэтому доступ к прежней записи требует пароля. Раньше на старте таких
-// обращений было два — чтение конфига и isEncryptionAvailable() из tgState(), — и пароль
-// спрашивали дважды, даже у тех, кто телеграм вообще не настраивал.
-//
-// Теперь: если файла конфига нет, связку не трогаем совсем (у большинства — ни одного
-// запроса), а результат проверки помним, чтобы не спрашивать повторно.
-let tgEncOk = null;
-
-function tgEncAvailable() {
-  if (tgEncOk === null) {
-    try { tgEncOk = safeStorage.isEncryptionAvailable(); } catch (_) { tgEncOk = false; }
-  }
-  return tgEncOk;
-}
-
-// Anything unreadable — no keychain access, a file copied from another machine, a
-// half-written save — means «not configured». Never a crash on launch.
+// Anything unreadable — a file copied from another machine, a half-written save — means
+// «not configured». Never a crash on launch.
 function tgLoad() {
-  // Нет файла — нечего расшифровывать: молча остаёмся ненастроенными, связка не трогается.
-  if (!fs.existsSync(tgPath())) { TG = tgBlank(); tgApplyPrompt(); return; }
-  try {
-    const d = JSON.parse(safeStorage.decryptString(fs.readFileSync(tgPath())));
-    TG = {
-      token: String(d.token || ''),
-      chatId: Number.isFinite(d.chatId) ? d.chatId : null,
-      isForum: !!d.isForum,
-      topics: (d.topics && typeof d.topics === 'object') ? d.topics : {},
-      prompt: String(d.prompt || ''),
-      // Файл прошлой версии подробности не знает — и это ровно то, чем мост жил до сих пор.
-      detail: telegram.DETAILS.includes(d.detail) ? d.detail : 'short',
-      keepAwake: d.keepAwake !== false,
-      // `mirrorAll` из файлов прежних версий сюда не переносится и нигде не читается: галку
-      // «писать всегда» заменило одно положение «где я» (см. TG_PRESENCE). Поле в старом
-      // файле останется лежать до первого сохранения и исчезнет само.
-      whisperBin: String(d.whisperBin || ''),
-      whisperModel: String(d.whisperModel || ''),
-    };
-  } catch (_) { TG = tgBlank(); }
+  const d = tgReadStored();
+  TG = d ? {
+    token: String(d.token || ''),
+    chatId: Number.isFinite(d.chatId) ? d.chatId : null,
+    isForum: !!d.isForum,
+    topics: (d.topics && typeof d.topics === 'object') ? d.topics : {},
+    prompt: String(d.prompt || ''),
+    // Файл прошлой версии подробности не знает — и это ровно то, чем мост жил до сих пор.
+    detail: telegram.DETAILS.includes(d.detail) ? d.detail : 'short',
+    keepAwake: d.keepAwake !== false,
+    // `mirrorAll` из файлов прежних версий сюда не переносится и нигде не читается: галку
+    // «писать всегда» заменило одно положение «где я» (см. TG_PRESENCE). Поле в старом
+    // файле останется лежать до первого сохранения и исчезнет само.
+    whisperBin: String(d.whisperBin || ''),
+    whisperModel: String(d.whisperModel || ''),
+  } : tgBlank();
   tgApplyPrompt();
 }
 
+// Обычный файл, а если его нет — зашифрованный файл прежних версий, разово.
+//
+// Миграция стоит одного запроса пароля от связки ключей — последнего. Если его отклонили,
+// старый файл остаётся на месте: мост в этот раз не поднимется, но настройки не потеряны и
+// попытка повторится при следующем запуске.
+function tgReadStored() {
+  try {
+    if (fs.existsSync(tgPath())) return JSON.parse(fs.readFileSync(tgPath(), 'utf8'));
+  } catch (_) { return null; }
+  if (!fs.existsSync(tgLegacyPath())) return null;
+  let old = null;
+  try { old = JSON.parse(safeStorage.decryptString(fs.readFileSync(tgLegacyPath()))); }
+  catch (_) { return null; }
+  try {
+    fs.writeFileSync(tgPath(), JSON.stringify(old), { mode: 0o600 });
+    fs.unlinkSync(tgLegacyPath());
+  } catch (_) { /* не переписалось — попробуем в следующий раз, данные уже в руках */ }
+  return old;
+}
+
 function tgSave() {
-  if (!tgEncAvailable()) {
-    throw new Error('Система не даёт безопасно сохранить токен (нет доступа к keychain)');
-  }
-  fs.writeFileSync(tgPath(), safeStorage.encryptString(JSON.stringify(TG)), { mode: 0o600 });
+  fs.writeFileSync(tgPath(), JSON.stringify(TG), { mode: 0o600 });
 }
 
 // One call to Telegram. getUpdates holds the request open for ~25 s, so the abort timer
@@ -1844,10 +1852,6 @@ async function tgCheckChat(chatId) {
 
 function tgState() {
   return {
-    // Не дёргаем связку ключей ради отрисовки настроек: пока никто не сохранял токен,
-    // считаем, что всё в порядке. Настоящая проверка случится при сохранении — там же, где
-    // от неё есть польза, и с внятной ошибкой, если система откажет.
-    available: tgEncOk === null ? true : tgEncOk,
     configured: !!TG.token,
     masked: telegram.maskToken(TG.token),
     bot: tgBot,
@@ -3786,6 +3790,7 @@ ipcMain.handle('telegram:forget', async () => {
   tgPresence = 'desk';
   tgWriteModes();            // и запрет коробки с вариантами снимается вместе с ним
   try { fs.unlinkSync(tgPath()); } catch (_) { /* already gone */ }
+  try { fs.unlinkSync(tgLegacyPath()); } catch (_) { /* его может и не быть */ }
   tgApplyKeepAwake();
   return tgState();
 });

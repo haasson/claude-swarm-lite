@@ -1783,7 +1783,6 @@ function showSettingsModal(tab) {
   }
 
   function tgTokenText(st) {
-    if (!st.available) return '⚠ Система не даёт безопасно хранить токен — мост недоступен';
     if (!st.configured) return 'Бот не подключён';
     if (st.error) return '⚠ ' + st.error;
     return st.bot ? `Бот @${st.bot} подключён` : 'Токен принят';
@@ -1803,9 +1802,8 @@ function showSettingsModal(tab) {
     const bound = st.chatId != null;
     const groupOk = bound && !!(st.check ? st.check.ok : true);
     tgStateEl.textContent = tgTokenText(st);
-    tgStateEl.className = 'tg-state' + (st.error || !st.available ? ' is-bad'
-      : st.configured ? ' is-good' : '');
-    tgMark(tgMark1, !st.available ? false : st.configured ? (st.error ? false : true) : null);
+    tgStateEl.className = 'tg-state' + (st.error ? ' is-bad' : st.configured ? ' is-good' : '');
+    tgMark(tgMark1, st.configured ? (st.error ? false : true) : null);
     tgMark(tgMark2, !bound ? null : st.check ? (st.check.ok ? true : false) : true);
     tgMark(tgMark3, !bound ? null : st.live && !st.error ? true : false);
     tgTokenI.placeholder = st.configured ? st.masked : '1234567890:AA…';
