@@ -1054,6 +1054,11 @@ body.pult-on #git-msg { display: none; }
 }
 .log-indicator[hidden] { display: none; }
 .log-indicator:hover { background: color-mix(in srgb, var(--danger) 26%, transparent); }
+/* Всё прочитано: лог никуда не делся, но и внимания больше не требует. */
+.log-indicator.quiet {
+  border-color: var(--border); color: var(--muted); background: transparent; font-weight: 600;
+}
+.log-indicator.quiet:hover { background: color-mix(in srgb, var(--muted) 14%, transparent); }
 
 .modal.logs { width: min(680px, 94vw); }
 .logs-body {

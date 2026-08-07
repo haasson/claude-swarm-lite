@@ -53,6 +53,28 @@ test('clear() resets entries and errorCount', () => {
   s.clear();
   assert.strictEqual(s.size(), 0);
   assert.strictEqual(s.errorCount(), 0);
+  assert.strictEqual(s.unseenCount(), 0);
+});
+
+test('markSeen() гасит счётчик, а новая ошибка зажигает его снова', () => {
+  const s = createLogStore(10);
+  s.push({ level: 'error', msg: 'a' });
+  s.push({ level: 'warn', msg: 'w' });   // предупреждения счётчик не зажигают
+  assert.strictEqual(s.unseenCount(), 1);
+  s.markSeen();
+  assert.strictEqual(s.unseenCount(), 0);
+  assert.strictEqual(s.errorCount(), 1); // сама запись осталась в логе
+  s.push({ level: 'error', msg: 'b' });
+  assert.strictEqual(s.unseenCount(), 1);
+});
+
+test('вытеснение из кольца не оставляет непрочитанных больше, чем ошибок', () => {
+  const s = createLogStore(2);
+  s.push({ level: 'error', msg: '1' });
+  s.push({ level: 'error', msg: '2' });
+  s.push({ level: 'warn', msg: '3' });   // вытесняет ошибку '1'
+  assert.strictEqual(s.errorCount(), 1);
+  assert.strictEqual(s.unseenCount(), 1);
 });
 
 (async () => {

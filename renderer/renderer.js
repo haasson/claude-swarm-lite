@@ -22,12 +22,21 @@ function nowClock() {
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
+// Значок в статусной строке живёт в трёх состояниях: пусто — его нет; есть
+// непрочитанные ошибки — красный со счётчиком; всё прочитано — серый «!», чтобы лог
+// оставался доступен, но не кричал. Совсем убрать его можно кнопкой «Очистить» в
+// самом логе.
 function updateLogIndicator() {
   const btn = document.getElementById('log-indicator');
   if (!btn) return;
-  const n = logStore.errorCount();
-  btn.hidden = n === 0;
-  btn.textContent = n > 99 ? '! 99+' : '! ' + n;
+  const total = logStore.errorCount();
+  const fresh = logStore.unseenCount();
+  btn.hidden = total === 0;
+  btn.classList.toggle('quiet', fresh === 0);
+  btn.textContent = fresh === 0 ? '!' : (fresh > 99 ? '! 99+' : '! ' + fresh);
+  btn.title = fresh === 0
+    ? 'Логи ошибок — новых нет'
+    : (fresh === 1 ? 'Новая ошибка — показать логи' : `Новых ошибок: ${fresh} — показать логи`);
 }
 
 function recordLog(source, level, msg) {
@@ -45,6 +54,7 @@ function openLogsModal() {
       <div class="logs-body"></div>
       <div class="modal-actions">
         <button class="modal-cancel logs-close">Закрыть</button>
+        <button class="modal-cancel logs-clear">Очистить</button>
         <button class="modal-ok neutral logs-copy">Скопировать</button>
       </div>
     </div>`;
@@ -68,9 +78,17 @@ function openLogsModal() {
   }
   document.body.appendChild(overlay);
   if (entries.length) body.scrollTop = body.scrollHeight; // newest at the bottom
+  // Открыл лог — значит увидел: счётчик гаснет, значок становится серым.
+  logStore.markSeen();
+  updateLogIndicator();
   const close = () => { document.removeEventListener('keydown', onKey, true); overlay.remove(); };
   const onKey = (ev) => { if (ev.key === 'Escape') { ev.preventDefault(); close(); } };
   overlay.querySelector('.logs-close').addEventListener('click', close);
+  overlay.querySelector('.logs-clear').addEventListener('click', () => {
+    logStore.clear();
+    updateLogIndicator();
+    close();
+  });
   overlay.querySelector('.logs-copy').addEventListener('click', () => {
     try { window.swarm.clipboardWrite(logStore.text()); } catch (_) {}
   });
